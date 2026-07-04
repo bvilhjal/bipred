@@ -30,7 +30,10 @@ replicates on fixed genotypes:
     ``mixer_posterior`` credible interval covers the true causal count.
 
 The first three sweeps also record the **relative** polygenicity (pi_hat /
-pi_true) to quantify the known absolute under-estimation of point-normal mixtures.
+pi_true). On realistic (rank-deficient / ill-conditioned) LD the point-normal
+count is *over*-estimated and the inflation grows with N; this is governed by LD
+conditioning (not effective rank) and is identical for univariate and bivariate
+fits (see the ``calibration`` sweep, ``noise_inflation``, and docs/rg.md).
 
     OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python benchmarks/mixer_overlap.py
 

@@ -30,11 +30,11 @@ variants with bivariate-normal effects, both traits h²=0.5). The LD here is
 
 | architecture | bivariate LDSC | bivariate LDpred3 |
 |--------------|:--------------:|:-----------------:|
-| infinitesimal | 0.02 ± 0.11 / 0.40 ± 0.10 / 0.80 ± 0.03 | −0.00 ± 0.07 / 0.39 ± 0.07 / 0.79 ± 0.02 |
-| sparse (p=0.01) | −0.02 ± 0.22 / 0.35 ± 0.22 / 0.84 ± 0.08 | 0.03 ± 0.10 / 0.36 ± 0.20 / 0.81 ± 0.05 |
-| moderate (p=0.05) | 0.02 ± 0.14 / 0.31 ± 0.12 / 0.79 ± 0.05 | 0.01 ± 0.08 / 0.38 ± 0.10 / 0.78 ± 0.03 |
-| polygenic (p=0.2) | 0.00 ± 0.09 / 0.41 ± 0.10 / 0.82 ± 0.06 | 0.02 ± 0.08 / 0.41 ± 0.07 / 0.81 ± 0.04 |
-| major locus | −0.01 ± 0.37 / 0.28 ± 0.30† / 0.81 ± 0.08 | 0.05 ± 0.23 / 0.32 ± 0.25 / 0.79 ± 0.05 |
+| infinitesimal | 0.06 ± 0.08 / 0.39 ± 0.11 / 0.80 ± 0.03 | 0.01 ± 0.03 / 0.40 ± 0.04 / 0.79 ± 0.02 |
+| sparse (p=0.01) | 0.02 ± 0.22 / 0.37 ± 0.26† / 0.65 ± 0.17 | 0.04 ± 0.08 / 0.41 ± 0.20 / 0.80 ± 0.03 |
+| moderate (p=0.05) | 0.02 ± 0.13 / 0.37 ± 0.08 / 0.77 ± 0.04 | 0.04 ± 0.08 / 0.38 ± 0.05 / 0.78 ± 0.03 |
+| polygenic (p=0.2) | 0.02 ± 0.08 / 0.40 ± 0.08 / 0.79 ± 0.04 | 0.00 ± 0.05 / 0.40 ± 0.04 / 0.80 ± 0.02 |
+| major locus | 0.14 ± 0.38† / 0.29 ± 0.24 / 0.76 ± 0.07 | 0.07 ± 0.16 / 0.33 ± 0.23 / 0.77 ± 0.04 |
 
 (± is the across-replicate SD over the in-range reps; † marks cells where one of
 the ten LDSC reps diverged and was excluded.)
@@ -51,13 +51,13 @@ the ten LDSC reps diverged and was excluded.)
   (its noisy regime on sparse / major-locus traits) the ratio **blows up** — a
   handful of reps here returned values in the hundreds and had to be excluded
   (the † cells). The bivariate sampler, which models the joint effect covariance
-  directly, **never diverged**: on major-locus at r_g=0.6 it gives 0.56 ± 0.13
-  where LDSC's surviving reps scatter 0.32 ± 0.61.
+  directly, **never diverged**: on major-locus at r_g=0.6 it gives 0.59 ± 0.11
+  where LDSC's surviving reps scatter 0.48 ± 0.20.
 - **Running time & memory.** Per fit on this genome (m=5000, 25 blocks, single
-  core): bivariate **LDSC ~22 ms**, bivariate **LDpred3 ~0.52 s** (0.44–0.63 s
-  across architectures) at a **0.22 GB** peak RSS. So the sampler's precision and
-  robustness cost ~25× LDSC's time but stay sub-second and light — LDSC remains
-  the instant screen, LDpred3 the accurate estimate.
+  core): bivariate **LDSC ~25 ms**, bivariate **LDpred3 ~0.23 s** at a **0.27 GB**
+  peak RSS. So the sampler's precision and robustness cost ~9× LDSC's time but
+  stay sub-second and light — LDSC remains the instant screen, LDpred3 the
+  accurate estimate.
 
 For a quick first pass, a **marginal** (no-LD) r_g — the moment estimator that
 assumes independent SNPs — is already reasonable (unlike a marginal h², which is
@@ -96,17 +96,47 @@ the denominator with `h²` *fails*) is in
 The bivariate fit's four-state mixture also yields the quantities MiXeR reports —
 the shared-causal fraction, the within-shared effect correlation `ρ_β` and the
 decomposition `r_g = ρ_β·π₁₁/√(π₁π₂)` — exposed as `res.mixer` (see
-[algorithm.md](algorithm.md#bivariate-two-trait-ldpred3)). The overlap fraction
-and `r_g` decomposition are reliable; absolute polygenicity is under-calibrated
-(dominated by LD-reference mismatch) and should be read as relative
-(`benchmarks/mixer_overlap.py`).
+[algorithm.md](algorithm.md#bivariate-two-trait-ldpred3)). The overlap **ratios**
+(`frac_shared`, `ρ_β`, `rg_from_overlap`) are reliable; the **absolute counts**
+(`n_causal`, `n_shared`) are over-estimated on realistic LD and should be read as
+relative unless calibrated (`benchmarks/mixer_overlap.py`, `calibration` sweep).
 
-To put the absolute counts (`n_causal`, `n_shared`) on a calibrated scale, run
-univariate `ldpred3.ldpred3_auto_infer` on each trait and pass the two results to
-`res.mixer_calibrated(infer1, infer2)`: it keeps the joint fit's reliable ratios
-(`frac_shared`, `ρ_β`) but rebuilds the counts on the univariate learned
-polygenicities. Full detail and the benchmark are in
-[algorithm.md](algorithm.md#bivariate-two-trait-ldpred3).
+### Absolute counts and LD conditioning
+
+The absolute-count bias is **not** a bivariate defect and **not** a fundamental
+identifiability wall — it is a property of the point-normal model fit on
+**rank-deficient LD**, and it is *identical* for univariate `ldpred3_auto_infer`
+and the bivariate fit (so `mixer_calibrated`'s univariate anchoring does not
+actually debias — the anchor carries the same bias). What we learned
+benchmarking it against known truth:
+
+- **Realistic (coalescent) LD is rank-deficient / ill-conditioned** — perfectly-
+  and near-perfectly-correlated SNP pairs give near-zero eigenvalues, exactly as
+  real reference panels do (which is why LDpred pipelines shrink/QC the LD). On
+  such LD the point-normal causal-state count over-estimates the true number of
+  causal variants, and the over-estimation **grows with N** (power). On this
+  benchmark's LD the reference-panel count runs ~1.2× at `N·h²/M = 2` up to
+  ~2.2× at `N·h²/M = 20`.
+- **It is governed by LD conditioning** (the magnitude of the smallest
+  eigenvalues), *not* by effective rank: a redundant but well-conditioned LD is
+  calibrated, a near-singular one is not. Consistent with ldpred3's own
+  univariate benchmark (`p`: 0.2→0.29, 0.01→0.014). So "unbiased polygenicity"
+  holds in the well-conditioned regime; on realistic LD the counts are mildly
+  inflated and should be read as relative.
+- **Two levers.** (a) `noise_inflation=True` learns a per-trait
+  LDSC-intercept-style `λ` that removes the **LD-reference-mismatch** component of
+  the inflation (the extra from fitting a finite reference panel), bringing the
+  ref-panel count from ~2.2× to ~1.3× at `N·h²/M = 20` with `h²`/`r_g` unchanged.
+  (b) `res.mixer_posterior()` gives the posterior **credible interval** for each
+  count (calibrated and covers the truth when the LD matches; see below).
+- **The `r_g` and the overlap ratios cancel this bias** and stay reliable
+  throughout (`rg_off ≈ rg_on ≈ 0.4` across the whole power sweep above).
+
+`res.mixer_calibrated(infer1, infer2)` still exists (it rebuilds the counts on
+two univariate `ldpred3.ldpred3_auto_infer` polygenicities while keeping the joint
+ratios), but note the caveat above: the univariate anchor shares the same
+LD-conditioning bias, so prefer `noise_inflation` + good LD (shrinkage / QC) for
+absolute counts, and lean on the ratios otherwise.
 
 ## Handling sample overlap
 

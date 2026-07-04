@@ -24,10 +24,8 @@ benchmarks/.ld_cache/
 benchmarks/.rg_cache/
 
 # Local benchmark-run scaffolding and logs (not deliverables)
-benchmarks/_RESULTS.log
+benchmarks/_*.log
+benchmarks/_*.stdout
 benchmarks/_run_all.sh
-benchmarks/_run_all.stdout
-benchmarks/_out_*.log
-benchmarks/_smoke_*.log
-benchmarks/_ldlib_gen.log
-benchmarks/_t.log
+benchmarks/_calib_*.csv
+benchmarks/_smoke_*.csv
