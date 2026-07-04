@@ -472,7 +472,7 @@ class BivariateResult:
 
 
 def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, *,
-                                  h2_init=0.1, p_init=0.1, rg_init=0.0,
+                                  h2_init=0.1, p_init=0.02, rg_init=0.0,
                                   cross_corr=0.0, burn_in=200, num_iter=200,
                                   h2_bounds=(1e-4, 1.0), h2_cap=None,
                                   iw_df=10.0, rg_decorrelated=False,
@@ -495,6 +495,8 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
         Per-trait GWAS sample sizes.
     h2_init, p_init, rg_init : float
         Initial heritability, causal fraction and genetic correlation.
+        ``p_init`` defaults to ``0.02`` (~2 % causal, a realistic starting point);
+        the sampler updates the mixture each sweep.
     cross_corr : float, default 0.0
         Cross-trait correlation of the sampling noise (sample overlap); must lie
         in ``(-1, 1)``. 0 assumes independent GWAS samples.

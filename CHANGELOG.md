@@ -6,6 +6,12 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **Default `p_init` lowered from `0.1` to `0.02`** for the bivariate sampler
+  (`ldpred3_auto_bivariate[_blocks]`), matching ldpred3's realistic ~2 %-causal
+  starting polygenicity. The mixture is still updated each sweep. The bivariate
+  golden test pins `p_init` explicitly, so it is unaffected.
+
 ### Added
 - **Configurable four-state mixture prior (`pi_prior`).** The Dirichlet
   concentration for the per-sweep `π` draw is now a parameter (default `1.0`,
