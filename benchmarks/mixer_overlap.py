@@ -30,14 +30,19 @@ replicates on fixed genotypes:
     ``mixer_posterior`` credible interval covers the true causal count.
 
 The first three sweeps also record the **relative** polygenicity (pi_hat /
-pi_true). The point-normal count is *over*-estimated, and the bias is **U-shaped
-in per-SNP power** ``N*h2/M``: worst at the **low power typical of real GWAS**
-(``N*h2/M < 1``, present even with *matched* LD -- a low-power point-normal
-over-recruitment, not an LD effect), smallest near ``N*h2/M ~ 1``, and rising
-again only in the unrealistically high-power regime (where it becomes
-LD-conditioning / reference-mismatch dominated). It is identical for univariate
-and bivariate fits; the **ratios** (rg, frac_shared) stay reliable throughout
-(see the ``power`` / ``calibration`` sweeps, ``noise_inflation``, and docs/rg.md).
+pi_true). The count is *over*-estimated at the **low per-SNP power typical of
+real GWAS** (``N*h2/M < 1``): ~3x at ``p=0.10``, more when sparser, present even
+under *matched* LD. With real LD the dominant cause is **LD-spreading**
+(correlated SNPs recruited around each causal; the posterior is tight at the
+inflated value -- mean ~ median ~ mode), amplified by the four-state model so the
+bivariate over-counts *more* than univariate ``ldpred3_auto_infer``. The
+Dirichlet ``pi_prior`` and the mean-vs-median summary are only minor levers here
+(they dominate in the no-LD limit -- see ldpred3's ``p_prior`` and its
+docs/inference.md); LD-reference mismatch adds a further, ``noise_inflation``-
+removable inflation. Per-causal power ``N*h2/(M*p)`` governs identifiability but
+the bias is genuinely 2-D in ``(N*h2/M, p)``. The **ratios** (rg, frac_shared)
+stay reliable throughout (see the ``power`` / ``calibration`` sweeps,
+``noise_inflation``, and docs/rg.md).
 
     OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python benchmarks/mixer_overlap.py
 

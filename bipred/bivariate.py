@@ -325,17 +325,19 @@ class BivariateResult:
         Caveat: the point-normal mixture does **not calibrate absolute
         polygenicity** — the four-state posterior counts a causal variant's LD
         neighbours as (partially) causal too, so ``n_causal`` / ``n_shared`` are
-        biased by an architecture- and power-dependent factor (benchmarked from
-        ~0.3x with clustered causal variants to ~2.5x when they are spread across
-        LD blocks and N is large; see ``benchmarks/mixer_overlap.py``). The
-        dominant term is **LD-reference mismatch** (the bias grows with N and
-        collapses when the fit uses the exact in-sample LD); ``r_g`` and the
-        overlap fraction are *ratios* and cancel it, so read ``polygenicity`` /
-        ``n_*`` as *relative*. To put the counts on a calibrated scale, anchor them
-        with two univariate ``ldpred3_auto_infer`` runs via :meth:`mixer_calibrated`
-        (the univariate polygenicity is far less LD-mismatch-sensitive). A dedicated
-        causal-mixture likelihood (MiXeR) is what calibrates the absolute counts
-        from scratch. Needs a well-powered pair (large ``N*h2/m``) to be meaningful.
+        **over-estimated at the low per-SNP power `N*h2/M < 1` of real GWAS**
+        (~3x at ``p=0.10``, more when sparser; see ``benchmarks/mixer_overlap.py``
+        and docs/rg.md). The dominant term with real LD is **LD-spreading**:
+        it persists even under matched, in-sample LD (it does *not* collapse), and
+        the four-state model amplifies it, so the bivariate over-counts more than
+        univariate ``ldpred3_auto_infer``. ``r_g`` and the overlap fraction are
+        *ratios* and cancel it, so read ``polygenicity`` / ``n_*`` as *relative*.
+        Mitigations: ``noise_inflation=True`` (damps the reference-mismatch part),
+        LD shrinkage / QC, and — for a calibrated scale — anchoring with two
+        univariate runs via :meth:`mixer_calibrated` (the univariate anchor is
+        *less* LD-spread-inflated, so this reduces but does not remove the bias).
+        A dedicated causal-mixture likelihood (MiXeR) calibrates from scratch.
+        Needs a well-powered pair (large ``N*h2/m``) to be meaningful.
 
         For the **posterior distribution** of these quantities (a credible interval,
         not just this point estimate), see :meth:`mixer_posterior`, which maps the
@@ -438,14 +440,16 @@ class BivariateResult:
         """:attr:`mixer` with the **absolute counts calibrated** by two univariate
         ``ldpred3_auto_infer`` runs.
 
-        The joint fit's per-trait polygenicity is inflated mainly by LD-reference
-        mismatch, and the four-state sampler is ~2x more sensitive to it than a
+        The joint fit's per-trait polygenicity is inflated mainly by **LD-spreading**
+        (correlated SNPs recruited around each causal, present even under matched
+        LD), and the four-state sampler is ~2x more sensitive to it than a
         univariate fit. This keeps the joint fit's reliable *ratios* — the shared
         fraction ``frac_shared`` and the within-shared effect correlation
         ``rho_beta`` — but replaces ``(pi1, pi2)`` with the univariate learned
-        polygenicities (well-calibrated when the LD matches), and rebuilds
-        ``n_causal`` / ``n_shared`` / ``rg_from_overlap`` on that scale. This is the
-        recommended readout for **absolute** overlap counts.
+        polygenicities (which are *less* inflated, though still over-counted at low
+        power), and rebuilds ``n_causal`` / ``n_shared`` / ``rg_from_overlap`` on
+        that scale. So it *reduces* rather than eliminates the absolute-count bias;
+        combine with ``noise_inflation`` / adequate power / LD QC.
 
         ``infer1`` / ``infer2`` are the trait-1 / trait-2 :class:`InferResult`
         objects (their ``p_est`` is used); floats are also accepted.
@@ -473,7 +477,7 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
                                   h2_bounds=(1e-4, 1.0), h2_cap=None,
                                   iw_df=10.0, rg_decorrelated=False,
                                   noise_inflation=False, ni_damp=0.1,
-                                  sample_every=5, seed=None):
+                                  pi_prior=1.0, sample_every=5, seed=None):
     """Genome-wide (streaming) bivariate LDpred3-auto.
 
     ``blocks`` is the ``[(R, idx), ...]`` list (contiguous ``idx`` partitioning
@@ -526,29 +530,42 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
         GWAS sample, but is inflated under **LD-reference mismatch**; the learned
         ``lambda`` makes the sampler correspondingly less confident so it stops
         reading that misfit as extra polygenicity. This targets the **absolute
-        polygenic-overlap counts** (:attr:`BivariateResult.mixer`). Their bias is
-        **U-shaped in per-SNP power** ``N*h2/M`` and is *dominated by the
-        realistic low-power regime* ``N*h2/M < 1``: there the point-normal model
-        over-recruits null SNPs and the count is over-estimated by up to ~3x even
-        under **matched** LD, so this is an over-count of the model itself, not a
-        bivariate or LD-mismatch defect (the same over-count appears in ldpred3's
-        univariate ``p``). LD-reference mismatch adds a further, smaller inflation
-        on top. ``lambda`` damps **both** components -- most under mismatch, but it
-        also tempers the low-power over-recruitment -- while leaving ``h2`` and
-        ``rg`` essentially unchanged (validated in ``benchmarks/mixer_overlap.py``:
-        e.g. count/true 3.4->2.5 at ``N*h2/M=0.1`` on reference-panel LD). A scalar
-        ``lambda`` cannot absorb structured mismatch or dense-causal LD-spreading
-        entirely, and it is ~a no-op under matched LD at higher power
+        polygenic-overlap counts** (:attr:`BivariateResult.mixer`), which at the
+        realistic low per-SNP power ``N*h2/M < 1`` are over-estimated (~3x at
+        ``p=0.10``, more when sparser). The dominant cause with real LD is
+        **LD-spreading** -- correlated SNPs recruited as causal around each true
+        causal, inflating the count at the posterior *mode* itself (present even
+        under matched LD; amplified by the four-state model, so the bivariate
+        over-counts more than univariate ``ldpred3_auto_infer``). LD-*reference*
+        mismatch adds a further inflation on top. ``lambda`` damps the
+        **mismatch** component (and a little of the spreading) while leaving ``h2``
+        and ``rg`` essentially unchanged (validated in
+        ``benchmarks/mixer_overlap.py``: e.g. count/true 3.4->2.5 at ``N*h2/M=0.1``
+        on reference-panel LD). A scalar ``lambda`` cannot absorb the matched-LD
+        spreading, and it is ~a no-op under matched LD at higher power
         (``lambda ~ 1``). Recommended when fitting on a finite **reference panel**
         (the usual case); left off by default so the estimator is unchanged unless
-        requested. Whatever the absolute counts, the **ratios** (``rg``,
-        ``frac_shared``) are unbiased throughout. The learned factors are returned
-        in ``BivariateResult.noise_scale``.
+        requested. The Dirichlet ``pi_prior`` and the mean-vs-median summary are
+        only minor levers here (they matter in the no-LD limit; see docs/rg.md).
+        Whatever the absolute counts, the **ratios** (``rg``, ``frac_shared``) are
+        unbiased throughout. The learned factors are returned in
+        ``BivariateResult.noise_scale``.
     ni_damp : float, default 0.1
         Damping for the per-sweep ``lambda`` update (only used with
         ``noise_inflation``); smaller is more stable, larger adapts faster.
     sample_every : int, default 5
         Thinning for the retained effect samples used by the decorrelated ``rg``.
+    pi_prior : float, default 1.0
+        Symmetric Dirichlet concentration for the four-state mixture prior: each
+        sweep ``pi`` is drawn from ``Dirichlet(pi_prior + counts)``. ``1.0`` is
+        the historical uniform prior; ``0.5`` is the Jeffreys prior. The univariate
+        analog (``ldpred3_auto_infer(p_prior=...)``) is the primary knob -- a
+        smaller concentration reduces the low-power over-count of the *absolute*
+        polygenicities, but note the dominant inflation of the bivariate counts is
+        **LD-spreading** (correlated SNPs recruited around each causal, present
+        even under matched LD and amplified by the four-state model), which no
+        prior removes. Prefer ``noise_inflation``/LD QC and the ratios for absolute
+        counts; see ``docs/rg.md``.
     seed : int or None
 
     Returns
@@ -557,6 +574,9 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     """
     if not -1.0 < cross_corr < 1.0:
         raise ValueError("cross_corr must be in (-1, 1)")
+    if pi_prior <= 0.0:
+        raise ValueError("pi_prior must be positive (an improper <=0 "
+                         "concentration can collapse the mixture)")
     bh1 = np.ascontiguousarray(beta_hat1, dtype=np.float64)
     bh2 = np.ascontiguousarray(beta_hat2, dtype=np.float64)
     m = bh1.shape[0]
@@ -666,7 +686,8 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
 
         # --- global hyper-parameter updates ---
         c00 = m - c10 - c01 - c11
-        pi = rng.dirichlet([1.0 + c00, 1.0 + c10, 1.0 + c01, 1.0 + c11])
+        pi = rng.dirichlet([pi_prior + c00, pi_prior + c10,
+                            pi_prior + c01, pi_prior + c11])
         n1c = c10 + c11
         n2c = c01 + c11
         # Inverse-Wishart-style shrinkage of (s1, s2, s12) toward the weak

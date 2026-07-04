@@ -7,6 +7,25 @@ follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Configurable four-state mixture prior (`pi_prior`).** The Dirichlet
+  concentration for the per-sweep `π` draw is now a parameter (default `1.0`,
+  the historical uniform prior; `0.5` is Jeffreys). Backward compatible. Mirrors
+  ldpred3's univariate `p_prior`; it is a *minor* lever for the absolute counts
+  under real LD (~5% at low power) because those are dominated by LD-spreading,
+  not the prior — see below.
+- **Re-characterized the absolute polygenic-count bias (docs + benchmark).**
+  Dissected against known truth (and ldpred3's exact no-LD posterior), the
+  low-per-SNP-power over-count of `mixer` `n_causal`/`n_shared` is now correctly
+  attributed to **LD-spreading** (correlated SNPs recruited around each causal;
+  the posterior is *tight* at the inflated value — mean ≈ median ≈ mode — so it
+  is a likelihood-level effect, present even under matched in-sample LD, and the
+  four-state model **amplifies it, so the bivariate over-counts more than the
+  univariate** fit). Corrects the earlier "identical to univariate / U-shaped /
+  mainly LD-reference-mismatch" framing. The prior and the mean-vs-median summary
+  matter only in the no-LD limit. Per-causal power `N·h²/(M·p)` governs
+  identifiability but the bias is genuinely 2-D in `(N·h²/M, p)`. `r_g` and the
+  overlap ratios cancel it. `docs/rg.md` and `benchmarks/mixer_overlap.py` updated;
+  benchmark data regenerated on the better-conditioned coalescent LD.
 - **Initial release: bivariate (two-trait) LDpred, split out of `ldpred3`.**
   The four-state joint sampler (`ldpred3_auto_bivariate` /
   `ldpred3_auto_bivariate_blocks`, returning `BivariateResult`) moves here

@@ -105,6 +105,32 @@ def test_mixer_overlap_params():
     assert abs(mx["rg_from_overlap"] - res.rg) < 0.15, (mx["rg_from_overlap"], res.rg)
 
 
+def test_pi_prior_default_and_validation():
+    # Default pi_prior reproduces the historical Dirichlet(1,1,1,1) sampler
+    # bit-for-bit; the Jeffreys concentration still yields a valid mixture and
+    # leaves rg essentially unchanged; improper concentrations are rejected.
+    import pytest
+    k, nb = 200, 12
+    blocks, chols, idxs = _blocks(nb, k, seed=2)
+    m = nb * k
+    rng = np.random.default_rng(3)
+    b1, b2 = _sim(blocks, chols, idxs, m, p=0.05, h2=(0.5, 0.5), rg=0.6, rng=rng)
+    bh1 = _sumstats(blocks, chols, idxs, b1, 60000, k, rng)
+    bh2 = _sumstats(blocks, chols, idxs, b2, 60000, k, rng)
+    kw = dict(burn_in=120, num_iter=180, seed=1)
+    default = ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, 60000, 60000, **kw)
+    uni = ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, 60000, 60000,
+                                        pi_prior=1.0, **kw)
+    jef = ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, 60000, 60000,
+                                        pi_prior=0.5, **kw)
+    assert np.allclose(default.pi, uni.pi)
+    assert abs(jef.pi.sum() - 1.0) < 1e-6
+    assert abs(jef.rg - uni.rg) < 0.1
+    with pytest.raises(ValueError, match="pi_prior"):
+        ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, 60000, 60000,
+                                      pi_prior=0.0, **kw)
+
+
 def test_mixer_calibrated_uses_univariate_polygenicity():
     # mixer_calibrated keeps the joint fit's reliable ratios (frac_shared,
     # rho_beta) but replaces per-trait polygenicity with two univariate runs'
