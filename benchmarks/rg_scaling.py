@@ -44,8 +44,7 @@ def _worker(m):
     os.environ["K"] = str(K)
     sys.path.insert(0, HERE)
     import rg_architectures as R                       # builds NB unique blocks
-    from ldpred3 import ldsc_rg
-    from bipred import ldpred3_auto_bivariate_blocks
+    from bipred import ldsc_rg, ldpred3_auto_bivariate_blocks
 
     ref, ell = R.ref_panel(0)
     rng = np.random.default_rng(123)

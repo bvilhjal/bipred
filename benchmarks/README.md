@@ -1,12 +1,12 @@
 # bipred benchmarks
 
 The **bivariate-LDpred** benchmarks, split out of the `ldpred3` repository. They
-exercise the bivariate genetic-correlation / polygenic-overlap functionality now
-provided by the [`bipred`](../) package (`ldpred3_auto_bivariate`,
-`ldpred3_auto_bivariate_blocks`, `BivariateResult`), while still importing
-everything else (LD scores, cross-trait LDSC `ldsc_rg`, univariate
-`ldpred3_auto_infer` / `ldpred3_by_blocks`, simulation helpers) from `ldpred3`.
-Both `bipred` and `ldpred3` must be installed to run them.
+exercise the genetic-correlation / polygenic-overlap functionality now provided
+by the [`bipred`](../) package — the joint fit (`ldpred3_auto_bivariate`,
+`ldpred3_auto_bivariate_blocks`, `BivariateResult`) and cross-trait LDSC
+(`ldsc_rg`) — while still importing the *univariate* pieces they build on
+(LD scores, `ldpred3_auto_infer` / `ldpred3_by_blocks`, simulation helpers) from
+`ldpred3`. Both `bipred` and `ldpred3` must be installed to run them.
 
 Run single-core for stable timings:
 

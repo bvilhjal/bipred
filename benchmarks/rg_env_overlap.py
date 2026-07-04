@@ -28,8 +28,7 @@ import csv
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from ldpred3 import ldsc_rg                                               # noqa: E402
-from bipred import ldpred3_auto_bivariate_blocks                          # noqa: E402
+from bipred import ldsc_rg, ldpred3_auto_bivariate_blocks                 # noqa: E402
 import infer_vs_ldsc_sbayes as G                                         # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))

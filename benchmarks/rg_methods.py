@@ -37,8 +37,8 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import rg_architectures as R                                            # noqa: E402
-from ldpred3 import ldsc_rg, ldpred3_auto_infer                         # noqa: E402
-from bipred import ldpred3_auto_bivariate_blocks                        # noqa: E402
+from ldpred3 import ldpred3_auto_infer                                  # noqa: E402
+from bipred import ldsc_rg, ldpred3_auto_bivariate_blocks               # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPS = int(os.environ.get("REPS", "6"))

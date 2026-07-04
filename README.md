@@ -87,13 +87,16 @@ functions return a `BivariateResult`; see its docstring (and
 
 ## Genetic correlation and polygenic overlap
 
-The reported `r_g` is an independent cross-check on **bivariate LDSC**
-(`ldpred3.ldsc_rg`): under realistic reference-panel LD both are roughly
-unbiased and the bivariate sampler is ~2× more precise, because it uses the full
-LD likelihood rather than binned LD scores. See [`docs/rg.md`](docs/rg.md) for
-the accuracy/timing comparison, choosing the right `r_g` estimator, handling
-sample overlap, and the MiXeR-style overlap readout (`res.mixer` /
-`res.mixer_calibrated`).
+bipred owns **all** genetic-correlation estimation. Besides the joint fit, it
+provides **cross-trait LD Score regression** — `bipred.ldsc_rg` (with
+`LDSCRgResult` and `estimate_sample_overlap`) — as the fast, moment-based
+`r_g` estimator and independent cross-check: under realistic reference-panel LD
+both are roughly unbiased and the joint sampler is ~2× more precise, because it
+uses the full LD likelihood rather than binned LD scores. (bipred builds on
+ldpred3's *univariate* LDSC, `ld_scores` / `ldsc_h2`, for the LD scores and
+marginal heritabilities.) See [`docs/rg.md`](docs/rg.md) for the accuracy/timing
+comparison, choosing the right `r_g` estimator, handling sample overlap, and the
+MiXeR-style overlap readout (`res.mixer` / `res.mixer_calibrated`).
 
 ## Documentation
 

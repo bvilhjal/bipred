@@ -22,8 +22,7 @@ import time
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from ldpred3 import ldsc_rg                                                # noqa: E402
-from bipred import ldpred3_auto_bivariate_blocks                           # noqa: E402
+from bipred import ldsc_rg, ldpred3_auto_bivariate_blocks                  # noqa: E402
 import rg_architectures as R                                              # noqa: E402
 
 N1, N2 = 15000, 15000                 # equal, fully overlapping cohorts

@@ -5,14 +5,17 @@ and, from the same four-state fit, a MiXeR-style polygenic-overlap summary. This
 is the usage-and-guidance companion to the model reference in
 [algorithm.md](algorithm.md#bivariate-two-trait-ldpred3): how accurate `r_g` is,
 which estimator to use, how to handle overlapping samples, and how to read the
-polygenic-overlap output. Cross-trait LD Score regression stays in `ldpred3` and
-is used throughout as the independent moment-based cross-check
-(`ldpred3.ldsc_rg`, with `LDSCRgResult` and `estimate_sample_overlap`).
+polygenic-overlap output. bipred owns **all** genetic-correlation estimation:
+besides the joint fit it provides cross-trait LD Score regression
+(`bipred.ldsc_rg`, with `LDSCRgResult` and `estimate_sample_overlap`) as the
+independent moment-based cross-check, used throughout below. It builds on
+ldpred3's *univariate* LDSC (`ldpred3.ld_scores` for the LD scores,
+`ldpred3.ldsc_h2` for the marginal heritabilities).
 
 ## Genetic correlation vs bivariate LDSC
 
 The `r_g` from `ldpred3_auto_bivariate` has an independent external check —
-**cross-trait LD Score regression**, `ldpred3.ldsc_rg`
+**cross-trait LD Score regression**, `bipred.ldsc_rg`
 (`E[z₁z₂] = intercept + (√(N₁N₂)·ρ_g/M)·ℓ`). Under realistic reference-panel LD
 both are roughly unbiased and the bivariate sampler is ~2× more precise (at true
 r_g=0.8, LDSC 0.80 ± 0.031 vs bivariate LDpred3 0.79 ± 0.016) — and, as below,
@@ -60,7 +63,7 @@ For a quick first pass, a **marginal** (no-LD) r_g — the moment estimator that
 assumes independent SNPs — is already reasonable (unlike a marginal h², which is
 useless), because LD inflates the cross-covariance and both heritabilities
 *proportionally* and largely cancels in the ratio. Use it as a sanity check,
-`ldpred3.ldsc_rg` as a fast LD-correct screen with a confounding intercept, and
+`bipred.ldsc_rg` as a fast LD-correct screen with a confounding intercept, and
 the bivariate sampler when precision matters.
 
 ## Choosing an r_g estimator
@@ -81,7 +84,7 @@ under asymmetry but is noisier at low `r_g`.
 |---|---|
 | bivariate joint fit (default `"gv"`) | recommended — most accurate, ~5× cheaper per fit than the univariate pair, robust to power asymmetry |
 | bivariate joint fit, `rg_decorrelated=True` | asymmetric-power pairs (strong trait boosting a weak one) — recovers the weak trait's covariance the same-sweep ratio attenuates |
-| `ldpred3.ldsc_rg` (cross-trait LDSC) | instant moment-based screen; no shrinkage attenuation, but noisier at low `r_g` |
+| `bipred.ldsc_rg` (cross-trait LDSC) | instant moment-based screen; no shrinkage attenuation, but noisier at low `r_g` |
 | univariate `uni_gv` / `uni_r2` | independent cross-check; attenuates under power asymmetry |
 
 The theory (why each works, the scale-matching principle, and why "calibrating"
@@ -182,8 +185,8 @@ sampling-noise correlation). How much it matters and how to set it
   `cross_corr = N_shared·ρ_pheno/√(N₁N₂)` (for fully shared samples, just the
   phenotypic correlation among them).
 - **If you don't**, estimate it from the **cross-trait LDSC intercept** —
-  `ldpred3.ldsc_rg(...).gcov_intercept`, which
-  `ldpred3.estimate_sample_overlap(rg_result, N₁, N₂, pheno_corr)` inverts to a
+  `bipred.ldsc_rg(...).gcov_intercept`, which
+  `bipred.estimate_sample_overlap(rg_result, N₁, N₂, pheno_corr)` inverts to a
   shared-sample count. This is the standard estimator and is well-anchored at real
   GWAS scale (millions of SNPs spanning a wide LD-score range); on a small panel
   the intercept is a noisy extrapolation, so treat its sign/magnitude as a

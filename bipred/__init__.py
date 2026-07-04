@@ -16,6 +16,12 @@ Public API::
 ``ldpred3_auto_bivariate_blocks`` streams the genome block by block. Both return
 a :class:`~bipred.bivariate.BivariateResult`.
 
+For a fast, moment-based genetic-correlation estimate (the cross-check on the
+joint fit), :func:`~bipred.ldsc_rg.ldsc_rg` implements cross-trait LD Score
+regression, with :func:`~bipred.ldsc_rg.estimate_sample_overlap` for shared
+samples. All genetic-correlation estimation lives here; ldpred3 keeps only the
+*univariate* LDSC (``ld_scores`` / ``ldsc_h2``) that these build on.
+
 Names are imported **lazily** (PEP 562) so ``import bipred`` stays cheap; NumPy is
 the only hard dependency (optional Numba accelerates the Gibbs sampler, inherited
 from ldpred3's ``[fast]`` extra).
@@ -29,6 +35,7 @@ __version__ = "0.1.0.dev0"
 _EXPORTS = {
     "bivariate": ["ldpred3_auto_bivariate", "ldpred3_auto_bivariate_blocks",
                   "BivariateResult"],
+    "ldsc_rg": ["ldsc_rg", "LDSCRgResult", "estimate_sample_overlap"],
 }
 
 # name -> module, for the lazy loader

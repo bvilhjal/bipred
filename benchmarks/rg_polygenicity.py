@@ -32,8 +32,7 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import rg_architectures as R                                      # noqa: E402
-from ldpred3 import ldsc_rg                                       # noqa: E402
-from bipred import ldpred3_auto_bivariate_blocks                  # noqa: E402
+from bipred import ldsc_rg, ldpred3_auto_bivariate_blocks         # noqa: E402
 
 RG = float(os.environ.get("RG", "0.5"))          # true genetic correlation
 # Polygenicity sweep; env P runs a single value (one worker per p, for parallel

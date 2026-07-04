@@ -23,6 +23,12 @@ follow [Semantic Versioning](https://semver.org/).
   the within-shared effect correlation `ρ_β`, and the `r_g` overlap
   decomposition. `mixer_calibrated` anchors the absolute counts on two univariate
   `ldpred3_auto_infer` runs.
+- **Cross-trait LD Score regression** (`ldsc_rg`, `LDSCRgResult`,
+  `estimate_sample_overlap`), moved from ldpred3 so bipred owns *all*
+  genetic-correlation estimation. It is the fast, moment-based `r_g` estimator and
+  the independent cross-check on the joint fit, and reuses ldpred3's univariate
+  LDSC internals (`ld_scores`, and the `_wls` / `_weights` helpers from
+  `ldpred3.ldsc`). ldpred3 keeps only univariate `ldsc_h2`.
 - **Tests** carried over from ldpred3: statistical recovery of `r_g` / `h²` /
   overlap and cross-trait borrowing (`tests/test_bivariate.py`), plus a
   bit-exact golden characterization test (`tests/test_golden_bivariate.py`).
@@ -32,5 +38,7 @@ follow [Semantic Versioning](https://semver.org/).
 
 ### Notes
 - bipred depends on `ldpred3` (`>=` the release that removes the in-tree
-  `bivariate` module) for the shared LD representations and the Numba sampler
-  shim. It imports `_jit`, `_as_n_vector` and `LowRankLD` from `ldpred3.ldpred3`.
+  `bivariate` and cross-trait-`ldsc_rg` code) for the shared LD representations,
+  the Numba sampler shim and the univariate LDSC machinery. It imports `_jit`,
+  `_as_n_vector` and `LowRankLD` from `ldpred3.ldpred3`, and `_wls` / `_weights`
+  from `ldpred3.ldsc`.

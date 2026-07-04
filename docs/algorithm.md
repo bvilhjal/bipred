@@ -126,7 +126,7 @@ version; both GWAS must use the same LD/ancestry, and sample overlap is handled
 via `cross_corr` (default 0). Regenerate with `benchmarks/bivariate_demo.py`.
 
 **Genetic correlation vs bivariate LDSC.** The reported `r_g` has an independent
-cross-check in `ldpred3.ldsc_rg` (cross-trait LD Score regression). Under the same
+cross-check in `bipred.ldsc_rg` (cross-trait LD Score regression). Under the same
 realistic reference-panel LD both are roughly unbiased from the same summary
 statistics; bivariate LDpred3 is ~2× more precise (it uses the full LD
 likelihood):
