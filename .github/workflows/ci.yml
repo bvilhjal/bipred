@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    name: ruff (pyflakes)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff
+        run: pip install -e ".[lint]"
+      - name: Lint (pyflakes-only; see [tool.ruff] in pyproject)
+        run: ruff check .
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.11", "3.12"]
+        numba: ["with-numba", "no-numba"]
+    name: py${{ matrix.python-version }} / ${{ matrix.numba }}
+    env:
+      # Pin BLAS / OMP threads so numeric results are deterministic.
+      OPENBLAS_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # bipred depends on ldpred3, which is not on PyPI yet — install it from git
+      # so the shared LD / sampler internals are importable.
+      - name: Install ldpred3 (dependency, with Numba)
+        if: matrix.numba == 'with-numba'
+        run: pip install "ldpred3[fast] @ git+https://github.com/bvilhjal/ldpred3.git"
+
+      - name: Install ldpred3 (dependency, pure NumPy)
+        if: matrix.numba == 'no-numba'
+        run: pip install "ldpred3 @ git+https://github.com/bvilhjal/ldpred3.git"
+
+      - name: Install bipred (with Numba)
+        if: matrix.numba == 'with-numba'
+        run: pip install -e ".[test,fast]"
+
+      - name: Install bipred (pure NumPy, no Numba)
+        if: matrix.numba == 'no-numba'
+        run: pip install -e ".[test]"
+
+      - name: Run tests
+        run: pytest -q
