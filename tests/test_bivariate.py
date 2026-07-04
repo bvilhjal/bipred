@@ -105,6 +105,32 @@ def test_mixer_overlap_params():
     assert abs(mx["rg_from_overlap"] - res.rg) < 0.15, (mx["rg_from_overlap"], res.rg)
 
 
+def test_pi_prior_default_and_validation():
+    # Default pi_prior reproduces the historical Dirichlet(1,1,1,1) sampler
+    # bit-for-bit; the Jeffreys concentration still yields a valid mixture and
+    # leaves rg essentially unchanged; improper concentrations are rejected.
+    import pytest
+    k, nb = 200, 12
+    blocks, chols, idxs = _blocks(nb, k, seed=2)
+    m = nb * k
+    rng = np.random.default_rng(3)
+    b1, b2 = _sim(blocks, chols, idxs, m, p=0.05, h2=(0.5, 0.5), rg=0.6, rng=rng)
+    bh1 = _sumstats(blocks, chols, idxs, b1, 60000, k, rng)
+    bh2 = _sumstats(blocks, chols, idxs, b2, 60000, k, rng)
+    kw = dict(burn_in=120, num_iter=180, seed=1)
+    default = ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, 60000, 60000, **kw)
+    uni = ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, 60000, 60000,
+                                        pi_prior=1.0, **kw)
+    jef = ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, 60000, 60000,
+                                        pi_prior=0.5, **kw)
+    assert np.allclose(default.pi, uni.pi)
+    assert abs(jef.pi.sum() - 1.0) < 1e-6
+    assert abs(jef.rg - uni.rg) < 0.1
+    with pytest.raises(ValueError, match="pi_prior"):
+        ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, 60000, 60000,
+                                      pi_prior=0.0, **kw)
+
+
 def test_mixer_calibrated_uses_univariate_polygenicity():
     # mixer_calibrated keeps the joint fit's reliable ratios (frac_shared,
     # rho_beta) but replaces per-trait polygenicity with two univariate runs'
@@ -135,6 +161,94 @@ def test_mixer_calibrated_uses_univariate_polygenicity():
     # floats are accepted in place of InferResult objects
     mf = res.mixer_calibrated(0.1, 0.1)
     assert abs(mf["n_causal"][0] - 0.1 * m) < 1e-6
+
+
+def test_mixer_posterior_intervals():
+    # mixer_posterior turns the retained (pi, Sigma) draws into a posterior mean
+    # + credible interval per overlap quantity; the mean matches the point
+    # estimate, the CI brackets it, and under matched LD the interval covers the
+    # truth (which the point estimate is calibrated to here).
+    k, nb = 200, 12
+    blocks, chols, idxs = _blocks(nb, k, seed=2)
+    m = nb * k
+    rng = np.random.default_rng(3)
+    b1, b2 = _sim(blocks, chols, idxs, m, p=0.05, h2=(0.5, 0.5), rg=0.6, rng=rng)
+    bh1 = _sumstats(blocks, chols, idxs, b1, 60000, k, rng)
+    bh2 = _sumstats(blocks, chols, idxs, b2, 60000, k, rng)
+    res = ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, 60000, 60000,
+                                        burn_in=150, num_iter=200, seed=1)
+    assert res.pi_samples is not None and res.pi_samples.shape == (200, 4)
+    assert res.sigma_samples.shape == (200, 3)
+    post = res.mixer_posterior(level=0.95)
+    assert set(post) == {"n_causal", "polygenicity", "n_shared", "frac_shared",
+                         "rho_beta", "rg_from_overlap", "level"}
+    point = res.mixer
+    for i in (0, 1):
+        entry = post["n_causal"][i]
+        lo, hi = entry["ci"]
+        assert lo <= entry["mean"] <= hi                       # CI brackets mean
+        assert lo <= point["n_causal"][i] <= hi                # and the point est
+    for key in ("n_shared", "frac_shared", "rho_beta", "rg_from_overlap"):
+        lo, hi = post[key]["ci"]
+        assert lo <= post[key]["mean"] <= hi
+        assert post[key]["sd"] >= 0.0
+    # frac_shared is a probability in [0, 1]
+    assert 0.0 <= post["frac_shared"]["ci"][0] <= post["frac_shared"]["ci"][1] <= 1.0
+
+
+def test_noise_inflation_calibrates_counts_under_mismatch():
+    # The learned noise-inflation lambda is ~1 (a no-op) when the fit LD matches
+    # the GWAS sample, but rises under a finite-reference-panel LD and deflates the
+    # mismatch-inflated causal count back toward the truth, leaving h2/rg intact.
+    k, nb = 200, 10
+    m = nb * k
+    n_causal = int(0.05 * m)
+    rng = np.random.default_rng(0)
+    # population LD (AR1 per block) + a finite reference-panel estimate (mismatch)
+    pop, chol, ref = [], [], []
+    for b in range(nb):
+        rho = rng.uniform(0.3, 0.85)
+        R = (rho ** np.abs(np.subtract.outer(np.arange(k), np.arange(k)))).astype(float)
+        pop.append(R); chol.append(np.linalg.cholesky(R + 1e-6 * np.eye(k)))
+        Z = rng.standard_normal((2000, k)) @ chol[b].T
+        Z = (Z - Z.mean(0)) / Z.std(0)
+        Rr = 0.95 * (Z.T @ Z) / 2000 + 0.05 * np.eye(k)
+        ref.append((Rr.astype(np.float32), np.arange(b * k, (b + 1) * k)))
+    idx = [np.arange(b * k, (b + 1) * k) for b in range(nb)]
+
+    def gv(a, bb):
+        return sum(a[ix] @ (pop[i] @ bb[ix]) for i, ix in enumerate(idx))
+
+    causal = rng.choice(m, 2 * n_causal, replace=False)
+    b1 = np.zeros(m); b2 = np.zeros(m)
+    b1[causal[:n_causal]] = rng.standard_normal(n_causal)
+    b2[causal[n_causal:]] = rng.standard_normal(n_causal)
+    b1 *= np.sqrt(0.5 / gv(b1, b1)); b2 *= np.sqrt(0.5 / gv(b2, b2))
+    N = 200000
+    bh1 = np.empty(m); bh2 = np.empty(m)
+    for i, ix in enumerate(idx):
+        bh1[ix] = pop[i] @ b1[ix] + (chol[i] @ rng.standard_normal(k)) / np.sqrt(N)
+        bh2[ix] = pop[i] @ b2[ix] + (chol[i] @ rng.standard_normal(k)) / np.sqrt(N)
+
+    matched = [(pop[i].astype(np.float32), idx[i]) for i in range(nb)]
+    r_match = ldpred3_auto_bivariate_blocks(matched, bh1, bh2, N, N, burn_in=120,
+                                            num_iter=180, noise_inflation=True, seed=1)
+    off = ldpred3_auto_bivariate_blocks(ref, bh1, bh2, N, N, burn_in=120,
+                                        num_iter=180, seed=1)
+    on = ldpred3_auto_bivariate_blocks(ref, bh1, bh2, N, N, burn_in=120,
+                                       num_iter=180, noise_inflation=True, seed=1)
+    # matched LD -> lambda ~ 1 (near no-op)
+    assert max(r_match.noise_scale) < 1.25, r_match.noise_scale
+    # mismatch -> lambda well above 1
+    assert max(on.noise_scale) > 1.3, on.noise_scale
+    # the inflated count is deflated toward the truth (2*n_causal total causal)
+    n_off = off.mixer["n_causal"][0] + off.mixer["n_causal"][1]
+    n_on = on.mixer["n_causal"][0] + on.mixer["n_causal"][1]
+    assert n_on < n_off                         # fix reduces the inflated count
+    assert n_on < 0.85 * n_off                  # ... substantially
+    # h2 and rg are preserved (not wrecked by the deflation)
+    assert abs(on.rg - off.rg) < 0.1
+    assert on.h2[0] > 0.2 and on.h2[1] > 0.2
 
 
 def test_h2_cap_skips_prepass_and_validations():

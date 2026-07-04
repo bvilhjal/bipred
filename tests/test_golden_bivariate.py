@@ -46,6 +46,7 @@ _BIVAR_BETA1 = np.array([
 def test_golden_bivariate():
     R, beta_hat, m = _fixtures()
     res = ldpred3_auto_bivariate(R, beta_hat, _beta_hat2(beta_hat, m), 10000,
-                                 10000, burn_in=50, num_iter=150, seed=42)
+                                 10000, burn_in=50, num_iter=150, seed=42,
+                                 p_init=0.1)
     np.testing.assert_allclose(res.rg, _BIVAR_RG, rtol=1e-6)
     np.testing.assert_allclose(res.beta1_est, _BIVAR_BETA1, rtol=1e-6, atol=1e-9)

@@ -41,8 +41,15 @@ N_POP = 10000                         # sample for the "population" block LD
 NREF = 4000                           # reference-panel size (finite, noisy)
 N1, N2 = 50000, 20000                 # per-trait GWAS sizes
 H2 = 0.5
-SEG_LEN = float(os.environ.get("SEG_LEN", "0.6e6"))    # per-segment length
-MUT_RATE = float(os.environ.get("MUT_RATE", "4e-8"))   # SNP density (raise for
+# Per-segment length + SNP density. A longer segment spans more recombination, so
+# the K-SNP block is far better conditioned (less pathologically rank-deficient)
+# while keeping realistic LD (r^2 decay + haplotype blocks + a redundancy tail):
+# 5 Mb / mut=5e-9 gives eff_rank ~26/200 and numerical rank ~173/200, vs the old
+# 0.6 Mb / mut=4e-8 which crammed the SNPs into ~0.03 cM (eff_rank ~7/200, rank
+# ~122/200 -- near-singular). Real reference panels are rank-deficient too, but
+# not that severely; see benchmarks discussion of LD conditioning.
+SEG_LEN = float(os.environ.get("SEG_LEN", "5e6"))      # per-segment length (5 Mb)
+MUT_RATE = float(os.environ.get("MUT_RATE", "5e-9"))   # SNP density (raise for
 #                                                        larger K per block -> larger m)
 SHRINK = 0.05                         # ref-LD shrinkage toward I (sampler stability)
 REPS = int(os.environ.get("REPS", "10"))

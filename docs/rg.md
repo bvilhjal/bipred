@@ -30,11 +30,11 @@ variants with bivariate-normal effects, both traits h²=0.5). The LD here is
 
 | architecture | bivariate LDSC | bivariate LDpred3 |
 |--------------|:--------------:|:-----------------:|
-| infinitesimal | 0.02 ± 0.11 / 0.40 ± 0.10 / 0.80 ± 0.03 | −0.00 ± 0.07 / 0.39 ± 0.07 / 0.79 ± 0.02 |
-| sparse (p=0.01) | −0.02 ± 0.22 / 0.35 ± 0.22 / 0.84 ± 0.08 | 0.03 ± 0.10 / 0.36 ± 0.20 / 0.81 ± 0.05 |
-| moderate (p=0.05) | 0.02 ± 0.14 / 0.31 ± 0.12 / 0.79 ± 0.05 | 0.01 ± 0.08 / 0.38 ± 0.10 / 0.78 ± 0.03 |
-| polygenic (p=0.2) | 0.00 ± 0.09 / 0.41 ± 0.10 / 0.82 ± 0.06 | 0.02 ± 0.08 / 0.41 ± 0.07 / 0.81 ± 0.04 |
-| major locus | −0.01 ± 0.37 / 0.28 ± 0.30† / 0.81 ± 0.08 | 0.05 ± 0.23 / 0.32 ± 0.25 / 0.79 ± 0.05 |
+| infinitesimal | 0.06 ± 0.08 / 0.39 ± 0.11 / 0.80 ± 0.03 | 0.01 ± 0.03 / 0.40 ± 0.04 / 0.79 ± 0.02 |
+| sparse (p=0.01) | 0.02 ± 0.22 / 0.37 ± 0.26† / 0.65 ± 0.17 | 0.04 ± 0.08 / 0.41 ± 0.20 / 0.80 ± 0.03 |
+| moderate (p=0.05) | 0.02 ± 0.13 / 0.37 ± 0.08 / 0.77 ± 0.04 | 0.04 ± 0.08 / 0.38 ± 0.05 / 0.78 ± 0.03 |
+| polygenic (p=0.2) | 0.02 ± 0.08 / 0.40 ± 0.08 / 0.79 ± 0.04 | 0.00 ± 0.05 / 0.40 ± 0.04 / 0.80 ± 0.02 |
+| major locus | 0.14 ± 0.38† / 0.29 ± 0.24 / 0.76 ± 0.07 | 0.07 ± 0.16 / 0.33 ± 0.23 / 0.77 ± 0.04 |
 
 (± is the across-replicate SD over the in-range reps; † marks cells where one of
 the ten LDSC reps diverged and was excluded.)
@@ -51,13 +51,13 @@ the ten LDSC reps diverged and was excluded.)
   (its noisy regime on sparse / major-locus traits) the ratio **blows up** — a
   handful of reps here returned values in the hundreds and had to be excluded
   (the † cells). The bivariate sampler, which models the joint effect covariance
-  directly, **never diverged**: on major-locus at r_g=0.6 it gives 0.56 ± 0.13
-  where LDSC's surviving reps scatter 0.32 ± 0.61.
+  directly, **never diverged**: on major-locus at r_g=0.6 it gives 0.59 ± 0.11
+  where LDSC's surviving reps scatter 0.48 ± 0.20.
 - **Running time & memory.** Per fit on this genome (m=5000, 25 blocks, single
-  core): bivariate **LDSC ~22 ms**, bivariate **LDpred3 ~0.52 s** (0.44–0.63 s
-  across architectures) at a **0.22 GB** peak RSS. So the sampler's precision and
-  robustness cost ~25× LDSC's time but stay sub-second and light — LDSC remains
-  the instant screen, LDpred3 the accurate estimate.
+  core): bivariate **LDSC ~25 ms**, bivariate **LDpred3 ~0.23 s** at a **0.27 GB**
+  peak RSS. So the sampler's precision and robustness cost ~9× LDSC's time but
+  stay sub-second and light — LDSC remains the instant screen, LDpred3 the
+  accurate estimate.
 
 For a quick first pass, a **marginal** (no-LD) r_g — the moment estimator that
 assumes independent SNPs — is already reasonable (unlike a marginal h², which is
@@ -96,17 +96,65 @@ the denominator with `h²` *fails*) is in
 The bivariate fit's four-state mixture also yields the quantities MiXeR reports —
 the shared-causal fraction, the within-shared effect correlation `ρ_β` and the
 decomposition `r_g = ρ_β·π₁₁/√(π₁π₂)` — exposed as `res.mixer` (see
-[algorithm.md](algorithm.md#bivariate-two-trait-ldpred3)). The overlap fraction
-and `r_g` decomposition are reliable; absolute polygenicity is under-calibrated
-(dominated by LD-reference mismatch) and should be read as relative
-(`benchmarks/mixer_overlap.py`).
+[algorithm.md](algorithm.md#bivariate-two-trait-ldpred3)). The overlap **ratios**
+(`frac_shared`, `ρ_β`, `rg_from_overlap`) are reliable; the **absolute counts**
+(`n_causal`, `n_shared`) are over-estimated on realistic LD and should be read as
+relative unless calibrated (`benchmarks/mixer_overlap.py`, `calibration` sweep).
 
-To put the absolute counts (`n_causal`, `n_shared`) on a calibrated scale, run
-univariate `ldpred3.ldpred3_auto_infer` on each trait and pass the two results to
-`res.mixer_calibrated(infer1, infer2)`: it keeps the joint fit's reliable ratios
-(`frac_shared`, `ρ_β`) but rebuilds the counts on the univariate learned
-polygenicities. Full detail and the benchmark are in
-[algorithm.md](algorithm.md#bivariate-two-trait-ldpred3).
+### Absolute counts at low power
+
+At the **low per-SNP power `N·h²/M < 1` typical of real GWAS** (e.g. `h²=0.3`,
+`N=500k`, `M~1M` → ~0.15) the absolute polygenic counts are **over-estimated**,
+by ~3× at `p=0.10` and up to ~6× at a sparser `p=0.03`. Benchmarked against a
+**known** truth (`benchmarks/mixer_overlap.py`), the count/true ratio at `p=0.10`:
+
+| `N·h²/M` | 0.1 | 0.25 | 0.5 | 1 | 2 |
+|---|---|---|---|---|---|
+| matched LD | 3.3 | 1.9 | 1.1 | 1.0 | 1.1 |
+| ref-panel | 3.1 | 1.9 | 1.2 | 1.2 | 1.3 |
+
+The mechanism, dissected against truth (univariate `ldpred3_auto_infer` and the
+exact no-LD posterior; see ldpred3's
+[`docs/inference.md`](https://github.com/bvilhjal/ldpred3/blob/master/docs/inference.md)):
+
+- **The dominant cause with real LD is LD-spreading, not the prior or the
+  point-estimate.** Even under *matched, in-sample* LD the count is inflated at
+  the posterior **mode itself** (mean ≈ median ≈ mode — the posterior is *tight*
+  around the wrong value), because correlated SNPs are recruited as causal around
+  each true causal. This is a genuine likelihood-level effect, and no prior or
+  summary choice removes it.
+- **The bivariate over-counts *more* than the univariate** (correcting an earlier
+  note): a SNP correlated with signal in *either* trait can enter states `10`,
+  `01` or `11`, so the four-state model amplifies the spreading (~3× bivariate vs
+  ~1.4–2× univariate at `p=0.10`, `N·h²/M=0.1`). So `mixer_calibrated`'s
+  univariate anchoring does help somewhat (the univariate anchor is *less*
+  inflated), but it does not fully debias.
+- **The prior is a minor lever here.** `pi_prior` sets the symmetric Dirichlet
+  concentration (default `1.0`, uniform; `0.5` is Jeffreys). Jeffreys trims only
+  ~5% off the count with real LD (`r_g` unchanged) — in the *no-LD* limit the
+  prior and the mean-vs-median skew are the whole story and Jeffreys removes them
+  (that is where ldpred3's univariate `p_prior=(0.5,0.5)` matters), but realistic
+  LD-spreading swamps them.
+- **Per-causal power `λ_c = N·h²/(M·p)` governs identifiability but the bias is
+  genuinely 2-D** in `(N·h²/M, p)` — worst where `λ_c ≈ 1` *and* the true `p` is
+  far below the prior mean — so a *sparse* trait (`λ_c > 1` even at `N·h²/M < 1`)
+  is better determined, but no single `λ_c` threshold certifies safety.
+- **What actually helps.** `noise_inflation=True` damps the count (~3.4×→2.5× at
+  `N·h²/M=0.1`, most of it the reference-mismatch part), with `h²`/`r_g`
+  unchanged, and improves the posterior coverage below;
+  `res.mixer_posterior()` gives the **credible interval**; LD shrinkage / QC and
+  adequate power shrink the spreading. Otherwise **read the absolute counts as
+  relative**.
+- **The `r_g` and the overlap ratios cancel the bias entirely** and stay reliable
+  across the whole power range (`r_g ≈ 0.3–0.4` for true 0.4, even at
+  `N·h²/M = 0.1`).
+
+`res.mixer_calibrated(infer1, infer2)` rebuilds the counts on two univariate
+`ldpred3.ldpred3_auto_infer` polygenicities while keeping the joint ratios; since
+the univariate anchor is less LD-spread-inflated than the joint fit, it *reduces*
+(without eliminating) the over-count — for absolute counts prefer
+`noise_inflation`, `pi_prior=0.5`, adequate power and good LD (shrinkage / QC),
+and lean on the ratios otherwise.
 
 ## Handling sample overlap
 

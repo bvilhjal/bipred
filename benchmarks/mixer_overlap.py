@@ -23,13 +23,30 @@ replicates on fixed genotypes:
     in-sample (population) LD**; isolates how much of the polygenicity bias is
     LD-reference mismatch (it collapses under matched LD) vs the sampler, and shows
     rg is immune to both.
+  * ``calibration`` -- on the (realistic) finite reference panel, compares the
+    naive count with the **noise-inflation fix** (``noise_inflation=True``): the
+    learned per-trait lambda deflates the mismatch-inflated polygenicity back
+    toward the truth (rel -> ~1) with h2/rg unchanged, and reports whether the 95%
+    ``mixer_posterior`` credible interval covers the true causal count.
 
 The first three sweeps also record the **relative** polygenicity (pi_hat /
-pi_true) to quantify the known absolute under-estimation of point-normal mixtures.
+pi_true). The count is *over*-estimated at the **low per-SNP power typical of
+real GWAS** (``N*h2/M < 1``): ~3x at ``p=0.10``, more when sparser, present even
+under *matched* LD. With real LD the dominant cause is **LD-spreading**
+(correlated SNPs recruited around each causal; the posterior is tight at the
+inflated value -- mean ~ median ~ mode), amplified by the four-state model so the
+bivariate over-counts *more* than univariate ``ldpred3_auto_infer``. The
+Dirichlet ``pi_prior`` and the mean-vs-median summary are only minor levers here
+(they dominate in the no-LD limit -- see ldpred3's ``p_prior`` and its
+docs/inference.md); LD-reference mismatch adds a further, ``noise_inflation``-
+removable inflation. Per-causal power ``N*h2/(M*p)`` governs identifiability but
+the bias is genuinely 2-D in ``(N*h2/M, p)``. The **ratios** (rg, frac_shared)
+stay reliable throughout (see the ``power`` / ``calibration`` sweeps,
+``noise_inflation``, and docs/rg.md).
 
     OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python benchmarks/mixer_overlap.py
 
-Env overrides: ``SWEEP`` (overlap,rho,power,ldmatch or a subset), ``REPS``,
+Env overrides: ``SWEEP`` (overlap,rho,power,ldmatch,calibration or a subset), ``REPS``,
 ``OUT``, plus ``NB`` / ``K`` / ``MUT_RATE`` (via rg_architectures) to change ``m``.
 """
 import os
@@ -155,12 +172,12 @@ def sweep_power(rows):
           flush=True)
     print(f"{'N':>8} {'Nh2/M':>6} | {'frac_shared':>13} | {'rho_beta':>13} | "
           f"{'rg_hat':>13} | {'rel_poly':>8}", flush=True)
-    for i, n in enumerate([10000, 25000, 50000, 100000, 200000]):
+    for i, n in enumerate([1000, 2500, 5000, 10000, 20000]):
         r = _cell(NCAUSAL, 0.5, 0.8, n, n, base_seed=3000 + 20 * i)
         r["sweep"] = "power"
         r["N"] = n
         rows.append(r)
-        print(f"{n:>8} {n*H2/M:>6.0f} | {r['frac_shared_hat']:>6.2f}±{r['frac_shared_sd']:<5} "
+        print(f"{n:>8} {n*H2/M:>6.2f} | {r['frac_shared_hat']:>6.2f}±{r['frac_shared_sd']:<5} "
               f"| {r['rho_beta_hat']:>6.2f}±{r['rho_beta_sd']:<5} | "
               f"{r['rg_hat']:>6.2f}±{r['rg_sd']:<5} | {r['rel_poly']:>8.2f}", flush=True)
 
@@ -172,7 +189,7 @@ def sweep_ldmatch(rows):
           flush=True)
     print(f"{'N':>8} {'Nh2/M':>6} | {'ref pi/true':>12} {'ref rg':>7} "
           f"| {'insample pi/true':>16} {'ins rg':>7}", flush=True)
-    for i, n in enumerate([25000, 50000, 100000, 200000]):
+    for i, n in enumerate([1000, 2500, 5000, 10000, 20000]):
         rp, rr, tp, tr = [], [], [], []
         for rep in range(REPS):
             ref, _ = R.ref_panel(rep)
@@ -194,13 +211,61 @@ def sweep_ldmatch(rows):
              "insample_relpoly": m(tp), "insample_relpoly_sd": s(tp),
              "insample_rg": m(tr), "true_rg": 0.4}
         rows.append(r)
-        print(f"{n:>8} {n*H2/M:>6.0f} | {r['ref_relpoly']:>6.2f}±{r['ref_relpoly_sd']:<5}"
+        print(f"{n:>8} {n*H2/M:>6.2f} | {r['ref_relpoly']:>6.2f}±{r['ref_relpoly_sd']:<5}"
               f" {r['ref_rg']:>7.2f} | {r['insample_relpoly']:>10.2f}"
               f"±{r['insample_relpoly_sd']:<5} {r['insample_rg']:>7.2f}", flush=True)
 
 
+def sweep_calibration(rows):
+    """Absolute-count calibration and posterior credible-interval coverage on the
+    finite reference panel (the realistic, mismatched-LD case), across power.
+
+    Compares the naive count (``noise_inflation=False``) with the noise-inflation
+    fix (``True``): the fix learns a per-trait lambda >= 1 from the residual misfit
+    and deflates the mismatch-inflated polygenicity back toward the truth, while
+    ``h2`` / ``rg`` are unchanged. Also reports whether the 95% credible interval
+    from ``mixer_posterior`` covers the true per-trait causal count."""
+    print("\n== count calibration + posterior coverage (ref-panel LD, "
+          "p=0.10/trait, frac_shared=0.5, rho_beta=0.8) ==", flush=True)
+    print(f"{'N':>8} {'Nh2/M':>6} | {'rel off':>7} {'rel ON':>6} {'lam':>5} | "
+          f"{'cov off':>7} {'cov ON':>6} | {'rg off':>6} {'rg ON':>6}", flush=True)
+    true_n1 = NCAUSAL
+    for i, n in enumerate([1000, 2500, 5000, 10000, 20000]):
+        ro, rn, lam, covo, covn, rgo, rgn = [], [], [], 0, 0, [], []
+        for rep in range(REPS):
+            ref, _ = R.ref_panel(rep)
+            rng = np.random.default_rng(5000 + 20 * i + rep)
+            b1, b2, truth = _sim_overlap(rng, NCAUSAL, 0.5, 0.8)
+            bh1, bh2 = R.sumstats_pair(b1, b2, n, n, rng)
+            off = ldpred3_auto_bivariate_blocks(ref, bh1, bh2, n, n, burn_in=BURN,
+                                                num_iter=ITER, seed=rep)
+            on = ldpred3_auto_bivariate_blocks(ref, bh1, bh2, n, n, burn_in=BURN,
+                                               num_iter=ITER, noise_inflation=True,
+                                               seed=rep)
+            ro.append(0.5 * sum(off.mixer["polygenicity"]) / truth["pi1"])
+            rn.append(0.5 * sum(on.mixer["polygenicity"]) / truth["pi1"])
+            lam.append(0.5 * (on.noise_scale[0] + on.noise_scale[1]))
+            rgo.append(off.rg); rgn.append(on.rg)
+            for res, hit in ((off, "o"), (on, "n")):
+                ci = res.mixer_posterior()["n_causal"][0]["ci"]
+                covered = ci[0] <= true_n1 <= ci[1]
+                if hit == "o":
+                    covo += covered
+                else:
+                    covn += covered
+        m = lambda a: round(float(np.mean(a)), 3)  # noqa: E731
+        r = {"sweep": "calibration", "N": n, "true_rg": 0.4,
+             "rel_off": m(ro), "rel_on": m(rn), "lam": m(lam),
+             "cov_off": covo / REPS, "cov_on": covn / REPS,
+             "rg_off": m(rgo), "rg_on": m(rgn)}
+        rows.append(r)
+        print(f"{n:>8} {n*H2/M:>6.2f} | {r['rel_off']:>7.2f} {r['rel_on']:>6.2f} "
+              f"{r['lam']:>5.2f} | {covo}/{REPS:<5} {covn}/{REPS:<4} | "
+              f"{r['rg_off']:>6.2f} {r['rg_on']:>6.2f}", flush=True)
+
+
 SWEEPS = {"overlap": sweep_overlap, "rho": sweep_rho, "power": sweep_power,
-          "ldmatch": sweep_ldmatch}
+          "ldmatch": sweep_ldmatch, "calibration": sweep_calibration}
 
 
 def _write_csv(path, rows):
@@ -300,7 +365,8 @@ def _warmup():
 
 
 def main():
-    which = os.environ.get("SWEEP", "overlap,rho,power,ldmatch").split(",")
+    which = os.environ.get("SWEEP",
+                           "overlap,rho,power,ldmatch,calibration").split(",")
     base = os.environ.get("OUT", "mixer_overlap")
     csv_path = os.path.join(HERE, base + ".csv")
     print(f"MiXeR-style overlap recovery — realistic LD (m={M}, {R.NB} blocks, "
