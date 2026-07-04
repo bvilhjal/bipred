@@ -23,6 +23,11 @@ replicates on fixed genotypes:
     in-sample (population) LD**; isolates how much of the polygenicity bias is
     LD-reference mismatch (it collapses under matched LD) vs the sampler, and shows
     rg is immune to both.
+  * ``calibration`` -- on the (realistic) finite reference panel, compares the
+    naive count with the **noise-inflation fix** (``noise_inflation=True``): the
+    learned per-trait lambda deflates the mismatch-inflated polygenicity back
+    toward the truth (rel -> ~1) with h2/rg unchanged, and reports whether the 95%
+    ``mixer_posterior`` credible interval covers the true causal count.
 
 The first three sweeps also record the **relative** polygenicity (pi_hat /
 pi_true) to quantify the known absolute under-estimation of point-normal mixtures.
@@ -199,8 +204,56 @@ def sweep_ldmatch(rows):
               f"±{r['insample_relpoly_sd']:<5} {r['insample_rg']:>7.2f}", flush=True)
 
 
+def sweep_calibration(rows):
+    """Absolute-count calibration and posterior credible-interval coverage on the
+    finite reference panel (the realistic, mismatched-LD case), across power.
+
+    Compares the naive count (``noise_inflation=False``) with the noise-inflation
+    fix (``True``): the fix learns a per-trait lambda >= 1 from the residual misfit
+    and deflates the mismatch-inflated polygenicity back toward the truth, while
+    ``h2`` / ``rg`` are unchanged. Also reports whether the 95% credible interval
+    from ``mixer_posterior`` covers the true per-trait causal count."""
+    print("\n== count calibration + posterior coverage (ref-panel LD, "
+          "p=0.10/trait, frac_shared=0.5, rho_beta=0.8) ==", flush=True)
+    print(f"{'N':>8} {'Nh2/M':>6} | {'rel off':>7} {'rel ON':>6} {'lam':>5} | "
+          f"{'cov off':>7} {'cov ON':>6} | {'rg off':>6} {'rg ON':>6}", flush=True)
+    true_n1 = NCAUSAL
+    for i, n in enumerate([25000, 50000, 100000, 200000]):
+        ro, rn, lam, covo, covn, rgo, rgn = [], [], [], 0, 0, [], []
+        for rep in range(REPS):
+            ref, _ = R.ref_panel(rep)
+            rng = np.random.default_rng(5000 + 20 * i + rep)
+            b1, b2, truth = _sim_overlap(rng, NCAUSAL, 0.5, 0.8)
+            bh1, bh2 = R.sumstats_pair(b1, b2, n, n, rng)
+            off = ldpred3_auto_bivariate_blocks(ref, bh1, bh2, n, n, burn_in=BURN,
+                                                num_iter=ITER, seed=rep)
+            on = ldpred3_auto_bivariate_blocks(ref, bh1, bh2, n, n, burn_in=BURN,
+                                               num_iter=ITER, noise_inflation=True,
+                                               seed=rep)
+            ro.append(0.5 * sum(off.mixer["polygenicity"]) / truth["pi1"])
+            rn.append(0.5 * sum(on.mixer["polygenicity"]) / truth["pi1"])
+            lam.append(0.5 * (on.noise_scale[0] + on.noise_scale[1]))
+            rgo.append(off.rg); rgn.append(on.rg)
+            for res, hit in ((off, "o"), (on, "n")):
+                ci = res.mixer_posterior()["n_causal"][0]["ci"]
+                covered = ci[0] <= true_n1 <= ci[1]
+                if hit == "o":
+                    covo += covered
+                else:
+                    covn += covered
+        m = lambda a: round(float(np.mean(a)), 3)  # noqa: E731
+        r = {"sweep": "calibration", "N": n, "true_rg": 0.4,
+             "rel_off": m(ro), "rel_on": m(rn), "lam": m(lam),
+             "cov_off": covo / REPS, "cov_on": covn / REPS,
+             "rg_off": m(rgo), "rg_on": m(rgn)}
+        rows.append(r)
+        print(f"{n:>8} {n*H2/M:>6.0f} | {r['rel_off']:>7.2f} {r['rel_on']:>6.2f} "
+              f"{r['lam']:>5.2f} | {covo}/{REPS:<5} {covn}/{REPS:<4} | "
+              f"{r['rg_off']:>6.2f} {r['rg_on']:>6.2f}", flush=True)
+
+
 SWEEPS = {"overlap": sweep_overlap, "rho": sweep_rho, "power": sweep_power,
-          "ldmatch": sweep_ldmatch}
+          "ldmatch": sweep_ldmatch, "calibration": sweep_calibration}
 
 
 def _write_csv(path, rows):
@@ -300,7 +353,8 @@ def _warmup():
 
 
 def main():
-    which = os.environ.get("SWEEP", "overlap,rho,power,ldmatch").split(",")
+    which = os.environ.get("SWEEP",
+                           "overlap,rho,power,ldmatch,calibration").split(",")
     base = os.environ.get("OUT", "mixer_overlap")
     csv_path = os.path.join(HERE, base + ".csv")
     print(f"MiXeR-style overlap recovery — realistic LD (m={M}, {R.NB} blocks, "

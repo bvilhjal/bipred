@@ -299,6 +299,7 @@ class BivariateResult:
     pi: np.ndarray = None
     pi_samples: np.ndarray = None       # (n_kept, 4) post-burn-in mixture draws
     sigma_samples: np.ndarray = None    # (n_kept, 3) post-burn-in (s1, s2, s12) draws
+    noise_scale: tuple = None           # learned (lambda1, lambda2); (1,1) if off
 
     @property
     def mixer(self):
@@ -471,6 +472,7 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
                                   cross_corr=0.0, burn_in=200, num_iter=200,
                                   h2_bounds=(1e-4, 1.0), h2_cap=None,
                                   iw_df=10.0, rg_decorrelated=False,
+                                  noise_inflation=False, ni_damp=0.1,
                                   sample_every=5, seed=None):
     """Genome-wide (streaming) bivariate LDpred3-auto.
 
@@ -516,6 +518,28 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
         ratio attenuates -- prefer it for **asymmetric-power** pairs (e.g.
         boosting a weak trait with a strong correlated one), at the cost of a
         small over-estimate when the traits are balanced.
+    noise_inflation : bool, default False
+        Learn a per-trait **noise-inflation** factor ``lambda_t >= 1`` (an
+        LDSC-intercept analog) from the residual misfit and fit with an
+        *effective* sample size ``N_t / lambda_t``. The residual ``b_hat - R@beta``
+        is pure sampling noise (mean-chi2 ~ 1) when the LD reference matches the
+        GWAS sample, but is inflated under **LD-reference mismatch**; the learned
+        ``lambda`` makes the sampler correspondingly less confident so it stops
+        reading that misfit as extra polygenicity. This targets the **absolute
+        polygenic-overlap counts** (:attr:`BivariateResult.mixer`), whose bias is
+        the mismatch-driven inflation that grows with ``N``. It removes that
+        N-growing component while leaving ``h2`` and ``rg`` essentially unchanged
+        (validated in ``benchmarks/mixer_overlap.py``): on well-conditioned LD the
+        counts are deflated ~all the way back to the truth; on realistic coalescent
+        LD it substantially reduces the inflation but a scalar ``lambda`` cannot
+        absorb structured mismatch and dense-causal LD-spreading entirely. It is
+        ~a no-op under matched LD (``lambda ~ 1``). Recommended when fitting on a
+        finite **reference panel** (the usual case); left off by default so the
+        estimator is unchanged unless requested. The learned factors are returned
+        in ``BivariateResult.noise_scale``.
+    ni_damp : float, default 0.1
+        Damping for the per-sweep ``lambda`` update (only used with
+        ``noise_inflation``); smaller is more stable, larger adapts faster.
     sample_every : int, default 5
         Thinning for the retained effect samples used by the decorrelated ``rg``.
     seed : int or None
@@ -594,6 +618,8 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     pi = np.array([1.0 - p_init, p_init / 3.0, p_init / 3.0, p_init / 3.0])
     s1 = s2 = float(h2_init) / max(p_init * M, 1.0)
     s12 = float(rg_init) * s1
+    # Per-trait noise-inflation factors (LDSC-intercept analog); 1 = off.
+    lam1 = lam2 = 1.0
 
     for it in range(burn_in + num_iter):
         resync = (it % 100 == 0)
@@ -605,10 +631,14 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
         c10 = c01 = c11 = 0
         S1 = S2 = S12 = 0.0
         gv11 = gv12 = gv22 = 0.0
+        # Effective per-variant N deflated by the learned noise inflation. A scalar
+        # lambda preserves the constant-N fast path (n_const unchanged).
+        n1e = n1 / lam1 if noise_inflation else n1
+        n2e = n2 / lam2 if noise_inflation else n2
         for R, start, k in fblocks:
             sl = slice(start, start + k)
             a10, a01, a11, s1sq, s2sq, s12s, g11, g12, g22 = _bivar_one_sweep_jit(
-                R, bh1[sl], bh2[sl], n1[sl], n2[sl], curr1[sl], curr2[sl],
+                R, bh1[sl], bh2[sl], n1e[sl], n2e[sl], curr1[sl], curr2[sl],
                 rb1[sl], rb2[sl], rbs1[sl], rbs2[sl], unif[sl], z1[sl], z2[sl],
                 float(lpi[0]), float(lpi[1]), float(lpi[2]), float(lpi[3]),
                 float(s1), float(s2), float(s12), float(cross_corr),
@@ -616,6 +646,16 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
             c10 += a10; c01 += a01; c11 += a11
             S1 += s1sq; S2 += s2sq; S12 += s12s
             gv11 += g11; gv12 += g12; gv22 += g22
+
+        if noise_inflation:
+            # Update lambda_t from the residual mean-chi2. rb1/rb2 hold R@beta
+            # after the sweep, so b_hat - R@beta is the residual; under matched LD
+            # it is pure sampling noise (mean n*resid^2 ~ 1) and inflated otherwise.
+            r1 = bh1 - rb1; r2 = bh2 - rb2
+            lh1 = max(float(np.mean(n1 * r1 * r1)), 1.0)
+            lh2 = max(float(np.mean(n2 * r2 * r2)), 1.0)
+            lam1 = (1.0 - ni_damp) * lam1 + ni_damp * lh1
+            lam2 = (1.0 - ni_damp) * lam2 + ni_damp * lh2
 
         # --- global hyper-parameter updates ---
         c00 = m - c10 - c01 - c11
@@ -677,7 +717,8 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
                            sigma=np.array([[s1, s12], [s12, s2]]),
                            pi=pi_mean,
                            pi_samples=pi_samples[:count].copy(),
-                           sigma_samples=sig_samples[:count].copy())
+                           sigma_samples=sig_samples[:count].copy(),
+                           noise_scale=(float(lam1), float(lam2)))
 
 
 def ldpred3_auto_bivariate(corr, beta_hat1, beta_hat2, n_eff1, n_eff2, **kwargs):

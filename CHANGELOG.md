@@ -34,6 +34,20 @@ follow [Semantic Versioning](https://semver.org/).
   captures sampling uncertainty, **not** LD-reference-mismatch bias (which
   inflates the absolute counts, growing with N, and is an LD-quality issue — the
   ratios stay reliable regardless).
+- **Noise-inflation option for calibrated absolute counts** —
+  `ldpred3_auto_bivariate*(..., noise_inflation=True)`. Learns a per-trait
+  LDSC-intercept-style factor `λ_t ≥ 1` from the residual misfit
+  (`b_hat − R·β`) and fits with an effective `N_t / λ_t`. Under a matched LD
+  reference the residual is pure sampling noise so `λ ≈ 1` (a no-op); under
+  LD-reference mismatch it is inflated, so `λ > 1` makes the sampler stop reading
+  the misfit as extra polygenicity. This removes the **N-growing** component of
+  the polygenic-overlap count inflation with `h²`/`rg` unchanged: on
+  well-conditioned LD the counts calibrate ~fully (e.g. n₁ 909→309 vs truth 300
+  at N=200k), and on realistic coalescent LD it cuts the inflation from ~2.4× to
+  ~1.6× at N=200k (a scalar `λ` can't absorb structured mismatch entirely). Off
+  by default; the learned factors are on `BivariateResult.noise_scale`. New
+  `benchmarks/mixer_overlap.py` `calibration` sweep reports the on/off relative
+  polygenicity, `λ`, and `mixer_posterior` coverage across power.
 - **Cross-trait LD Score regression** (`ldsc_rg`, `LDSCRgResult`,
   `estimate_sample_overlap`), moved from ldpred3 so bipred owns *all*
   genetic-correlation estimation. It is the fast, moment-based `r_g` estimator and

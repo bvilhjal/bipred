@@ -170,6 +170,61 @@ def test_mixer_posterior_intervals():
     assert 0.0 <= post["frac_shared"]["ci"][0] <= post["frac_shared"]["ci"][1] <= 1.0
 
 
+def test_noise_inflation_calibrates_counts_under_mismatch():
+    # The learned noise-inflation lambda is ~1 (a no-op) when the fit LD matches
+    # the GWAS sample, but rises under a finite-reference-panel LD and deflates the
+    # mismatch-inflated causal count back toward the truth, leaving h2/rg intact.
+    k, nb = 200, 10
+    m = nb * k
+    n_causal = int(0.05 * m)
+    rng = np.random.default_rng(0)
+    # population LD (AR1 per block) + a finite reference-panel estimate (mismatch)
+    pop, chol, ref = [], [], []
+    for b in range(nb):
+        rho = rng.uniform(0.3, 0.85)
+        R = (rho ** np.abs(np.subtract.outer(np.arange(k), np.arange(k)))).astype(float)
+        pop.append(R); chol.append(np.linalg.cholesky(R + 1e-6 * np.eye(k)))
+        Z = rng.standard_normal((2000, k)) @ chol[b].T
+        Z = (Z - Z.mean(0)) / Z.std(0)
+        Rr = 0.95 * (Z.T @ Z) / 2000 + 0.05 * np.eye(k)
+        ref.append((Rr.astype(np.float32), np.arange(b * k, (b + 1) * k)))
+    idx = [np.arange(b * k, (b + 1) * k) for b in range(nb)]
+
+    def gv(a, bb):
+        return sum(a[ix] @ (pop[i] @ bb[ix]) for i, ix in enumerate(idx))
+
+    causal = rng.choice(m, 2 * n_causal, replace=False)
+    b1 = np.zeros(m); b2 = np.zeros(m)
+    b1[causal[:n_causal]] = rng.standard_normal(n_causal)
+    b2[causal[n_causal:]] = rng.standard_normal(n_causal)
+    b1 *= np.sqrt(0.5 / gv(b1, b1)); b2 *= np.sqrt(0.5 / gv(b2, b2))
+    N = 200000
+    bh1 = np.empty(m); bh2 = np.empty(m)
+    for i, ix in enumerate(idx):
+        bh1[ix] = pop[i] @ b1[ix] + (chol[i] @ rng.standard_normal(k)) / np.sqrt(N)
+        bh2[ix] = pop[i] @ b2[ix] + (chol[i] @ rng.standard_normal(k)) / np.sqrt(N)
+
+    matched = [(pop[i].astype(np.float32), idx[i]) for i in range(nb)]
+    r_match = ldpred3_auto_bivariate_blocks(matched, bh1, bh2, N, N, burn_in=120,
+                                            num_iter=180, noise_inflation=True, seed=1)
+    off = ldpred3_auto_bivariate_blocks(ref, bh1, bh2, N, N, burn_in=120,
+                                        num_iter=180, seed=1)
+    on = ldpred3_auto_bivariate_blocks(ref, bh1, bh2, N, N, burn_in=120,
+                                       num_iter=180, noise_inflation=True, seed=1)
+    # matched LD -> lambda ~ 1 (near no-op)
+    assert max(r_match.noise_scale) < 1.25, r_match.noise_scale
+    # mismatch -> lambda well above 1
+    assert max(on.noise_scale) > 1.3, on.noise_scale
+    # the inflated count is deflated toward the truth (2*n_causal total causal)
+    n_off = off.mixer["n_causal"][0] + off.mixer["n_causal"][1]
+    n_on = on.mixer["n_causal"][0] + on.mixer["n_causal"][1]
+    assert n_on < n_off                         # fix reduces the inflated count
+    assert n_on < 0.85 * n_off                  # ... substantially
+    # h2 and rg are preserved (not wrecked by the deflation)
+    assert abs(on.rg - off.rg) < 0.1
+    assert on.h2[0] > 0.2 and on.h2[1] > 0.2
+
+
 def test_h2_cap_skips_prepass_and_validations():
     import pytest
     k, nb = 200, 8
