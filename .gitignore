@@ -22,3 +22,12 @@ ld_library.npz
 benchmarks/.ld_cache/
 # Bivariate rg benchmark population-LD cache (regenerated on demand)
 benchmarks/.rg_cache/
+
+# Local benchmark-run scaffolding and logs (not deliverables)
+benchmarks/_RESULTS.log
+benchmarks/_run_all.sh
+benchmarks/_run_all.stdout
+benchmarks/_out_*.log
+benchmarks/_smoke_*.log
+benchmarks/_ldlib_gen.log
+benchmarks/_t.log
