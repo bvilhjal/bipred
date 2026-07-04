@@ -297,6 +297,8 @@ class BivariateResult:
     p: float
     sigma: np.ndarray
     pi: np.ndarray = None
+    pi_samples: np.ndarray = None       # (n_kept, 4) post-burn-in mixture draws
+    sigma_samples: np.ndarray = None    # (n_kept, 3) post-burn-in (s1, s2, s12) draws
 
     @property
     def mixer(self):
@@ -333,6 +335,13 @@ class BivariateResult:
         (the univariate polygenicity is far less LD-mismatch-sensitive). A dedicated
         causal-mixture likelihood (MiXeR) is what calibrates the absolute counts
         from scratch. Needs a well-powered pair (large ``N*h2/m``) to be meaningful.
+
+        For the **posterior distribution** of these quantities (a credible interval,
+        not just this point estimate), see :meth:`mixer_posterior`, which maps the
+        retained Gibbs draws of ``(pi, Sigma)`` through the same decomposition. That
+        interval is calibrated and covers the truth when the LD reference matches
+        the GWAS sample; the absolute-count bias discussed above is LD-reference
+        mismatch and is *not* reflected in the interval.
         """
         if self.pi is None:
             raise ValueError("pi not available on this result")
@@ -354,6 +363,74 @@ class BivariateResult:
             "frac_shared": pi11 / max(min(pi1, pi2), 1e-300),
             "rho_beta": rho_beta,
             "rg_from_overlap": float(rho_beta * pi11 / denom),
+        }
+
+    def mixer_posterior(self, level=0.95):
+        """Posterior **distribution** of the overlap counts, from the retained
+        Gibbs samples of ``(pi, Sigma)`` -- i.e. the posterior overlap counts
+        given the prior and the data, with a credible interval rather than only
+        the :attr:`mixer` point estimate.
+
+        Each retained sweep is a draw ``(pi, Sigma)`` from the joint posterior, so
+        mapping every draw through the same MiXeR decomposition as :attr:`mixer`
+        (``n_causal``, ``n_shared``, ``frac_shared``, ``rho_beta``,
+        ``rg_from_overlap``) and summarising gives the posterior mean and a central
+        ``level`` credible interval for each quantity.
+
+        Returns a dict mirroring :attr:`mixer`, but each entry is
+        ``{"mean": float, "ci": (lo, hi), "sd": float}`` (``n_causal`` /
+        ``polygenicity`` are 2-tuples of such dicts, one per trait).
+
+        **What the interval means (and does not).** It is the posterior spread
+        *conditional on the supplied LD reference* -- Monte-Carlo / sampling
+        uncertainty. It is **not** a bound on LD-reference-mismatch bias: when the
+        fit LD matches the GWAS sample the absolute counts are well calibrated and
+        this interval covers the truth, but under a mismatched reference panel the
+        absolute counts inflate (growing with N) and the interval is tight around
+        the *wrong* value. The ratios (``frac_shared``, ``rho_beta``,
+        ``rg_from_overlap``) stay reliable either way. See :attr:`mixer` for the
+        bias discussion and use matched / larger / QC'd LD for calibrated absolute
+        counts.
+        """
+        if self.pi_samples is None or self.sigma_samples is None:
+            raise ValueError("posterior samples not available on this result")
+        if len(self.pi_samples) == 0:
+            raise ValueError("no post-burn-in samples were retained")
+        m = len(self.beta1_est)
+        lo_q = (1.0 - level) / 2.0 * 100.0
+        hi_q = (1.0 + level) / 2.0 * 100.0
+        cols = {"n1": [], "n2": [], "n_shared": [], "frac_shared": [],
+                "rho_beta": [], "rg_from_overlap": []}
+        for (_p00, p10, p01, p11), (s1, s2, s12) in zip(self.pi_samples,
+                                                        self.sigma_samples):
+            rho_beta = float(s12 / np.sqrt(max(s1 * s2, 1e-300)))
+            d = self._mixer_dict(m, p10 + p11, p01 + p11, p11, rho_beta)
+            cols["n1"].append(d["n_causal"][0])
+            cols["n2"].append(d["n_causal"][1])
+            cols["n_shared"].append(d["n_shared"])
+            cols["frac_shared"].append(d["frac_shared"])
+            cols["rho_beta"].append(d["rho_beta"])
+            cols["rg_from_overlap"].append(d["rg_from_overlap"])
+
+        def summ(a):
+            a = np.asarray(a, dtype=float)
+            return {"mean": float(a.mean()), "sd": float(a.std()),
+                    "ci": (float(np.percentile(a, lo_q)),
+                           float(np.percentile(a, hi_q)))}
+        n1, n2 = summ(cols["n1"]), summ(cols["n2"])
+        return {
+            "n_causal": (n1, n2),
+            "polygenicity": ({**n1, "mean": n1["mean"] / m,
+                              "sd": n1["sd"] / m,
+                              "ci": (n1["ci"][0] / m, n1["ci"][1] / m)},
+                             {**n2, "mean": n2["mean"] / m,
+                              "sd": n2["sd"] / m,
+                              "ci": (n2["ci"][0] / m, n2["ci"][1] / m)}),
+            "n_shared": summ(cols["n_shared"]),
+            "frac_shared": summ(cols["frac_shared"]),
+            "rho_beta": summ(cols["rho_beta"]),
+            "rg_from_overlap": summ(cols["rg_from_overlap"]),
+            "level": level,
         }
 
     def mixer_calibrated(self, infer1, infer2):
@@ -501,6 +578,11 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     count = 0
     gv_acc = np.zeros(3)
     pi_acc = np.zeros(4)          # posterior-mean 4-state mixture (MiXeR overlap)
+    # Retained post-burn-in posterior samples of the mixture pi and the effect
+    # covariance (s1, s2, s12) -- the raw material for the posterior distribution
+    # (credible intervals) of the overlap counts (see BivariateResult.mixer_posterior).
+    pi_samples = np.zeros((num_iter, 4))
+    sig_samples = np.zeros((num_iter, 3))
     # Thinned post-burn-in effect samples for the decorrelated rg estimate.
     sample_every = max(int(sample_every), 1)
     max_saved = num_iter // sample_every + 1
@@ -561,6 +643,8 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
             avg1 += rbs1; avg2 += rbs2
             gv_acc += (gv11, gv12, gv22)
             pi_acc += pi
+            pi_samples[count] = pi
+            sig_samples[count] = (s1, s2, s12)
             if (it - burn_in) % sample_every == 0:
                 samp1[n_saved] = curr1
                 samp2[n_saved] = curr2
@@ -591,7 +675,9 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
                            h2=(float(h2_1), float(h2_2)), rg=rg,
                            p=float(pi_mean[1] + pi_mean[2] + pi_mean[3]),
                            sigma=np.array([[s1, s12], [s12, s2]]),
-                           pi=pi_mean)
+                           pi=pi_mean,
+                           pi_samples=pi_samples[:count].copy(),
+                           sigma_samples=sig_samples[:count].copy())
 
 
 def ldpred3_auto_bivariate(corr, beta_hat1, beta_hat2, n_eff1, n_eff2, **kwargs):

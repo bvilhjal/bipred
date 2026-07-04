@@ -23,6 +23,17 @@ follow [Semantic Versioning](https://semver.org/).
   the within-shared effect correlation `ρ_β`, and the `r_g` overlap
   decomposition. `mixer_calibrated` anchors the absolute counts on two univariate
   `ldpred3_auto_infer` runs.
+- **Posterior distribution of the overlap counts** — `BivariateResult.mixer_posterior(level=0.95)`.
+  The sampler now retains the post-burn-in mixture / effect-covariance draws
+  (`pi_samples`, `sigma_samples`), and `mixer_posterior` maps each draw through
+  the MiXeR decomposition to return the posterior **mean + credible interval**
+  for `n_causal`, `n_shared`, `frac_shared`, `ρ_β` and `rg_from_overlap` — the
+  posterior overlap counts given the prior and data, rather than only the
+  `mixer` point estimate. Validated on known-truth simulations: under a matched
+  LD reference the interval is calibrated and covers the truth; the interval
+  captures sampling uncertainty, **not** LD-reference-mismatch bias (which
+  inflates the absolute counts, growing with N, and is an LD-quality issue — the
+  ratios stay reliable regardless).
 - **Cross-trait LD Score regression** (`ldsc_rg`, `LDSCRgResult`,
   `estimate_sample_overlap`), moved from ldpred3 so bipred owns *all*
   genetic-correlation estimation. It is the fast, moment-based `r_g` estimator and

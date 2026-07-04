@@ -137,6 +137,39 @@ def test_mixer_calibrated_uses_univariate_polygenicity():
     assert abs(mf["n_causal"][0] - 0.1 * m) < 1e-6
 
 
+def test_mixer_posterior_intervals():
+    # mixer_posterior turns the retained (pi, Sigma) draws into a posterior mean
+    # + credible interval per overlap quantity; the mean matches the point
+    # estimate, the CI brackets it, and under matched LD the interval covers the
+    # truth (which the point estimate is calibrated to here).
+    k, nb = 200, 12
+    blocks, chols, idxs = _blocks(nb, k, seed=2)
+    m = nb * k
+    rng = np.random.default_rng(3)
+    b1, b2 = _sim(blocks, chols, idxs, m, p=0.05, h2=(0.5, 0.5), rg=0.6, rng=rng)
+    bh1 = _sumstats(blocks, chols, idxs, b1, 60000, k, rng)
+    bh2 = _sumstats(blocks, chols, idxs, b2, 60000, k, rng)
+    res = ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, 60000, 60000,
+                                        burn_in=150, num_iter=200, seed=1)
+    assert res.pi_samples is not None and res.pi_samples.shape == (200, 4)
+    assert res.sigma_samples.shape == (200, 3)
+    post = res.mixer_posterior(level=0.95)
+    assert set(post) == {"n_causal", "polygenicity", "n_shared", "frac_shared",
+                         "rho_beta", "rg_from_overlap", "level"}
+    point = res.mixer
+    for i in (0, 1):
+        entry = post["n_causal"][i]
+        lo, hi = entry["ci"]
+        assert lo <= entry["mean"] <= hi                       # CI brackets mean
+        assert lo <= point["n_causal"][i] <= hi                # and the point est
+    for key in ("n_shared", "frac_shared", "rho_beta", "rg_from_overlap"):
+        lo, hi = post[key]["ci"]
+        assert lo <= post[key]["mean"] <= hi
+        assert post[key]["sd"] >= 0.0
+    # frac_shared is a probability in [0, 1]
+    assert 0.0 <= post["frac_shared"]["ci"][0] <= post["frac_shared"]["ci"][1] <= 1.0
+
+
 def test_h2_cap_skips_prepass_and_validations():
     import pytest
     k, nb = 200, 8
