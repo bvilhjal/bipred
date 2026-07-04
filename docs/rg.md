@@ -110,33 +110,41 @@ and the bivariate fit (so `mixer_calibrated`'s univariate anchoring does not
 actually debias — the anchor carries the same bias). What we learned
 benchmarking it against known truth:
 
-- **Realistic (coalescent) LD is rank-deficient / ill-conditioned** — perfectly-
-  and near-perfectly-correlated SNP pairs give near-zero eigenvalues, exactly as
-  real reference panels do (which is why LDpred pipelines shrink/QC the LD). On
-  such LD the point-normal causal-state count over-estimates the true number of
-  causal variants, and the over-estimation **grows with N** (power). On this
-  benchmark's LD the reference-panel count runs ~1.2× at `N·h²/M = 2` up to
-  ~2.2× at `N·h²/M = 20`.
-- **It is governed by LD conditioning** (the magnitude of the smallest
-  eigenvalues), *not* by effective rank: a redundant but well-conditioned LD is
-  calibrated, a near-singular one is not. Consistent with ldpred3's own
-  univariate benchmark (`p`: 0.2→0.29, 0.01→0.014). So "unbiased polygenicity"
-  holds in the well-conditioned regime; on realistic LD the counts are mildly
-  inflated and should be read as relative.
-- **Two levers.** (a) `noise_inflation=True` learns a per-trait
-  LDSC-intercept-style `λ` that removes the **LD-reference-mismatch** component of
-  the inflation (the extra from fitting a finite reference panel), bringing the
-  ref-panel count from ~2.2× to ~1.3× at `N·h²/M = 20` with `h²`/`r_g` unchanged.
+- **The bias is U-shaped in per-SNP power `N·h²/M`, and worst in the regime real
+  GWAS actually occupy.** Real studies have `N·h²/M < 1` (e.g. `h²=0.3`, `N=500k`,
+  `M~1M` → ~0.15). Sweeping the count/true ratio (p=0.10, matched LD):
+
+  | `N·h²/M` | 0.1 | 0.25 | 0.5 | 1 | 2 |
+  |---|---|---|---|---|---|
+  | matched | 3.3 | 1.9 | 1.1 | 1.0 | 1.1 |
+  | ref-panel | 3.1 | 1.9 | 1.2 | 1.2 | 1.3 |
+
+  At the **low power typical of practice** the count is over-estimated ~2–3×,
+  worst at the lowest power — and this is present with *matched* LD, so it is a
+  **low-power point-normal over-recruitment** (the sampler cannot rule out weak
+  causals), not an LD effect. It is smallest near `N·h²/M ≈ 1`. Only in the
+  **unrealistically high-power** regime (`N·h²/M ≫ 1`) does the count rise again,
+  and *there* it is LD-conditioning / reference-mismatch driven (that branch
+  grows with N and reaches ~2× by `N·h²/M = 20`, but you never get there).
+- **Not a bivariate defect, and not fixable by univariate anchoring.** The
+  over-count is *identical* for univariate `ldpred3_auto_infer` and the bivariate
+  fit, consistent with ldpred3's own univariate benchmark (`p`: 0.2→0.29,
+  0.01→0.014). "Unbiased polygenicity" is a well-powered-regime statement; at real
+  power the absolute counts are inflated and should be read as **relative**.
+- **Two levers.** (a) `noise_inflation=True` damps the over-recruitment (both the
+  low-power part — ~3.4×→2.5× at `N·h²/M=0.1` — and the high-power mismatch part),
+  with `h²`/`r_g` unchanged, and it improves the posterior coverage below.
   (b) `res.mixer_posterior()` gives the posterior **credible interval** for each
-  count (calibrated and covers the truth when the LD matches; see below).
-- **The `r_g` and the overlap ratios cancel this bias** and stay reliable
-  throughout (`rg_off ≈ rg_on ≈ 0.4` across the whole power sweep above).
+  count (calibrated when the LD matches; see below).
+- **The `r_g` and the overlap ratios cancel this bias** and stay reliable across
+  the whole power range (`r_g ≈ 0.3–0.4` for true 0.4, even at `N·h²/M = 0.1`).
 
 `res.mixer_calibrated(infer1, infer2)` still exists (it rebuilds the counts on
 two univariate `ldpred3.ldpred3_auto_infer` polygenicities while keeping the joint
 ratios), but note the caveat above: the univariate anchor shares the same
-LD-conditioning bias, so prefer `noise_inflation` + good LD (shrinkage / QC) for
-absolute counts, and lean on the ratios otherwise.
+power-dependent over-count, so it does not debias — prefer `noise_inflation`,
+adequate power, and good LD (shrinkage / QC) for absolute counts, and lean on the
+ratios otherwise.
 
 ## Handling sample overlap
 

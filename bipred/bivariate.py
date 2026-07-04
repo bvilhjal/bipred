@@ -526,16 +526,23 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
         GWAS sample, but is inflated under **LD-reference mismatch**; the learned
         ``lambda`` makes the sampler correspondingly less confident so it stops
         reading that misfit as extra polygenicity. This targets the **absolute
-        polygenic-overlap counts** (:attr:`BivariateResult.mixer`), whose bias is
-        the mismatch-driven inflation that grows with ``N``. It removes that
-        N-growing component while leaving ``h2`` and ``rg`` essentially unchanged
-        (validated in ``benchmarks/mixer_overlap.py``): on well-conditioned LD the
-        counts are deflated ~all the way back to the truth; on realistic coalescent
-        LD it substantially reduces the inflation but a scalar ``lambda`` cannot
-        absorb structured mismatch and dense-causal LD-spreading entirely. It is
-        ~a no-op under matched LD (``lambda ~ 1``). Recommended when fitting on a
-        finite **reference panel** (the usual case); left off by default so the
-        estimator is unchanged unless requested. The learned factors are returned
+        polygenic-overlap counts** (:attr:`BivariateResult.mixer`). Their bias is
+        **U-shaped in per-SNP power** ``N*h2/M`` and is *dominated by the
+        realistic low-power regime* ``N*h2/M < 1``: there the point-normal model
+        over-recruits null SNPs and the count is over-estimated by up to ~3x even
+        under **matched** LD, so this is an over-count of the model itself, not a
+        bivariate or LD-mismatch defect (the same over-count appears in ldpred3's
+        univariate ``p``). LD-reference mismatch adds a further, smaller inflation
+        on top. ``lambda`` damps **both** components -- most under mismatch, but it
+        also tempers the low-power over-recruitment -- while leaving ``h2`` and
+        ``rg`` essentially unchanged (validated in ``benchmarks/mixer_overlap.py``:
+        e.g. count/true 3.4->2.5 at ``N*h2/M=0.1`` on reference-panel LD). A scalar
+        ``lambda`` cannot absorb structured mismatch or dense-causal LD-spreading
+        entirely, and it is ~a no-op under matched LD at higher power
+        (``lambda ~ 1``). Recommended when fitting on a finite **reference panel**
+        (the usual case); left off by default so the estimator is unchanged unless
+        requested. Whatever the absolute counts, the **ratios** (``rg``,
+        ``frac_shared``) are unbiased throughout. The learned factors are returned
         in ``BivariateResult.noise_scale``.
     ni_damp : float, default 0.1
         Damping for the per-sweep ``lambda`` update (only used with

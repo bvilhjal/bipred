@@ -30,14 +30,18 @@ replicates on fixed genotypes:
     ``mixer_posterior`` credible interval covers the true causal count.
 
 The first three sweeps also record the **relative** polygenicity (pi_hat /
-pi_true). On realistic (rank-deficient / ill-conditioned) LD the point-normal
-count is *over*-estimated and the inflation grows with N; this is governed by LD
-conditioning (not effective rank) and is identical for univariate and bivariate
-fits (see the ``calibration`` sweep, ``noise_inflation``, and docs/rg.md).
+pi_true). The point-normal count is *over*-estimated, and the bias is **U-shaped
+in per-SNP power** ``N*h2/M``: worst at the **low power typical of real GWAS**
+(``N*h2/M < 1``, present even with *matched* LD -- a low-power point-normal
+over-recruitment, not an LD effect), smallest near ``N*h2/M ~ 1``, and rising
+again only in the unrealistically high-power regime (where it becomes
+LD-conditioning / reference-mismatch dominated). It is identical for univariate
+and bivariate fits; the **ratios** (rg, frac_shared) stay reliable throughout
+(see the ``power`` / ``calibration`` sweeps, ``noise_inflation``, and docs/rg.md).
 
     OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python benchmarks/mixer_overlap.py
 
-Env overrides: ``SWEEP`` (overlap,rho,power,ldmatch or a subset), ``REPS``,
+Env overrides: ``SWEEP`` (overlap,rho,power,ldmatch,calibration or a subset), ``REPS``,
 ``OUT``, plus ``NB`` / ``K`` / ``MUT_RATE`` (via rg_architectures) to change ``m``.
 """
 import os
@@ -163,12 +167,12 @@ def sweep_power(rows):
           flush=True)
     print(f"{'N':>8} {'Nh2/M':>6} | {'frac_shared':>13} | {'rho_beta':>13} | "
           f"{'rg_hat':>13} | {'rel_poly':>8}", flush=True)
-    for i, n in enumerate([10000, 25000, 50000, 100000, 200000]):
+    for i, n in enumerate([1000, 2500, 5000, 10000, 20000]):
         r = _cell(NCAUSAL, 0.5, 0.8, n, n, base_seed=3000 + 20 * i)
         r["sweep"] = "power"
         r["N"] = n
         rows.append(r)
-        print(f"{n:>8} {n*H2/M:>6.0f} | {r['frac_shared_hat']:>6.2f}±{r['frac_shared_sd']:<5} "
+        print(f"{n:>8} {n*H2/M:>6.2f} | {r['frac_shared_hat']:>6.2f}±{r['frac_shared_sd']:<5} "
               f"| {r['rho_beta_hat']:>6.2f}±{r['rho_beta_sd']:<5} | "
               f"{r['rg_hat']:>6.2f}±{r['rg_sd']:<5} | {r['rel_poly']:>8.2f}", flush=True)
 
@@ -180,7 +184,7 @@ def sweep_ldmatch(rows):
           flush=True)
     print(f"{'N':>8} {'Nh2/M':>6} | {'ref pi/true':>12} {'ref rg':>7} "
           f"| {'insample pi/true':>16} {'ins rg':>7}", flush=True)
-    for i, n in enumerate([25000, 50000, 100000, 200000]):
+    for i, n in enumerate([1000, 2500, 5000, 10000, 20000]):
         rp, rr, tp, tr = [], [], [], []
         for rep in range(REPS):
             ref, _ = R.ref_panel(rep)
@@ -202,7 +206,7 @@ def sweep_ldmatch(rows):
              "insample_relpoly": m(tp), "insample_relpoly_sd": s(tp),
              "insample_rg": m(tr), "true_rg": 0.4}
         rows.append(r)
-        print(f"{n:>8} {n*H2/M:>6.0f} | {r['ref_relpoly']:>6.2f}±{r['ref_relpoly_sd']:<5}"
+        print(f"{n:>8} {n*H2/M:>6.2f} | {r['ref_relpoly']:>6.2f}±{r['ref_relpoly_sd']:<5}"
               f" {r['ref_rg']:>7.2f} | {r['insample_relpoly']:>10.2f}"
               f"±{r['insample_relpoly_sd']:<5} {r['insample_rg']:>7.2f}", flush=True)
 
@@ -221,7 +225,7 @@ def sweep_calibration(rows):
     print(f"{'N':>8} {'Nh2/M':>6} | {'rel off':>7} {'rel ON':>6} {'lam':>5} | "
           f"{'cov off':>7} {'cov ON':>6} | {'rg off':>6} {'rg ON':>6}", flush=True)
     true_n1 = NCAUSAL
-    for i, n in enumerate([25000, 50000, 100000, 200000]):
+    for i, n in enumerate([1000, 2500, 5000, 10000, 20000]):
         ro, rn, lam, covo, covn, rgo, rgn = [], [], [], 0, 0, [], []
         for rep in range(REPS):
             ref, _ = R.ref_panel(rep)
@@ -250,7 +254,7 @@ def sweep_calibration(rows):
              "cov_off": covo / REPS, "cov_on": covn / REPS,
              "rg_off": m(rgo), "rg_on": m(rgn)}
         rows.append(r)
-        print(f"{n:>8} {n*H2/M:>6.0f} | {r['rel_off']:>7.2f} {r['rel_on']:>6.2f} "
+        print(f"{n:>8} {n*H2/M:>6.2f} | {r['rel_off']:>7.2f} {r['rel_on']:>6.2f} "
               f"{r['lam']:>5.2f} | {covo}/{REPS:<5} {covn}/{REPS:<4} | "
               f"{r['rg_off']:>6.2f} {r['rg_on']:>6.2f}", flush=True)
 
