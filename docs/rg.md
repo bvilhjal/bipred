@@ -98,63 +98,64 @@ the shared-causal fraction, the within-shared effect correlation `ρ_β` and the
 decomposition `r_g = ρ_β·π₁₁/√(π₁π₂)` — exposed as `res.mixer` (see
 [algorithm.md](algorithm.md#bivariate-two-trait-ldpred3)). The overlap **ratios**
 (`frac_shared`, `ρ_β`, `rg_from_overlap`) are reliable; the **absolute counts**
-(`n_causal`, `n_shared`) are over-estimated on realistic LD and should be read as
-relative unless calibrated (`benchmarks/mixer_overlap.py`, `calibration` sweep).
+(`n_causal`, `n_shared`) carry a mild, power-dependent over-count (below) and are
+best read with `noise_inflation` / `mixer_calibrated` or as approximate.
 
-### Absolute counts at low power
+### Absolute counts and their calibration
 
-At the **low per-SNP power `N·h²/M < 1` typical of real GWAS** (e.g. `h²=0.3`,
-`N=500k`, `M~1M` → ~0.15) the absolute polygenic counts are **over-estimated**,
-by ~3× at `p=0.10` and up to ~6× at a sparser `p=0.03`. Benchmarked against a
-**known** truth (`benchmarks/mixer_overlap.py`), the count/true ratio at `p=0.10`:
+With the realistic `p_init=0.02` default the absolute counts are **well
+calibrated across the whole per-SNP power range**, including the low power
+`N·h²/M < 1` of most GWAS. Benchmarked against a **known** truth
+(`benchmarks/mixer_overlap.py`, `ldmatch` sweep, `p=0.10`/trait), the per-trait
+`count / true`:
 
 | `N·h²/M` | 0.1 | 0.25 | 0.5 | 1 | 2 |
 |---|---|---|---|---|---|
-| matched LD | 3.3 | 1.9 | 1.1 | 1.0 | 1.1 |
-| ref-panel | 3.1 | 1.9 | 1.2 | 1.2 | 1.3 |
+| in-sample LD | 0.96 | 1.05 | 0.98 | 0.99 | 1.04 |
+| ref-panel LD | 0.97 | 1.10 | 1.06 | 1.10 | 1.21 |
 
-The mechanism, dissected against truth (univariate `ldpred3_auto_infer` and the
-exact no-LD posterior; see ldpred3's
-[`docs/inference.md`](https://github.com/bvilhjal/ldpred3/blob/master/docs/inference.md)):
+- **The residual is a mild over-count that grows with power** (LD-spreading: the
+  point-normal recruits a causal's LD neighbours as partly causal). In-sample it
+  stays ≈1× up to `N·h²/M=2`; a finite reference panel adds a small further
+  inflation that grows with power (the `ref − in-sample` gap). Both are far below
+  the ~2–3× seen in earlier versions.
+- **The old low-power over-count was a `p_init` artifact.** At low power the data
+  barely pin `p`, so the single-chain count is influenced by its starting value;
+  the previous `p_init=0.1` default inflated the low-power count ~3×, while the
+  realistic `p_init=0.02` lands near truth. The flip side: at low power the count
+  is *init-influenced*, so it is most trustworthy near the default polygenicity
+  and at adequate power — read very-low-power counts as approximate.
+- **`noise_inflation=True`** removes the reference-mismatch part of the residual
+  (learning a per-trait `λ≥1` from the residual misfit), with `h²`/`r_g`
+  unchanged. On the reference panel it moves `count/true` from 1.03–1.14 to
+  0.84–1.04 across `N·h²/M = 0.1→2` and lifts the 95% credible-interval coverage
+  (`mixer_posterior`) to 6–8/8 reps; it can slightly *over*-deflate at the lowest
+  power (little left to remove there).
+- **`res.mixer_calibrated(infer1, infer2)`** anchors the per-trait counts on two
+  univariate `ldpred3.ldpred3_auto_infer` runs (the four-state count over-counts
+  *more* than a univariate fit — a SNP correlated with either trait can enter
+  states `10`/`01`/`11`), keeping the joint's reliable shared *fraction*. It is
+  most useful at moderate–high power, where it removes the residual per-trait
+  over-count and roughly halves the shared-count over-count (`benchmarks/mixer_overlap.py`,
+  `unical` sweep, ref-panel LD, `count / true`):
 
-- **The dominant cause with real LD is LD-spreading, not the prior or the
-  point-estimate.** Even under *matched, in-sample* LD the count is inflated at
-  the posterior **mode itself** (mean ≈ median ≈ mode — the posterior is *tight*
-  around the wrong value), because correlated SNPs are recruited as causal around
-  each true causal. This is a genuine likelihood-level effect, and no prior or
-  summary choice removes it.
-- **The bivariate over-counts *more* than the univariate** (correcting an earlier
-  note): a SNP correlated with signal in *either* trait can enter states `10`,
-  `01` or `11`, so the four-state model amplifies the spreading (~3× bivariate vs
-  ~1.4–2× univariate at `p=0.10`, `N·h²/M=0.1`). So `mixer_calibrated`'s
-  univariate anchoring does help somewhat (the univariate anchor is *less*
-  inflated), but it does not fully debias.
-- **The prior is a minor lever here.** `pi_prior` sets the symmetric Dirichlet
-  concentration (default `1.0`, uniform; `0.5` is Jeffreys). Jeffreys trims only
-  ~5% off the count with real LD (`r_g` unchanged) — in the *no-LD* limit the
-  prior and the mean-vs-median skew are the whole story and Jeffreys removes them
-  (that is where ldpred3's univariate `p_prior=(0.5,0.5)` matters), but realistic
-  LD-spreading swamps them.
-- **Per-causal power `λ_c = N·h²/(M·p)` governs identifiability but the bias is
-  genuinely 2-D** in `(N·h²/M, p)` — worst where `λ_c ≈ 1` *and* the true `p` is
-  far below the prior mean — so a *sparse* trait (`λ_c > 1` even at `N·h²/M < 1`)
-  is better determined, but no single `λ_c` threshold certifies safety.
-- **What actually helps.** `noise_inflation=True` damps the count (~3.4×→2.5× at
-  `N·h²/M=0.1`, most of it the reference-mismatch part), with `h²`/`r_g`
-  unchanged, and improves the posterior coverage below;
-  `res.mixer_posterior()` gives the **credible interval**; LD shrinkage / QC and
-  adequate power shrink the spreading. Otherwise **read the absolute counts as
-  relative**.
-- **The `r_g` and the overlap ratios cancel the bias entirely** and stay reliable
-  across the whole power range (`r_g ≈ 0.3–0.4` for true 0.4, even at
+  | `N·h²/M` | joint per-trait | calibrated per-trait | joint shared | calibrated shared |
+  |---:|:---:|:---:|:---:|:---:|
+  | 0.5 | 1.06 | 0.85 | 1.34 | 1.05 |
+  | 1.0 | 1.18 | 0.93 | 1.46 | 1.18 |
+  | 2.0 | 1.22 | 1.01 | 1.48 | 1.20 |
+
+  It anchors, it does not fully cure (the univariate `p` is itself mildly
+  LD-spread-inflated, and at very low power the anchor can slightly under-shoot).
+- **`pi_prior`** (symmetric Dirichlet concentration; default `1.0`, `0.5` =
+  Jeffreys) is a minor lever for the absolute counts under real LD (~5%); it and
+  the analogous univariate `p_prior` matter mainly in the no-LD limit (see
+  ldpred3's [`docs/inference.md`](https://github.com/bvilhjal/ldpred3/blob/master/docs/inference.md)).
+- **`res.mixer_posterior()`** gives the posterior **credible interval** for each
+  count (calibrated when the LD matches).
+- **The `r_g` and the overlap ratios cancel the residual entirely** and stay
+  reliable across the whole power range (`r_g ≈ 0.35–0.42` for true 0.4, even at
   `N·h²/M = 0.1`).
-
-`res.mixer_calibrated(infer1, infer2)` rebuilds the counts on two univariate
-`ldpred3.ldpred3_auto_infer` polygenicities while keeping the joint ratios; since
-the univariate anchor is less LD-spread-inflated than the joint fit, it *reduces*
-(without eliminating) the over-count — for absolute counts prefer
-`noise_inflation`, `pi_prior=0.5`, adequate power and good LD (shrinkage / QC),
-and lean on the ratios otherwise.
 
 ## Handling sample overlap
 

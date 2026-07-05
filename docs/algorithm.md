@@ -40,48 +40,68 @@ sense of MiXeR ([Frei et al. 2019, *Nat. Commun.*](https://doi.org/10.1038/s4146
 per-trait polygenicity `(π₁, π₂)` with `π₁ = π₁₀ + π₁₁`, the shared causal
 fraction `π₁₁`, the correlation of effect sizes **within the shared component**
 `ρ_β = s₁₂/√(s₁s₂)`, and the decomposition `r_g = ρ_β · π₁₁/√(π₁π₂)` (genetic
-correlation = polygenic overlap × within-shared effect correlation). Two caveats:
-the point-normal mixture does **not calibrate absolute polygenicity** (it counts
-a causal variant's LD neighbours as partly causal too), so the absolute counts
-are biased by an architecture- and power-dependent factor — `benchmarks/mixer_overlap.py`
-measures anywhere from ~0.3× (clustered causal variants) to ~2.5× (spread across
-LD blocks, large `N`) — while the *overlap fraction* `π₁₁/min(π₁,π₂)` and the
-`r_g` decomposition **are** recovered across those same sweeps. The dominant term
-in that bias is **LD-reference mismatch**, not the sampler: the inflation *grows*
-with `N` (a misspecified-likelihood signature — a benign shrinkage bias would
-shrink toward the prior as data accrue), and a control that re-fits the same data
-on the *exact in-sample LD* collapses it from ~2.5× to ~1.1× at `N·h²/m=20`
-(residual: the intrinsic weak identifiability of `π` under a Gaussian slab). `r_g`
-and the overlap fraction are **ratios**, so the mismatch cancels and they stay
-unbiased — only the absolute counts are exposed. So read the overlap fraction and
-`r_g`, treat the absolute counts as relative, and note it needs a **well-powered**
-pair (large `N·h²/m`) to separate the states. A dedicated causal-mixture
-likelihood (MiXeR) is what calibrates the absolute counts (it fits the full
-z-score distribution rather than counting posterior inclusions); here the overlap
-comes for free from the joint fit.
+correlation = polygenic overlap × within-shared effect correlation). Two caveats
+on the **absolute counts** (`n_causal`, `n_shared`): the point-normal mixture
+counts a causal variant's LD neighbours as partly causal too (**LD-spreading**),
+which leaves a mild over-count that **grows with per-SNP power** and is a little
+larger under LD-reference mismatch. Benchmarked against known truth on realistic
+reference-panel LD (`benchmarks/mixer_overlap.py`, `count/true`), the per-trait
+count is ≈0.95–1.1 at the low power `N·h²/M ≲ 0.5` of most GWAS and ≈1.1–1.2 by
+`N·h²/M = 2` (the shared count a little more); the *overlap fraction*
+`π₁₁/min(π₁,π₂)` and the `r_g` decomposition are **ratios** and stay unbiased
+across all of it. This good low-power calibration relies on the realistic
+`p_init=0.02` default — at low power the single-chain count is init-influenced
+(the data barely pin `p`; a 10×-higher `p_init=0.1` inflates the low-power count
+~3×), so read low-power absolute counts as **approximate** and best near the
+default polygenicity. Mitigations for the residual over-count: `noise_inflation=True`
+(removes the mismatch part), `mixer_calibrated` (univariate anchoring, below), LD
+QC. A dedicated causal-mixture likelihood (MiXeR) calibrates the absolute counts
+from scratch (fitting the full z-score distribution rather than counting posterior
+inclusions); here the overlap comes for free from the joint fit.
 
-**Calibrating the counts with univariate runs (`res.mixer_calibrated`).** Because
-the bias is mostly LD-reference mismatch, and the four-state sampler is ~2× *more*
-sensitive to it than a univariate fit, you can put the absolute counts on a
-calibrated scale cheaply: run univariate `ldpred3.ldpred3_auto_infer` on each trait
-and pass the two results to `res.mixer_calibrated(infer1, infer2)`. It keeps the
-joint fit's reliable *ratios* (`frac_shared`, `ρ_β`) but replaces `(π₁, π₂)` with
-the univariate learned polygenicities and rebuilds `n_causal` / `n_shared` on that
-scale — e.g. at `m=5000, N=10⁵`, true 500/500 causal and 250 shared, the joint
-`n_causal` (984, 922) / `n_shared` 539 become (497, 530) / 291. (The univariate
-`p` is itself unbiased only when the LD matches; it too inflates with `N` under a
-mismatched panel, just far less — so this anchors, it does not fully cure.)
+**Calibrating the counts with univariate runs (`res.mixer_calibrated`).** The
+four-state per-trait count over-counts *more* than a univariate fit (LD-spreading
+is amplified across the four states), and the gap grows with power, so you can
+trim the residual by anchoring on two univariate runs: run
+`ldpred3.ldpred3_auto_infer` on each trait and pass the results to
+`res.mixer_calibrated(infer1, infer2)`. It keeps the joint fit's reliable shared
+*fraction* but replaces the per-trait counts `(π₁, π₂)` with the univariate
+polygenicities and rebuilds `n_causal` / `n_shared` on that scale.
 
-The benchmark (realistic non-repeating coalescent LD, `m=5000`, 8 phenotype reps
-on fixed genotypes) sweeps overlap, within-shared correlation `ρ_β`, power, and an
-LD-match control:
+Benchmarked vs known truth (`benchmarks/mixer_overlap.py`, `unical` sweep;
+reference-panel LD, `m=5000`, true 500 causal/trait and 250 shared), as
+`count / true`:
 
-| sweep | true → estimated | verdict |
+| `N·h²/M` | joint per-trait | calibrated per-trait | joint shared | calibrated shared |
+|---:|:---:|:---:|:---:|:---:|
+| 0.5 | 1.06 | 0.85 | 1.34 | 1.05 |
+| 1.0 | 1.18 | 0.93 | 1.46 | 1.18 |
+| 2.0 | 1.22 | 1.01 | 1.48 | 1.20 |
+
+Calibration removes most of the per-trait over-count and roughly halves the
+shared-count over-count at moderate–high power, with `r_g` unchanged. It anchors,
+it does not fully cure: the univariate `p` is itself mildly inflated by
+LD-spreading, and at very low power (`N·h²/M ≲ 0.25`) both fits are init-influenced
+and the anchor can slightly *under*-shoot — so pair it with adequate power and LD
+QC, and lean on the ratios for the overlap itself.
+
+The benchmark (`benchmarks/mixer_overlap.py`; realistic non-repeating coalescent
+LD, `m=5000`, 8 phenotype reps on fixed genotypes) sweeps overlap, within-shared
+correlation `ρ_β`, power, an LD-match control, the `noise_inflation` fix, and the
+univariate-anchored calibration:
+
+| sweep | result | verdict |
 |---|---|---|
-| overlap (`frac_shared` 0→1) | 0.00→0.14, 0.25→0.34, 0.50→0.59, 0.75→0.80, 1.00→0.95; `r_g` tracks 0→0.8 | recovered (slight upward bias at low overlap) |
-| `ρ_β` (0→0.9) | 0.00→0.03, 0.30→0.29, 0.60→0.54, 0.90→0.59; `frac_shared`≈0.5 throughout | recovered (attenuates near 1) |
-| power (`N·h²/m` 1→20) | `frac_shared`≈0.6 and `r_g`≈0.4 stable; rel. polygenicity 1.3→2.5 | overlap/`r_g` stable, absolute counts drift with power |
-| ld-match (`N·h²/m` 2→20) | rel. polygenicity **ref-panel** 1.4→2.6 vs **in-sample LD** ~1.1→1.3; `r_g`≈0.4 in both | the count drift is LD-reference mismatch, not the sampler; `r_g` immune |
+| overlap (`frac_shared` 0→1) | estimated 0.07, 0.34, 0.58, 0.82, 0.98; `r_g` tracks 0→0.8 | recovered (slight upward bias at 0) |
+| `ρ_β` (0→0.9) | estimated 0.07, 0.31, 0.52, 0.70; `frac_shared`≈0.5 throughout | recovered (mild attenuation near 1) |
+| power (`N·h²/M` 0.1→2) | count/true 0.92, 1.16, 1.09, 1.10, 1.20; `frac_shared`/`r_g` stable | counts ≈1× and well-calibrated; ratios power-stable |
+| ld-match (`N·h²/M` 0.1→2) | count/true **ref-panel** 0.97→1.21 vs **in-sample LD** 0.96→1.04; `r_g`≈0.4 both | residual = LD-spreading (in-sample) + a small mismatch add-on; `r_g` immune |
+| noise_inflation (`N·h²/M` 0.1→2) | count/true off 1.03–1.14 → on 0.84–1.04; 95% CI covers truth 5–8/8 reps | trims the mismatch part; can slightly over-deflate at low power |
+| unical (univariate anchor) | per-trait joint 1.06→1.22 → calibrated 0.85→1.01; shared 1.34→1.48 → 1.05→1.20 | anchoring removes most of the residual over-count |
+
+(The old ~2–3× low-power count inflation reported in earlier versions was an
+artifact of the previous `p_init=0.1` default; with the realistic `p_init=0.02`
+default the low-power counts calibrate to ≈1×, as above.)
 
 **Why per-trait states (and not one shared causal indicator).** An earlier
 prototype used a single shared indicator (both traits causal at the same SNPs).

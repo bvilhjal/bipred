@@ -20,33 +20,39 @@ replicates on fixed genotypes:
   * ``power``    -- vary N (hence N*h2/M) at fixed architecture; shows how much
     signal the overlap estimate needs to be meaningful.
   * ``ldmatch``  -- fit the same data on the finite reference panel vs the **exact
-    in-sample (population) LD**; isolates how much of the polygenicity bias is
-    LD-reference mismatch (it collapses under matched LD) vs the sampler, and shows
-    rg is immune to both.
+    in-sample (population) LD**; separates the **LD-reference-mismatch** part (the
+    ref-minus-in-sample gap) from the **LD-spreading** part (which persists even
+    under matched in-sample LD -- ~3x at low power). rg is immune to both.
   * ``calibration`` -- on the (realistic) finite reference panel, compares the
     naive count with the **noise-inflation fix** (``noise_inflation=True``): the
-    learned per-trait lambda deflates the mismatch-inflated polygenicity back
-    toward the truth (rel -> ~1) with h2/rg unchanged, and reports whether the 95%
+    learned per-trait lambda deflates the *mismatch*-inflated polygenicity back
+    toward the truth with h2/rg unchanged, and reports whether the 95%
     ``mixer_posterior`` credible interval covers the true causal count.
+  * ``unical`` -- **univariate-anchored calibration** (``res.mixer_calibrated``):
+    the four-state count over-counts *more* than a univariate fit (LD-spreading is
+    amplified across the four states), so this swaps the joint per-trait counts for
+    two univariate ``ldpred3_auto_infer`` runs while keeping the joint's reliable
+    shared *fraction*. Reports, vs known truth, the joint vs calibrated per-trait
+    and shared counts: the anchor is less inflated but still over-counts at low
+    power, so it *reduces*, not eliminates, the bias (rg unchanged).
 
 The first three sweeps also record the **relative** polygenicity (pi_hat /
-pi_true). The count is *over*-estimated at the **low per-SNP power typical of
-real GWAS** (``N*h2/M < 1``): ~3x at ``p=0.10``, more when sparser, present even
-under *matched* LD. With real LD the dominant cause is **LD-spreading**
-(correlated SNPs recruited around each causal; the posterior is tight at the
-inflated value -- mean ~ median ~ mode), amplified by the four-state model so the
-bivariate over-counts *more* than univariate ``ldpred3_auto_infer``. The
-Dirichlet ``pi_prior`` and the mean-vs-median summary are only minor levers here
-(they dominate in the no-LD limit -- see ldpred3's ``p_prior`` and its
-docs/inference.md); LD-reference mismatch adds a further, ``noise_inflation``-
-removable inflation. Per-causal power ``N*h2/(M*p)`` governs identifiability but
-the bias is genuinely 2-D in ``(N*h2/M, p)``. The **ratios** (rg, frac_shared)
-stay reliable throughout (see the ``power`` / ``calibration`` sweeps,
-``noise_inflation``, and docs/rg.md).
+pi_true). With the realistic ``p_init=0.02`` default the count is **well
+calibrated** across the whole per-SNP power range (``count/true`` ~1.0 up to
+``N*h2/M~0.5``, ~1.1-1.2 by ``N*h2/M=2``): the old ~2-3x low-power over-count was
+an artifact of the previous ``p_init=0.1`` (at low power the single-chain count
+is init-influenced). The residual is a mild over-count that **grows with power**
+(LD-spreading: correlated SNPs recruited around each causal), a little larger on
+a finite reference panel (the ``ref - in-sample`` gap; ``ldmatch`` sweep). It is
+trimmed by ``noise_inflation`` (removes the mismatch part; ``calibration`` sweep)
+and by univariate anchoring via ``mixer_calibrated`` (``unical`` sweep); the
+Dirichlet ``pi_prior`` is a minor lever (it matters in the no-LD limit -- see
+ldpred3's ``p_prior`` / docs/inference.md). The **ratios** (rg, frac_shared) stay
+reliable throughout (rg immune). See docs/rg.md and docs/algorithm.md.
 
     OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python benchmarks/mixer_overlap.py
 
-Env overrides: ``SWEEP`` (overlap,rho,power,ldmatch,calibration or a subset), ``REPS``,
+Env overrides: ``SWEEP`` (overlap,rho,power,ldmatch,calibration,unical or a subset), ``REPS``,
 ``OUT``, plus ``NB`` / ``K`` / ``MUT_RATE`` (via rg_architectures) to change ``m``.
 """
 import os
@@ -59,6 +65,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import rg_architectures as R                                    # noqa: E402
 from bipred import ldpred3_auto_bivariate_blocks                # noqa: E402
+from ldpred3 import ldpred3_auto_infer                          # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 M = R.M
@@ -183,8 +190,10 @@ def sweep_power(rows):
 
 
 def sweep_ldmatch(rows):
-    """Is the polygenicity bias the sampler or LD-reference mismatch? Fit the same
-    data on the finite reference panel vs the exact in-sample (population) LD."""
+    """Separate the LD-reference-mismatch part from the LD-spreading part: fit the
+    same data on the finite reference panel vs the exact in-sample (population) LD.
+    The ref-minus-in-sample gap is the mismatch part; the in-sample count itself
+    (which stays inflated at low power) is the LD-spreading part."""
     print("\n== LD-match control (p=0.10/trait, frac_shared=0.5, rho_beta=0.8) ==",
           flush=True)
     print(f"{'N':>8} {'Nh2/M':>6} | {'ref pi/true':>12} {'ref rg':>7} "
@@ -264,8 +273,63 @@ def sweep_calibration(rows):
               f"{r['rg_off']:>6.2f} {r['rg_on']:>6.2f}", flush=True)
 
 
+def sweep_unical(rows):
+    """Univariate-anchored count calibration (``res.mixer_calibrated``) vs truth.
+
+    The joint four-state per-trait count over-counts *more* than a univariate fit
+    (LD-spreading is amplified across the four states), so ``mixer_calibrated``
+    replaces the joint per-trait polygenicities with two univariate
+    ``ldpred3_auto_infer`` runs while keeping the joint's reliable shared
+    *fraction*, and rebuilds ``n_shared`` on that scale. On the realistic reference
+    panel, vs known truth, this reports the joint vs calibrated per-trait count and
+    the joint vs calibrated shared count. The univariate anchor (= the calibrated
+    per-trait count) is less inflated but still over-counts at low power, so the
+    calibration *reduces*, not eliminates, the bias; ``rg`` is unchanged."""
+    ureps = min(REPS, 6)
+    print("\n== univariate-anchored calibration (ref-panel LD, p=0.10/trait, "
+          f"frac_shared=0.5, rho_beta=0.8, {ureps} reps) ==", flush=True)
+    print(f"{'N':>8} {'Nh2/M':>6} | {'joint n1/t':>10} {'calib n1/t':>10} | "
+          f"{'joint sh/t':>10} {'calib sh/t':>10} | {'rg':>5}", flush=True)
+    true_n1 = NCAUSAL
+    true_nsh = max(int(round(0.5 * NCAUSAL)), 1)
+    for i, n in enumerate([1000, 2500, 5000, 10000, 20000]):
+        jp, cp, jsh, csh, rgv = [], [], [], [], []
+        for rep in range(ureps):
+            ref, _ = R.ref_panel(rep)
+            rng = np.random.default_rng(6000 + 20 * i + rep)
+            b1, b2, truth = _sim_overlap(rng, NCAUSAL, 0.5, 0.8)
+            bh1, bh2 = R.sumstats_pair(b1, b2, n, n, rng)
+            res = ldpred3_auto_bivariate_blocks(ref, bh1, bh2, n, n,
+                                                burn_in=BURN, num_iter=ITER, seed=rep)
+            inf1 = ldpred3_auto_infer(ref, bh1, float(n), n_chains=6,
+                                      burn_in=150, num_iter=150, seed=rep)
+            inf2 = ldpred3_auto_infer(ref, bh2, float(n), n_chains=6,
+                                      burn_in=150, num_iter=150, seed=rep)
+            jm = res.mixer
+            cal = res.mixer_calibrated(inf1, inf2)
+            jp.append(0.5 * (jm["n_causal"][0] + jm["n_causal"][1]) / true_n1)
+            cp.append(0.5 * (cal["n_causal"][0] + cal["n_causal"][1]) / true_n1)
+            jsh.append(jm["n_shared"] / true_nsh)
+            csh.append(cal["n_shared"] / true_nsh)
+            rgv.append(res.rg)
+        m = lambda a: round(float(np.mean(a)), 3)      # noqa: E731
+        s = lambda a: round(float(np.std(a)), 3)       # noqa: E731
+        r = {"sweep": "unical", "N": n, "true_rg": 0.4,
+             "joint_relpoly": m(jp), "joint_relpoly_sd": s(jp),
+             "calib_relpoly": m(cp), "calib_relpoly_sd": s(cp),
+             "joint_relshared": m(jsh), "calib_relshared": m(csh),
+             "rg_hat": m(rgv)}
+        rows.append(r)
+        print(f"{n:>8} {n*H2/M:>6.2f} | "
+              f"{r['joint_relpoly']:>5.2f}±{r['joint_relpoly_sd']:<4} "
+              f"{r['calib_relpoly']:>5.2f}±{r['calib_relpoly_sd']:<4} | "
+              f"{r['joint_relshared']:>10.2f} {r['calib_relshared']:>10.2f} | "
+              f"{r['rg_hat']:>5.2f}", flush=True)
+
+
 SWEEPS = {"overlap": sweep_overlap, "rho": sweep_rho, "power": sweep_power,
-          "ldmatch": sweep_ldmatch, "calibration": sweep_calibration}
+          "ldmatch": sweep_ldmatch, "calibration": sweep_calibration,
+          "unical": sweep_unical}
 
 
 def _write_csv(path, rows):
@@ -287,7 +351,8 @@ def make_figure(rows):
     rh = [r for r in rows if r["sweep"] == "rho"]
     pw = [r for r in rows if r["sweep"] == "power"]
     lm = [r for r in rows if r["sweep"] == "ldmatch"]
-    npan = sum(bool(g) for g in (ov, rh, pw, lm))
+    uc = [r for r in rows if r["sweep"] == "unical"]
+    npan = sum(bool(g) for g in (ov, rh, pw, lm, uc))
     if npan == 0:
         return
     fig, ax = plt.subplots(1, npan, figsize=(3.7 * npan, 3.6))
@@ -350,6 +415,25 @@ def make_figure(rows):
         a.set_ylabel("polygenicity: est / true")
         a.set_title("LD-match control")
         a.legend(fontsize=8)
+    if uc:
+        a = next(panels)
+        x = [r["N"] * H2 / M for r in uc]
+        a.axhline(1.0, ls=":", c="k", lw=1, alpha=.6)
+        a.errorbar(x, [r["joint_relpoly"] for r in uc],
+                   [r["joint_relpoly_sd"] for r in uc], fmt="s-", ms=4, capsize=2,
+                   color="C3", label="joint per-trait")
+        a.errorbar(x, [r["calib_relpoly"] for r in uc],
+                   [r["calib_relpoly_sd"] for r in uc], fmt="o-", ms=4, capsize=2,
+                   color="C0", label="calibrated per-trait")
+        a.plot(x, [r["joint_relshared"] for r in uc], "s--", ms=4, color="C3",
+               alpha=.6, label="joint shared")
+        a.plot(x, [r["calib_relshared"] for r in uc], "o--", ms=4, color="C0",
+               alpha=.6, label="calibrated shared")
+        a.set_xscale("log")
+        a.set_xlabel("N·h²/M")
+        a.set_ylabel("count: est / true")
+        a.set_title("univariate-anchored calibration")
+        a.legend(fontsize=7)
     for a in ax:
         a.grid(alpha=.3)
     fig.suptitle(f"MiXeR-style overlap recovery — bivariate LDpred3 "
@@ -365,8 +449,8 @@ def _warmup():
 
 
 def main():
-    which = os.environ.get("SWEEP",
-                           "overlap,rho,power,ldmatch,calibration").split(",")
+    which = os.environ.get(
+        "SWEEP", "overlap,rho,power,ldmatch,calibration,unical").split(",")
     base = os.environ.get("OUT", "mixer_overlap")
     csv_path = os.path.join(HERE, base + ".csv")
     print(f"MiXeR-style overlap recovery — realistic LD (m={M}, {R.NB} blocks, "
