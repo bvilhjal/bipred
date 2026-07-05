@@ -2,7 +2,8 @@
 
 `bipred` jointly fits **two traits that share one LD reference** and reports their
 genetic correlation and polygenic overlap. This is the model and sampler
-reference; for genetic-correlation usage and guidance see [rg.md](rg.md). The
+reference; for the practical how-to start with the [user guide](guide.md), and
+for genetic-correlation accuracy and guidance see [rg.md](rg.md). The
 bivariate machinery builds on the univariate LDpred3 sampling model (each
 marginal effect is the true effect plus LD-weighted spillover, `β̂ = R β + ε` with
 `ε ~ N(0, R/N)`); the cross-trait extension is everything below.
