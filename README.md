@@ -100,6 +100,9 @@ MiXeR-style overlap readout (`res.mixer` / `res.mixer_calibrated`).
 
 ## Documentation
 
+- [`docs/guide.md`](docs/guide.md) — **the user guide**: inputs, quickstart,
+  reading every output, choosing an `r_g` estimator, prediction, polygenic
+  overlap, sample overlap, the options reference, scaling, and pitfalls. Start here.
 - [`docs/algorithm.md`](docs/algorithm.md) — the model, the four-state Gibbs
   sampler, the two `r_g` estimators, and the polygenic-overlap decomposition.
 - [`docs/rg.md`](docs/rg.md) — genetic-correlation accuracy vs bivariate LDSC,

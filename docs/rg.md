@@ -2,9 +2,9 @@
 
 `ldpred3_auto_bivariate` reports a genetic correlation `r_g` between two traits
 and, from the same four-state fit, a MiXeR-style polygenic-overlap summary. This
-is the usage-and-guidance companion to the model reference in
-[algorithm.md](algorithm.md#bivariate-two-trait-ldpred3): how accurate `r_g` is,
-which estimator to use, how to handle overlapping samples, and how to read the
+is the deep-dive companion to the [user guide](guide.md) and the model reference
+in [algorithm.md](algorithm.md#bivariate-two-trait-ldpred3): how accurate `r_g`
+is, which estimator to use, how to handle overlapping samples, and how to read the
 polygenic-overlap output. bipred owns **all** genetic-correlation estimation:
 besides the joint fit it provides cross-trait LD Score regression
 (`bipred.ldsc_rg`, with `LDSCRgResult` and `estimate_sample_overlap`) as the
