@@ -62,6 +62,11 @@ res = ldpred3_auto_bivariate_blocks(
 that partition `0..m-1`. The current bivariate sampler rejects ldpred3 low-rank
 `LowRankLD` blocks.
 
+By default the LD is stored **int8**-quantised (a quarter of the float32 memory;
+the sampler dequantises on the fly), matching ldpred3's default. int8 blocks from
+`ldpred3.compute_ld_blocks(quantize=True)` are used as-is; pass `ld_int8=False`
+for an exact dense-float32 fit.
+
 ## Model In Brief
 
 Each variant has one of four states:

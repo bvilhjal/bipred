@@ -82,6 +82,38 @@ def test_rg_zero_is_recovered():
     assert abs(res.rg) < 0.25, res.rg
 
 
+def test_int8_ld_matches_float_and_accepts_prequantized():
+    # int8-quantised LD (the default) tracks the exact float32 fit closely, and a
+    # block handed in already int8 is detected and consumed as-is -- bit-identical
+    # to quantising the float block on the fly.
+    k, nb = 200, 12
+    blocks, chols, idxs = _blocks(nb, k, seed=2)
+    m = nb * k
+    rng = np.random.default_rng(3)
+    b1, b2 = _sim(blocks, chols, idxs, m, p=0.05, h2=(0.5, 0.5), rg=0.6, rng=rng)
+    bh1 = _sumstats(blocks, chols, idxs, b1, 60000, k, rng)
+    bh2 = _sumstats(blocks, chols, idxs, b2, 60000, k, rng)
+    kw = dict(burn_in=120, num_iter=150, seed=1)
+
+    flt = ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, 60000, 60000,
+                                        ld_int8=False, **kw)
+    q8 = ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, 60000, 60000, **kw)
+    # int8 (default) stays close to the exact float fit -- quantisation error only
+    assert abs(q8.rg - flt.rg) < 0.05, (q8.rg, flt.rg)
+    assert abs(q8.h2[0] - flt.h2[0]) < 0.05 and abs(q8.h2[1] - flt.h2[1]) < 0.05
+    assert np.max(np.abs(q8.beta1_est - flt.beta1_est)) < 0.02
+
+    # pre-quantised int8 blocks (what ldpred3.compute_ld_blocks(quantize=True)
+    # emits) are detected by dtype and consumed as-is, so the fit is bit-identical
+    # to the default on-the-fly quantisation -- even with ld_int8=False.
+    pre = [(np.rint(np.clip(R, -1.0, 1.0) * 127.0).astype(np.int8), ix)
+           for (R, ix) in blocks]
+    q8_pre = ldpred3_auto_bivariate_blocks(pre, bh1, bh2, 60000, 60000,
+                                           ld_int8=False, **kw)
+    assert q8_pre.rg == q8.rg
+    assert np.array_equal(q8_pre.beta1_est, q8.beta1_est)
+
+
 def test_mixer_overlap_params():
     # The 4-state result exposes MiXeR-style overlap params: pi sums to 1, the
     # mixer summary has the expected keys, and the rg decomposition

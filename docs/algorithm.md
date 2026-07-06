@@ -119,3 +119,12 @@ the traits, but prediction gains still need out-of-sample validation.
 hyperparameters across them. The full genome-wide LD matrix is never
 materialized, but each block must currently be dense. Compact `LowRankLD` blocks
 are rejected by design until the bivariate kernel supports that representation.
+
+By default the LD is stored **int8**-quantised (`round(clip(R, -1, 1) * 127)`,
+scale `1/127`) — a quarter of the float32 memory, matching ldpred3's default
+representation. The sampler dequantises each entry on the fly in the
+bandwidth-bound inner loop (`corr[i, j] * scale`); the unit diagonal quantises
+exactly (`127/127 == 1`), which the residual update `d = beta_hat − R·beta + beta`
+relies on. The quantisation error is negligible (≈`0.5/127 ≈ 0.004` per entry,
+diagonal exact). int8 blocks from `ldpred3.compute_ld_blocks(quantize=True)` are
+consumed as-is; pass `ld_int8=False` for an exact dense-float32 fit.

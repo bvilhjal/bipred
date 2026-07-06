@@ -34,6 +34,12 @@ import numpy as np
 # seam ldpred3 keeps stable for its own infer / annot / finemap modules.
 from ldpred3.ldpred3 import _jit, _as_n_vector, LowRankLD
 
+# int8 LD quantisation scale (127): correlations in [-1, 1] are stored as
+# ``round(R * 127)`` int8 -- a quarter of the float32 memory -- and the sampler
+# reads ``R[i, j] * (1 / 127)``. Imported from ldpred3 so bipred's encoding stays
+# locked to the blocks ``ldpred3.compute_ld_blocks(quantize=True)`` produces.
+from ldpred3._kernels import _Q8
+
 __all__ = ["BivariateResult", "ldpred3_auto_bivariate",
            "ldpred3_auto_bivariate_blocks"]
 
@@ -42,12 +48,33 @@ DAMP = 0.2          # damping factor for the variance-component updates
 
 def _apply_R_rows(fblocks, V):
     """Right-multiply each row of ``V`` (n, m) by the block-diagonal LD ``R``
-    (rows are ``R @ v`` since ``R`` is symmetric), block by block."""
+    (rows are ``R @ v`` since ``R`` is symmetric), block by block. ``R`` may be
+    int8-quantised, so each block carries a dequantisation ``scale`` (``1/127``
+    for int8, ``1.0`` for float32) applied after the (off-hot-path) matmul."""
     out = np.zeros_like(V)
-    for R, start, k in fblocks:
+    for R, start, k, scale in fblocks:
         sl = slice(start, start + k)
-        out[:, sl] = V[:, sl] @ R.astype(V.dtype)
+        out[:, sl] = (V[:, sl] @ R.astype(V.dtype)) * scale
     return out
+
+
+def _prepare_block(R, ld_int8):
+    """Return ``(block, scale)`` for one dense LD block.
+
+    Blocks that are already int8 (built by
+    ``ldpred3.compute_ld_blocks(quantize=True)``) are kept int8 as-is. Otherwise,
+    when ``ld_int8`` (the default) a float block is quantised to int8
+    (``round(clip(R, -1, 1) * 127)`` -- a quarter of the float32 memory, matching
+    ldpred3's representation); with ``ld_int8=False`` it is kept dense float32.
+    The paired ``scale`` (``1/127`` for int8, ``1.0`` for float32) is what the
+    sampler multiplies each LD entry by to dequantise on the fly."""
+    arr = np.asarray(R)
+    if arr.dtype == np.int8:
+        return np.ascontiguousarray(arr), 1.0 / _Q8
+    if ld_int8:
+        q = np.rint(np.clip(np.ascontiguousarray(arr, np.float32), -1.0, 1.0) * _Q8)
+        return q.astype(np.int8), 1.0 / _Q8
+    return np.ascontiguousarray(arr, dtype=np.float32), 1.0
 
 
 def _decorrelated_cov(fblocks, samp1, samp2):
@@ -138,8 +165,15 @@ _bivar_const = _jit(_bivar_const)
 def _bivar_one_sweep(corr, bh1, bh2, n1, n2, curr1, curr2, rb1, rb2,
                      rbsum1, rbsum2, unif, z1, z2,
                      lpi00, lpi10, lpi01, lpi11, s1, s2, s12, cross_corr,
-                     n_const, resync):
+                     scale, n_const, resync):
     """One Gibbs sweep of the 4-state model over a block; mutates in place.
+
+    ``corr`` may be dense ``float32`` (``scale == 1.0``) or **int8**-quantised
+    (``scale == 1/127``): each LD entry is read as ``corr[i, j] * scale``, so the
+    int8 form keeps the block at a quarter of the memory and is dequantised on the
+    fly in the (bandwidth-bound) inner loop -- the same trick as ldpred3's dense
+    kernels. The unit diagonal quantises exactly (``127/127 == 1``), which the
+    residual update ``d = bh - R@beta + beta`` relies on.
 
     States: 0 = null, 1 = trait-1 only, 2 = trait-2 only, 3 = both. Returns
     ``(c10, c01, c11, sum1sq, sum2sq, sum12, gv11, gv12, gv22)``: per-state counts
@@ -165,8 +199,9 @@ def _bivar_one_sweep(corr, bh1, bh2, n1, n2, curr1, curr2, rb1, rb2,
             if b1 != 0.0 or b2 != 0.0:
                 cj = corr[j]
                 for i in range(k):
-                    rb1[i] += cj[i] * b1
-                    rb2[i] += cj[i] * b2
+                    cji = cj[i] * scale
+                    rb1[i] += cji * b1
+                    rb2[i] += cji * b2
 
     if n_const:                                  # hoist the per-sweep constants
         (E11, E22, E12, det0, ldet0, a11, det1, ldet1, a22, det2, ldet2,
@@ -258,7 +293,7 @@ def _bivar_one_sweep(corr, bh1, bh2, n1, n2, curr1, curr2, rb1, rb2,
         if dlt1 != 0.0 or dlt2 != 0.0:
             cj = corr[j]
             for i in range(k):
-                cij = cj[i]
+                cij = cj[i] * scale
                 rb1[i] += cij * dlt1
                 rb2[i] += cij * dlt2
             curr1[j] = new1
@@ -407,6 +442,7 @@ class BivariateResult:
 
 
 def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, *,
+                                  ld_int8=True,
                                   h2_init=0.1, p_init=0.02, rg_init=0.0,
                                   cross_corr=0.0, burn_in=200, num_iter=200,
                                   h2_bounds=(1e-4, 1.0), h2_cap=None,
@@ -420,14 +456,26 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     block while ``pi`` and ``Sigma`` are pooled globally, so the genome-wide LD is
     never materialised. Compact ``LowRankLD`` blocks are not supported.
 
+    By default the LD is stored **int8**-quantised (a quarter of the float32
+    memory; the sampler dequantises on the fly), matching ldpred3's default
+    representation. int8 blocks from ``ldpred3.compute_ld_blocks(quantize=True)``
+    are consumed as-is; pass ``ld_int8=False`` to keep dense float32.
+
     Parameters
     ----------
     blocks : list of (ndarray, ndarray)
-        Dense per-block LD ``(R, idx)`` partitioning ``0..m-1``.
+        Dense per-block LD ``(R, idx)`` partitioning ``0..m-1``. ``R`` may be
+        float32/float64 or int8-quantised (``round(R * 127)``).
     beta_hat1, beta_hat2 : array_like (m,)
         Standardized marginal effects for the two traits (same variant order).
     n_eff1, n_eff2 : float or array_like
         Per-trait GWAS sample sizes.
+    ld_int8 : bool, default True
+        Store the LD int8-quantised (``round(clip(R, -1, 1) * 127)``) -- a quarter
+        of the float32 memory, dequantised in the sampler's inner loop. The
+        quantisation error is negligible (the diagonal stays exactly 1); set
+        ``False`` for an exact dense-float32 fit. Blocks already int8 stay int8
+        regardless of this flag.
     h2_init, p_init, rg_init : float
         Initial heritability, causal fraction and genetic correlation.
     cross_corr : float, default 0.0
@@ -489,11 +537,11 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
         idx = np.asarray(idx)
         if not np.array_equal(idx, np.arange(idx[0], idx[0] + idx.shape[0])):
             raise ValueError("each block must use contiguous indices")
-        fblocks.append((np.ascontiguousarray(R, dtype=np.float32),
-                        int(idx[0]), int(idx.shape[0])))
-    starts = [s for _, s, _ in fblocks]
-    ends = [s + k for _, s, k in fblocks]
-    if (sum(k for _, _, k in fblocks) != m or starts[0] != 0
+        Rq, scale = _prepare_block(R, ld_int8)
+        fblocks.append((Rq, int(idx[0]), int(idx.shape[0]), scale))
+    starts = [s for _, s, _, _ in fblocks]
+    ends = [s + k for _, s, k, _ in fblocks]
+    if (sum(k for _, _, k, _ in fblocks) != m or starts[0] != 0
             or starts[1:] != ends[:-1] or ends[-1] != m):
         raise ValueError("blocks must partition 0..m-1 exactly once")
 
@@ -552,14 +600,14 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
         # lambda preserves the constant-N fast path (n_const unchanged).
         n1e = n1 / lam1 if noise_inflation else n1
         n2e = n2 / lam2 if noise_inflation else n2
-        for R, start, k in fblocks:
+        for R, start, k, scale in fblocks:
             sl = slice(start, start + k)
             a10, a01, a11, s1sq, s2sq, s12s, g11, g12, g22 = _bivar_one_sweep_jit(
                 R, bh1[sl], bh2[sl], n1e[sl], n2e[sl], curr1[sl], curr2[sl],
                 rb1[sl], rb2[sl], rbs1[sl], rbs2[sl], unif[sl], z1[sl], z2[sl],
                 float(lpi[0]), float(lpi[1]), float(lpi[2]), float(lpi[3]),
                 float(s1), float(s2), float(s12), float(cross_corr),
-                n_const, resync)
+                float(scale), n_const, resync)
             c10 += a10; c01 += a01; c11 += a11
             S1 += s1sq; S2 += s2sq; S12 += s12s
             gv11 += g11; gv12 += g12; gv22 += g22
@@ -644,9 +692,12 @@ def ldpred3_auto_bivariate(corr, beta_hat1, beta_hat2, n_eff1, n_eff2, **kwargs)
 
     Convenience wrapper over :func:`ldpred3_auto_bivariate_blocks` for one block
     (or a block-diagonal genome packed into one matrix). See that function and
-    :class:`BivariateResult` for the parameters and output.
+    :class:`BivariateResult` for the parameters and output. By default the matrix
+    is stored int8-quantised; pass ``ld_int8=False`` for an exact float32 fit.
     """
-    corr = np.ascontiguousarray(corr, dtype=np.float32)
+    corr = np.asarray(corr)
+    if corr.dtype != np.int8:                    # keep pre-quantised int8 as-is
+        corr = np.ascontiguousarray(corr, dtype=np.float32)
     m = corr.shape[0]
     return ldpred3_auto_bivariate_blocks([(corr, np.arange(m))], beta_hat1,
                                          beta_hat2, n_eff1, n_eff2, **kwargs)

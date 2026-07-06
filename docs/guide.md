@@ -35,6 +35,12 @@ bipred does not build LD or harmonize summary statistics. Use ldpred3 for that
 preparation. The bivariate sampler currently requires dense LD blocks; ldpred3
 `LowRankLD` blocks are rejected.
 
+By default the LD is stored **int8**-quantised (a quarter of the float32 memory;
+the sampler dequantises on the fly), matching ldpred3's default representation.
+int8 blocks from `ldpred3.compute_ld_blocks(quantize=True)` are consumed as-is;
+pass `ld_int8=False` for an exact dense-float32 fit. The quantisation error is
+negligible and the diagonal stays exactly 1.
+
 ## Quickstart
 
 Single dense LD matrix:
@@ -177,6 +183,7 @@ analyses, but it can bias `r_g` upward when samples overlap strongly.
 
 | option | default | use |
 |---|---:|---|
+| `ld_int8` | `True` | store LD int8-quantised (¼ the memory); `False` = exact float32 |
 | `burn_in`, `num_iter` | `200`, `200` | Gibbs burn-in and sampling sweeps |
 | `h2_init`, `p_init`, `rg_init` | `0.1`, `0.02`, `0.0` | starting values |
 | `cross_corr` | `0.0` | sample-overlap noise correlation |
@@ -194,5 +201,6 @@ analyses, but it can bias `r_g` upward when samples overlap strongly.
 - Harmonize variant order and allele orientation before fitting.
 - Keep effects on ldpred3's standardized scale.
 - Use dense LD blocks; low-rank blocks are not supported by the bivariate sampler.
+  LD is int8-quantised by default (`ld_int8=False` for exact float32).
 - Do not over-interpret absolute overlap counts at low power.
 - Increase `burn_in` and `num_iter` if `h2` or `r_g` is unstable across seeds.
