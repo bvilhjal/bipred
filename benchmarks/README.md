@@ -33,6 +33,7 @@ directory rather than simulating.
 | `sample_overlap.py` | Validates the sample-overlap corrections (free LDSC intercept, bivariate `cross_corr`) on the realistic non-repeating rg LD; also per-fit timing | ✓ |
 | `bivariate_demo.py` | Bivariate prediction gain for a weak trait across two-trait architectures (needs `ld_library.npz` in the cwd) | — |
 | `rg_env_overlap.py` | Genetic rg recovered under **environmental** correlation on shared samples (real individual-level genotypes) (→ `rg_env_overlap.csv`) | ✓ |
+| `hapnest/run_bivariate.py` | rg / h² / MiXeR-overlap recovery **and** out-of-sample PRS gain (bivariate vs univariate) on **HAPNEST** genotypes+phenotypes — synthetic genomes resampled from a real 1000G+HGDP reference, so real LD/MAF/structure with known truth (→ `hapnest/run_bivariate.csv`). See [`hapnest/README.md`](hapnest/README.md). | — (needs HAPNEST) |
 
 `rg_env_overlap.py` reuses the univariate `infer_vs_ldsc_sbayes.py` benchmark
 (which stays a univariate benchmark and imports only from `ldpred3`) for its

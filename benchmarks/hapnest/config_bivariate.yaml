@@ -1,0 +1,50 @@
+# HAPNEST config for a two-trait (bivariate) benchmark dataset.
+#
+# TEMPLATE -- reconcile section names against the example config that
+#   `singularity exec ... intervene-synthetic-data_latest.sif init`
+# drops into your data/ directory. HAPNEST's field *names* below are taken from
+# its docs (TraitCorr, ProportionGeno, Pleiotropy, nTrait, ...); the exact YAML
+# nesting can differ between HAPNEST versions, so diff this against the generated
+# example before running `generate_geno` / `generate_pheno`.
+#
+# The three quantities bipred is scored against are set HERE and passed to
+# run_bivariate.py verbatim:
+#     genetic correlation rg -> TraitCorr           (--rg-true 0.5)
+#     per-trait h2           -> ProportionGeno       (--h2-true 0.5 0.5)
+#     causal overlap         -> Pleiotropy / causal  (--overlap-true 1.0)
+
+global_parameters:
+  chromosome: 22          # keep it to a chromosome or two for a tractable benchmark
+  superpopulation: EUR    # single ancestry keeps the LD reference simple
+  random_seed: 42
+  memory: 8000
+
+filepaths:
+  output_dir: data/output
+  output_prefix: synthetic
+
+genotype_data:
+  samples:
+    # HAPNEST resamples the reference haplotypes into this many synthetic samples.
+    # run_bivariate.py splits them into GWAS / LD-reference / held-out test.
+    default: 25000
+
+phenotype_data:
+  nPopulation: 1
+  nTrait: 2
+
+  # Observed causal-SNP heritability per trait (--h2-true 0.5 0.5).
+  ProportionGeno: 0.5,0.5
+
+  # Flattened nTrait x nTrait genetic-correlation matrix (symmetric, PSD).
+  # [[1, 0.5], [0.5, 1]] -> rg = 0.5 (--rg-true 0.5). Sweep this to build a grid.
+  TraitCorr: 1,0.5,0.5,1
+
+  # Polygenicity (causal fraction) per trait; overridden by a causal_list.
+  Polygenicity: 0.01,0.01
+
+  # Pleiotropy of each trait relative to trait 1. Full pleiotropy (shared causal
+  # set) -> frac_shared = 1.0 (--overlap-true 1.0). Reduce for partial overlap,
+  # or set UseCausalList + a causal_list file to control the shared set exactly.
+  Pleiotropy: 1,1
+  UseCausalList: false
