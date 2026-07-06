@@ -11,16 +11,15 @@ four bivariate-Gaussian likelihoods of the residual estimate, samples the state,
 then draws the effects; ``pi`` and ``(s1, s2, s12)`` are re-estimated each sweep.
 
 This **per-trait** indicator (rather than a single shared one) is what makes the
-joint model safe: whether the two traits' causal variants co-occur is *learned*
-(``pi11``), not assumed. Two traits that share causal variants and are
-genetically correlated let the better-powered one sharpen the other (via the
-``both`` component); two traits with disjoint causal variants drive ``pi11 -> 0``
-so the joint fit reduces to the independent ones and does no harm.
+joint model adaptive: whether the two traits' causal variants co-occur is
+*learned* (``pi11``), not assumed. Shared, genetically correlated traits can
+borrow strength through the ``both`` component; disjoint traits can drive
+``pi11 -> 0`` so the fits largely decouple.
 
 Both GWAS are assumed to use the **same** LD reference (same ancestry). Sample
 overlap can be passed via ``cross_corr`` (the cross-trait correlation of the
 sampling noise, i.e. the bivariate-LDSC intercept); the default 0 assumes
-independent GWAS samples. NumPy only (optional Numba).
+independent GWAS samples.
 """
 
 from __future__ import annotations
@@ -305,45 +304,12 @@ class BivariateResult:
     def mixer(self):
         """MiXeR-style polygenic-overlap parameters (Frei et al. 2019).
 
-        The four-state mixture *is* a bivariate causal mixture model, so it yields
-        the same quantities MiXeR reports. Returns a dict with, over the ``m``
-        fitted variants:
-
-        * ``polygenicity`` -- causal fraction per trait ``(pi1, pi2)`` where
-          ``pi1 = pi10 + pi11``.
-        * ``n_causal`` -- causal counts ``(pi1*m, pi2*m)``.
-        * ``n_shared`` -- shared causal count ``pi11*m``; ``frac_shared`` is
-          ``pi11 / min(pi1, pi2)`` (fraction of the less-polygenic trait's causal
-          variants shared with the other).
-        * ``rho_beta`` -- correlation of effect sizes **within the shared
-          component**, ``s12 / sqrt(s1 s2)``.
-        * ``rg_from_overlap`` -- the MiXeR decomposition
-          ``rho_beta * pi11 / sqrt(pi1 pi2)`` (genetic correlation = shared
-          fraction x within-shared effect correlation); a consistency check
-          against ``rg``.
-
-        Caveat: the absolute counts carry a **mild over-count that grows with
-        per-SNP power** — the four-state posterior counts a causal variant's LD
-        neighbours as partly causal too (**LD-spreading**). Benchmarked vs known
-        truth (``benchmarks/mixer_overlap.py``, docs/rg.md), the per-trait
-        ``count/true`` is ~1.0 up to ``N*h2/M~0.5`` and ~1.1-1.2 by ``N*h2/M=2``
-        (a finite reference panel adds a little more; the shared count a little
-        more still). This good low-power calibration relies on the realistic
-        ``p_init=0.02`` default: at low power the single-chain count is
-        init-influenced, so treat very-low-power counts as approximate. ``r_g``
-        and the overlap fraction are *ratios* and cancel the residual, so read
-        ``polygenicity`` / ``n_*`` as *approximate*. Mitigations for the residual:
-        ``noise_inflation=True`` (removes the reference-mismatch part), anchoring
-        with two univariate runs via :meth:`mixer_calibrated`, LD shrinkage / QC.
-        A dedicated causal-mixture likelihood (MiXeR) calibrates from scratch.
-        Needs a well-powered pair (large ``N*h2/m``) to be meaningful.
-
-        For the **posterior distribution** of these quantities (a credible interval,
-        not just this point estimate), see :meth:`mixer_posterior`, which maps the
-        retained Gibbs draws of ``(pi, Sigma)`` through the same decomposition. That
-        interval is calibrated and covers the truth when the LD reference matches
-        the GWAS sample; the absolute-count bias discussed above is LD-reference
-        mismatch and is *not* reflected in the interval.
+        Returns ``polygenicity``, ``n_causal``, ``n_shared``, ``frac_shared``,
+        ``rho_beta`` and ``rg_from_overlap`` over the fitted variants. The ratios
+        are usually more stable than absolute counts; counts can be inflated by
+        LD-spreading and reference-panel mismatch. Use :meth:`mixer_posterior` for
+        posterior intervals and :meth:`mixer_calibrated` to anchor counts on two
+        univariate ldpred3 fits.
         """
         if self.pi is None:
             raise ValueError("pi not available on this result")
@@ -368,31 +334,12 @@ class BivariateResult:
         }
 
     def mixer_posterior(self, level=0.95):
-        """Posterior **distribution** of the overlap counts, from the retained
-        Gibbs samples of ``(pi, Sigma)`` -- i.e. the posterior overlap counts
-        given the prior and the data, with a credible interval rather than only
-        the :attr:`mixer` point estimate.
+        """Posterior summaries for the MiXeR-style overlap quantities.
 
-        Each retained sweep is a draw ``(pi, Sigma)`` from the joint posterior, so
-        mapping every draw through the same MiXeR decomposition as :attr:`mixer`
-        (``n_causal``, ``n_shared``, ``frac_shared``, ``rho_beta``,
-        ``rg_from_overlap``) and summarising gives the posterior mean and a central
-        ``level`` credible interval for each quantity.
-
-        Returns a dict mirroring :attr:`mixer`, but each entry is
-        ``{"mean": float, "ci": (lo, hi), "sd": float}`` (``n_causal`` /
-        ``polygenicity`` are 2-tuples of such dicts, one per trait).
-
-        **What the interval means (and does not).** It is the posterior spread
-        *conditional on the supplied LD reference* -- Monte-Carlo / sampling
-        uncertainty. It is **not** a bound on LD-reference-mismatch bias: when the
-        fit LD matches the GWAS sample the absolute counts are well calibrated and
-        this interval covers the truth, but under a mismatched reference panel the
-        absolute counts inflate (growing with N) and the interval is tight around
-        the *wrong* value. The ratios (``frac_shared``, ``rho_beta``,
-        ``rg_from_overlap``) stay reliable either way. See :attr:`mixer` for the
-        bias discussion and use matched / larger / QC'd LD for calibrated absolute
-        counts.
+        Maps retained ``(pi, Sigma)`` Gibbs draws through the same decomposition
+        as :attr:`mixer`. Returns means, standard deviations and central credible
+        intervals. These intervals are conditional on the supplied LD reference;
+        they do not cover LD-reference-mismatch bias.
         """
         if self.pi_samples is None or self.sigma_samples is None:
             raise ValueError("posterior samples not available on this result")
@@ -436,26 +383,11 @@ class BivariateResult:
         }
 
     def mixer_calibrated(self, infer1, infer2):
-        """:attr:`mixer` with the **absolute counts calibrated** by two univariate
-        ``ldpred3_auto_infer`` runs.
+        """:attr:`mixer` with counts anchored on two univariate fits.
 
-        The joint four-state per-trait count over-counts *more* than a univariate
-        fit (a SNP correlated with either trait can enter states 10/01/11, so
-        LD-spreading is amplified), and the gap grows with power. This keeps the
-        joint fit's reliable *ratios* — the shared fraction ``frac_shared`` and the
-        within-shared effect correlation ``rho_beta`` — but replaces ``(pi1, pi2)``
-        with the univariate polygenicities and rebuilds ``n_causal`` /
-        ``n_shared`` / ``rg_from_overlap`` on that scale. Benchmarked vs truth
-        (ref-panel LD, ``benchmarks/mixer_overlap.py`` ``unical`` sweep), at
-        ``N*h2/M = 0.5/1/2`` it moves the per-trait ``count/true`` 1.06/1.18/1.22 ->
-        0.85/0.93/1.01 and the shared count 1.34/1.46/1.48 -> 1.05/1.18/1.20, with
-        ``rg`` unchanged. It anchors, it does not fully cure (the univariate ``p``
-        is itself mildly LD-spread-inflated; at very low power the anchor can
-        slightly under-shoot) — combine with ``noise_inflation`` / adequate power /
-        LD QC.
-
-        ``infer1`` / ``infer2`` are the trait-1 / trait-2 :class:`InferResult`
-        objects (their ``p_est`` is used); floats are also accepted.
+        ``infer1`` and ``infer2`` may be ldpred3 ``InferResult`` objects or
+        floats. Their ``p_est`` values replace the joint per-trait polygenicities;
+        the joint shared fraction and ``rho_beta`` are kept.
         """
         if self.pi is None:
             raise ValueError("pi not available on this result")
@@ -481,25 +413,23 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
                                   iw_df=10.0, rg_decorrelated=False,
                                   noise_inflation=False, ni_damp=0.1,
                                   pi_prior=1.0, sample_every=5, seed=None):
-    """Genome-wide (streaming) bivariate LDpred3-auto.
+    """Genome-wide bivariate LDpred3-auto over dense LD blocks.
 
-    ``blocks`` is the ``[(R, idx), ...]`` list (contiguous ``idx`` partitioning
-    ``0..m-1``) used elsewhere; the two traits' summary statistics share it. The
-    effect sweeps run one block at a time while ``pi`` and ``Sigma`` are pooled
-    globally, so the genome-wide LD is never materialised.
+    ``blocks`` is ``[(R, idx), ...]`` with contiguous ``idx`` arrays partitioning
+    ``0..m-1``. The two traits share the same LD. Effects are updated block by
+    block while ``pi`` and ``Sigma`` are pooled globally, so the genome-wide LD is
+    never materialised. Compact ``LowRankLD`` blocks are not supported.
 
     Parameters
     ----------
     blocks : list of (ndarray, ndarray)
-        Per-block LD ``(R, idx)`` partitioning ``0..m-1``.
+        Dense per-block LD ``(R, idx)`` partitioning ``0..m-1``.
     beta_hat1, beta_hat2 : array_like (m,)
         Standardized marginal effects for the two traits (same variant order).
     n_eff1, n_eff2 : float or array_like
         Per-trait GWAS sample sizes.
     h2_init, p_init, rg_init : float
         Initial heritability, causal fraction and genetic correlation.
-        ``p_init`` defaults to ``0.02`` (~2 % causal, a realistic starting point);
-        the sampler updates the mixture each sweep.
     cross_corr : float, default 0.0
         Cross-trait correlation of the sampling noise (sample overlap); must lie
         in ``(-1, 1)``. 0 assumes independent GWAS samples.
@@ -508,65 +438,24 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     h2_bounds : (float, float)
         Clamp range for the per-trait heritabilities.
     h2_cap : (float, float), optional
-        Optional hard ceilings on the implied per-trait h2 (expert override). By
-        default (``None``) the (co)variance components are regularised by the
-        inverse-Wishart-style prior instead (see ``iw_df``); pass known
-        heritabilities only if you want to additionally clamp them.
+        Optional hard ceilings on implied per-trait heritability.
     iw_df : float, default 10
-        Strength (pseudo-count / prior degrees of freedom) of the inverse-Wishart
-        shrinkage on the effect-covariance ``Sigma``: the (co)variance components
-        are shrunk toward a weak diagonal prior (zero prior genetic covariance),
-        which keeps ``Sigma`` positive-definite and the covariance off the PD
-        boundary. Larger = more shrinkage toward independent traits.
+        Shrinkage strength on the effect covariance ``Sigma``. Larger values pull
+        more strongly toward independent traits.
     rg_decorrelated : bool, default False
-        How ``rg`` is estimated. ``False`` (default) uses the same-sweep
-        quadratic ratio ``E[b1'Rb2]/sqrt(E[b1'Rb1]E[b2'Rb2])`` -- accurate and
-        tight when the two traits are **similarly powered**. ``True`` estimates it
-        from effect vectors sampled at *different* sweeps (independent noise),
-        which recovers an **under-powered** trait's covariance that the same-sweep
-        ratio attenuates -- prefer it for **asymmetric-power** pairs (e.g.
-        boosting a weak trait with a strong correlated one), at the cost of a
-        small over-estimate when the traits are balanced.
+        Estimate ``rg`` from effects sampled at different sweeps. Prefer for
+        asymmetric-power pairs.
     noise_inflation : bool, default False
-        Learn a per-trait **noise-inflation** factor ``lambda_t >= 1`` (an
-        LDSC-intercept analog) from the residual misfit and fit with an
-        *effective* sample size ``N_t / lambda_t``. The residual ``b_hat - R@beta``
-        is pure sampling noise (mean-chi2 ~ 1) when the LD reference matches the
-        GWAS sample, but is inflated under **LD-reference mismatch**; the learned
-        ``lambda`` makes the sampler correspondingly less confident so it stops
-        reading that misfit as extra polygenicity. This trims the **reference-
-        mismatch part** of the residual over-count in the absolute
-        polygenic-overlap counts (:attr:`BivariateResult.mixer`). With the
-        realistic ``p_init=0.02`` default those counts are already ~1x at the low
-        per-SNP power of real GWAS and only mildly over-counted at higher power
-        (LD-spreading); on a finite **reference panel** this fix moves the
-        per-trait ``count/true`` from 1.03-1.14 to 0.84-1.04 across ``N*h2/M =
-        0.1->2`` and lifts the ``mixer_posterior`` credible-interval coverage to
-        6-8/8 reps (validated in ``benchmarks/mixer_overlap.py``), with ``h2`` and
-        ``rg`` unchanged. A scalar ``lambda`` cannot absorb the matched-LD
-        spreading, and it can slightly **over-deflate at the lowest power** (little
-        left to remove there). Recommended when fitting on a finite reference panel
-        (the usual case); left off by default so the estimator is unchanged unless
-        requested. The Dirichlet ``pi_prior`` is only a minor lever here (it
-        matters in the no-LD limit; see docs/rg.md). Whatever the absolute counts,
-        the **ratios** (``rg``, ``frac_shared``) are unbiased throughout. The
-        learned factors are returned in ``BivariateResult.noise_scale``.
+        Learn per-trait residual noise factors ``lambda_t >= 1`` and fit with
+        effective sample size ``N_t / lambda_t``. Useful for finite reference-panel
+        LD when absolute overlap counts are inflated by mismatch.
     ni_damp : float, default 0.1
         Damping for the per-sweep ``lambda`` update (only used with
         ``noise_inflation``); smaller is more stable, larger adapts faster.
     sample_every : int, default 5
         Thinning for the retained effect samples used by the decorrelated ``rg``.
     pi_prior : float, default 1.0
-        Symmetric Dirichlet concentration for the four-state mixture prior: each
-        sweep ``pi`` is drawn from ``Dirichlet(pi_prior + counts)``. ``1.0`` is
-        the historical uniform prior; ``0.5`` is the Jeffreys prior. The univariate
-        analog (``ldpred3_auto_infer(p_prior=...)``) is the primary knob -- a
-        smaller concentration reduces the low-power over-count of the *absolute*
-        polygenicities, but note the dominant inflation of the bivariate counts is
-        **LD-spreading** (correlated SNPs recruited around each causal, present
-        even under matched LD and amplified by the four-state model), which no
-        prior removes. Prefer ``noise_inflation``/LD QC and the ratios for absolute
-        counts; see ``docs/rg.md``.
+        Symmetric Dirichlet concentration for the four-state mixture prior.
     seed : int or None
 
     Returns

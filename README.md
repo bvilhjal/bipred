@@ -1,115 +1,120 @@
 # bipred
 
-**Bivariate (two-trait) LDpred** — a joint LDpred model that fits two GWAS traits
-sharing one LD reference at once. From the two sets of summary statistics it
-estimates, in a single Gibbs sampler:
+**bipred** is bivariate LDpred for two GWAS traits that share one LD reference.
+It jointly estimates:
 
-- each trait's **SNP heritability**,
-- the **genetic correlation** `r_g` between them,
-- the per-trait and **shared polygenicity** (a MiXeR-style polygenic-overlap
-  summary), and
-- posterior-mean effects for **prediction** — a well-powered trait sharpens a
-  correlated under-powered one.
+- SNP heritability for each trait,
+- genetic correlation `r_g`,
+- posterior-mean effects for prediction, and
+- a MiXeR-style polygenic-overlap summary.
 
-bipred is the bivariate half of [LDpred3](https://github.com/bvilhjal/ldpred3),
-split into its own package. It builds on ldpred3 for the shared LD handling and
-the Numba-accelerated sampler internals, so ldpred3 is a runtime dependency.
-
-## The model
-
-Each variant falls in one of **four** latent states with probabilities
-`(π₀₀, π₁₀, π₀₁, π₁₁)`: causal for neither trait, trait 1 only, trait 2 only, or
-**both**. A trait-1-causal effect is `N(0, s₁)`, a trait-2-causal one `N(0, s₂)`,
-and a *both*-causal pair is drawn from `N(0, Σ)` with `Σ = [[s₁, s₁₂], [s₁₂, s₂]]`
-— the off-diagonal `s₁₂` is the genetic covariance and is the only place the two
-traits couple. Each Gibbs sweep evaluates the four bivariate-Gaussian
-likelihoods of the residual marginal estimate, samples a state, then draws the
-effects; `π` and `(s₁, s₂, s₁₂)` are re-estimated every sweep.
-
-This **per-trait** indicator (rather than a single shared one) is what makes the
-joint model safe: whether the two traits' causal variants co-occur is *learned*
-(`π₁₁`), not assumed. Two genetically correlated traits that share causal
-variants let the better-powered one sharpen the other; two traits with disjoint
-causal variants drive `π₁₁ → 0`, so the joint fit reduces to the independent
-ones and does no harm.
-
-Both GWAS are assumed to use the **same** LD reference (same ancestry). Sample
-overlap is passed via `cross_corr` (the cross-trait correlation of the sampling
-noise, i.e. the bivariate-LDSC intercept); the default `0` assumes independent
-GWAS samples.
+The package contains the bivariate pieces split out from
+[ldpred3](https://github.com/bvilhjal/ldpred3). It still depends on ldpred3 for
+shared LD utilities and sampler internals.
 
 ## Installation
 
-bipred depends on `ldpred3`. Until both are on PyPI, install ldpred3 from git
-first (add the `[fast]` extra for the Numba-accelerated sampler — strongly
-recommended):
+Until both packages are on PyPI, install ldpred3 first:
 
 ```bash
 pip install "ldpred3[fast] @ git+https://github.com/bvilhjal/ldpred3.git"
 pip install "bipred[fast] @ git+https://github.com/bvilhjal/bipred.git"
 ```
 
-Or, for local development of both side by side:
+For local development:
 
 ```bash
 pip install -e ../ldpred3"[fast]"
 pip install -e ."[fast,test]"
 ```
 
-NumPy is the only hard dependency; Numba (`[fast]`) accelerates the Gibbs
-sampler; msprime (`[sim]`) is only needed for some benchmark scripts.
+`[fast]` installs Numba support and is strongly recommended. `msprime` is only
+needed for benchmark scripts.
 
 ## Quickstart
 
 ```python
-import numpy as np
 from bipred import ldpred3_auto_bivariate
 
-# corr: a dense LD matrix (m x m); beta_hat1/2: standardized marginal effects for
-# the two traits in the same variant order; n1/n2: per-trait GWAS sample sizes.
+# corr: dense LD correlation matrix, shape (m, m)
+# beta_hat1/2: standardized marginal effects in the same variant order
+# n1/n2: scalar or per-variant effective sample sizes
 res = ldpred3_auto_bivariate(corr, beta_hat1, beta_hat2, n1, n2)
 
-print(res)                       # h2=(...), rg=..., p=..., n_variants=...
-res.h2                           # (h2_trait1, h2_trait2)
-res.rg                           # genetic correlation
-res.beta1_est, res.beta2_est     # posterior-mean effects for prediction
-res.mixer                        # MiXeR-style polygenic-overlap summary
+res.h2                       # (h2_trait1, h2_trait2)
+res.rg                       # genetic correlation
+res.beta1_est, res.beta2_est # posterior-mean effects for PRS scoring
+res.mixer                    # polygenic-overlap summary
 ```
 
-For a genome-wide run, stream block by block with
-`ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n1, n2, ...)`,
-where `blocks` is the `[(R, idx), ...]` list of per-block LD (contiguous `idx`
-partitioning `0..m-1`) used throughout ldpred3 — the two traits share it. Both
-functions return a `BivariateResult`; see its docstring (and
-[`docs/algorithm.md`](docs/algorithm.md)) for every field and option, including
-`cross_corr` (sample overlap), the inverse-Wishart `Σ` shrinkage, and the two
-`r_g` estimators.
+For genome-wide runs, stream dense LD blocks:
 
-## Genetic correlation and polygenic overlap
+```python
+from bipred import ldpred3_auto_bivariate_blocks
 
-bipred owns **all** genetic-correlation estimation. Besides the joint fit, it
-provides **cross-trait LD Score regression** — `bipred.ldsc_rg` (with
-`LDSCRgResult` and `estimate_sample_overlap`) — as the fast, moment-based
-`r_g` estimator and independent cross-check: under realistic reference-panel LD
-both are roughly unbiased and the joint sampler is ~2× more precise, because it
-uses the full LD likelihood rather than binned LD scores. (bipred builds on
-ldpred3's *univariate* LDSC, `ld_scores` / `ldsc_h2`, for the LD scores and
-marginal heritabilities.) See [`docs/rg.md`](docs/rg.md) for the accuracy/timing
-comparison, choosing the right `r_g` estimator, handling sample overlap, and the
-MiXeR-style overlap readout (`res.mixer` / `res.mixer_calibrated`).
+res = ldpred3_auto_bivariate_blocks(
+    blocks, beta_hat1, beta_hat2, n1, n2,
+    burn_in=200, num_iter=200, seed=0,
+)
+```
+
+`blocks` must be `[(R, idx), ...]` with dense LD matrices and contiguous indices
+that partition `0..m-1`. The current bivariate sampler rejects ldpred3 low-rank
+`LowRankLD` blocks.
+
+## Model In Brief
+
+Each variant has one of four states:
+
+- neither trait causal,
+- trait 1 only,
+- trait 2 only,
+- both traits causal.
+
+The sampler learns the state probabilities `pi` and the two-trait effect
+covariance `Sigma`. The shared state drives cross-trait borrowing: a well-powered
+trait can improve estimates for a correlated weaker trait. If the data do not
+support shared causal variants, the model can drive the shared component down,
+but prediction should still be validated out of sample.
+
+Sample overlap is supplied with `cross_corr`, the cross-trait sampling-noise
+correlation. The default `0` assumes independent GWAS samples.
+
+## Genetic Correlation
+
+`res.rg` is the recommended genetic-correlation estimate from the joint fit.
+For a fast moment-based cross-check, use cross-trait LD Score regression:
+
+```python
+from bipred import ldsc_rg
+from ldpred3 import ld_scores
+
+ell = ld_scores(blocks)
+rgr = ldsc_rg(beta_hat1, beta_hat2, ell, n1, n2)
+rgr.rg, rgr.rg_se, rgr.gcov_intercept
+```
+
+Use `rg_decorrelated=True` for strongly asymmetric-power pairs, where one trait
+is much better powered than the other.
+
+## Polygenic Overlap
+
+`res.mixer` reports per-trait polygenicity, shared causal count, shared fraction,
+within-shared effect correlation, and the overlap decomposition of `r_g`.
+
+Read the overlap ratios (`frac_shared`, `rho_beta`, `rg_from_overlap`) as the
+most stable outputs. Absolute causal counts are approximate because LD can spread
+posterior inclusion mass to nearby correlated variants. For count-sensitive work,
+consider `noise_inflation=True` and/or `res.mixer_calibrated(infer1, infer2)`
+using two univariate ldpred3 runs.
 
 ## Documentation
 
-- [`docs/guide.md`](docs/guide.md) — **the user guide**: inputs, quickstart,
-  reading every output, choosing an `r_g` estimator, prediction, polygenic
-  overlap, sample overlap, the options reference, scaling, and pitfalls. Start here.
-- [`docs/algorithm.md`](docs/algorithm.md) — the model, the four-state Gibbs
-  sampler, the two `r_g` estimators, and the polygenic-overlap decomposition.
-- [`docs/rg.md`](docs/rg.md) — genetic-correlation accuracy vs bivariate LDSC,
-  sample-overlap corrections, and the MiXeR-style overlap parameters.
-- `benchmarks/` — reproducible accuracy/timing benchmarks (many need msprime);
-  see [`benchmarks/README.md`](benchmarks/README.md).
+- [docs/guide.md](docs/guide.md): practical inputs, outputs, options, and pitfalls.
+- [docs/algorithm.md](docs/algorithm.md): model and sampler reference.
+- [docs/rg.md](docs/rg.md): genetic-correlation and overlap guidance.
+- [benchmarks/README.md](benchmarks/README.md): reproducible benchmark scripts.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

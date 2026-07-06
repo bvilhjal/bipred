@@ -1,238 +1,121 @@
-# bipred — algorithm and model
+# Algorithm and model
 
-`bipred` jointly fits **two traits that share one LD reference** and reports their
-genetic correlation and polygenic overlap. This is the model and sampler
-reference; for the practical how-to start with the [user guide](guide.md), and
-for genetic-correlation accuracy and guidance see [rg.md](rg.md). The
-bivariate machinery builds on the univariate LDpred3 sampling model (each
-marginal effect is the true effect plus LD-weighted spillover, `β̂ = R β + ε` with
-`ε ~ N(0, R/N)`); the cross-trait extension is everything below.
+bipred extends LDpred3-auto to two traits sharing one LD reference. It uses the
+same summary-statistic model as univariate LDpred:
 
-## Bivariate (two-trait) LDpred3
-
-`ldpred3_auto_bivariate` jointly fits **two traits that share one LD reference**.
-Each variant takes one of **four** states — causal for neither trait, trait 1
-only, trait 2 only, or **both** — with probabilities `(π₀₀, π₁₀, π₀₁, π₁₁)`. A
-trait-1-causal effect is `N(0, s₁)`, a trait-2-causal one `N(0, s₂)`, and a
-*both*-causal pair is `N(0, Σ)` with `Σ = [[s₁, s₁₂],[s₁₂, s₂]]`; the
-off-diagonal `s₁₂` is the genetic covariance and the only place the traits
-couple. Each Gibbs step evaluates the four bivariate-Gaussian likelihoods of the
-residual estimate, samples a state, and draws the effects; `π` and the effect
-covariance `Σ` are re-estimated each sweep. By default `r_g = β₁ᵀRβ₂ / √(h²₁h²₂)`
-is reported from the same-sweep sampled effects (accurate and tight for
-similarly-powered pairs); for **asymmetric-power** pairs — a strong trait boosting
-a weak one — set `rg_decorrelated=True` to estimate it from effects sampled at
-*different* sweeps (independent noise), which recovers the weak trait's covariance
-that the same-sweep ratio attenuates.
-
-```python
-from bipred import ldpred3_auto_bivariate
-res = ldpred3_auto_bivariate(corr, beta_hat1, beta_hat2, n1, n2)
-res.beta1_est, res.beta2_est      # adjusted effects for the two traits
-res.h2, res.rg                    # (h2_1, h2_2) and the genetic correlation
-res.pi, res.mixer                 # 4-state mixture + MiXeR-style overlap summary
+```text
+beta_hat_t = R beta_t + error_t
 ```
 
-**MiXeR-style polygenic overlap.** The four states — neither / trait-1-only /
-trait-2-only / both causal, with posterior-mean probabilities `res.pi =
-(π₀₀, π₁₀, π₀₁, π₁₁)` — make this a bivariate **causal mixture model** in the
-sense of MiXeR ([Frei et al. 2019, *Nat. Commun.*](https://doi.org/10.1038/s41467-019-10310-0)).
-`res.mixer` reports the same quantities: the
-per-trait polygenicity `(π₁, π₂)` with `π₁ = π₁₀ + π₁₁`, the shared causal
-fraction `π₁₁`, the correlation of effect sizes **within the shared component**
-`ρ_β = s₁₂/√(s₁s₂)`, and the decomposition `r_g = ρ_β · π₁₁/√(π₁π₂)` (genetic
-correlation = polygenic overlap × within-shared effect correlation). Two caveats
-on the **absolute counts** (`n_causal`, `n_shared`): the point-normal mixture
-counts a causal variant's LD neighbours as partly causal too (**LD-spreading**),
-which leaves a mild over-count that **grows with per-SNP power** and is a little
-larger under LD-reference mismatch. Benchmarked against known truth on realistic
-reference-panel LD (`benchmarks/mixer_overlap.py`, `count/true`), the per-trait
-count is ≈0.95–1.1 at the low power `N·h²/M ≲ 0.5` of most GWAS and ≈1.1–1.2 by
-`N·h²/M = 2` (the shared count a little more); the *overlap fraction*
-`π₁₁/min(π₁,π₂)` and the `r_g` decomposition are **ratios** and stay unbiased
-across all of it. This good low-power calibration relies on the realistic
-`p_init=0.02` default — at low power the single-chain count is init-influenced
-(the data barely pin `p`; a 10×-higher `p_init=0.1` inflates the low-power count
-~3×), so read low-power absolute counts as **approximate** and best near the
-default polygenicity. Mitigations for the residual over-count: `noise_inflation=True`
-(removes the mismatch part), `mixer_calibrated` (univariate anchoring, below), LD
-QC. A dedicated causal-mixture likelihood (MiXeR) calibrates the absolute counts
-from scratch (fitting the full z-score distribution rather than counting posterior
-inclusions); here the overlap comes for free from the joint fit.
+where `R` is the LD correlation matrix and `error_t` has variance determined by
+the effective sample size. The bivariate extension models two effect vectors and
+their cross-trait covariance.
 
-**Calibrating the counts with univariate runs (`res.mixer_calibrated`).** The
-four-state per-trait count over-counts *more* than a univariate fit (LD-spreading
-is amplified across the four states), and the gap grows with power, so you can
-trim the residual by anchoring on two univariate runs: run
-`ldpred3.ldpred3_auto_infer` on each trait and pass the results to
-`res.mixer_calibrated(infer1, infer2)`. It keeps the joint fit's reliable shared
-*fraction* but replaces the per-trait counts `(π₁, π₂)` with the univariate
-polygenicities and rebuilds `n_causal` / `n_shared` on that scale.
+## Four-state effect model
 
-Benchmarked vs known truth (`benchmarks/mixer_overlap.py`, `unical` sweep;
-reference-panel LD, `m=5000`, true 500 causal/trait and 250 shared), as
-`count / true`:
+Each variant belongs to one latent state:
 
-| `N·h²/M` | joint per-trait | calibrated per-trait | joint shared | calibrated shared |
-|---:|:---:|:---:|:---:|:---:|
-| 0.5 | 1.06 | 0.85 | 1.34 | 1.05 |
-| 1.0 | 1.18 | 0.93 | 1.46 | 1.18 |
-| 2.0 | 1.22 | 1.01 | 1.48 | 1.20 |
-
-Calibration removes most of the per-trait over-count and roughly halves the
-shared-count over-count at moderate–high power, with `r_g` unchanged. It anchors,
-it does not fully cure: the univariate `p` is itself mildly inflated by
-LD-spreading, and at very low power (`N·h²/M ≲ 0.25`) both fits are init-influenced
-and the anchor can slightly *under*-shoot — so pair it with adequate power and LD
-QC, and lean on the ratios for the overlap itself.
-
-The benchmark (`benchmarks/mixer_overlap.py`; realistic non-repeating coalescent
-LD, `m=5000`, 8 phenotype reps on fixed genotypes) sweeps overlap, within-shared
-correlation `ρ_β`, power, an LD-match control, the `noise_inflation` fix, and the
-univariate-anchored calibration:
-
-| sweep | result | verdict |
+| state | meaning | effect prior |
 |---|---|---|
-| overlap (`frac_shared` 0→1) | estimated 0.07, 0.34, 0.58, 0.82, 0.98; `r_g` tracks 0→0.8 | recovered (slight upward bias at 0) |
-| `ρ_β` (0→0.9) | estimated 0.07, 0.31, 0.52, 0.70; `frac_shared`≈0.5 throughout | recovered (mild attenuation near 1) |
-| power (`N·h²/M` 0.1→2) | count/true 0.92, 1.16, 1.09, 1.10, 1.20; `frac_shared`/`r_g` stable | counts ≈1× and well-calibrated; ratios power-stable |
-| ld-match (`N·h²/M` 0.1→2) | count/true **ref-panel** 0.97→1.21 vs **in-sample LD** 0.96→1.04; `r_g`≈0.4 both | residual = LD-spreading (in-sample) + a small mismatch add-on; `r_g` immune |
-| noise_inflation (`N·h²/M` 0.1→2) | count/true off 1.03–1.14 → on 0.84–1.04; 95% CI covers truth 5–8/8 reps | trims the mismatch part; can slightly over-deflate at low power |
-| unical (univariate anchor) | per-trait joint 1.06→1.22 → calibrated 0.85→1.01; shared 1.34→1.48 → 1.05→1.20 | anchoring removes most of the residual over-count |
+| `00` | neither trait causal | `(0, 0)` |
+| `10` | trait 1 only | `beta1 ~ N(0, s1)`, `beta2 = 0` |
+| `01` | trait 2 only | `beta1 = 0`, `beta2 ~ N(0, s2)` |
+| `11` | both traits causal | `(beta1, beta2) ~ N(0, Sigma)` |
 
-(The old ~2–3× low-power count inflation reported in earlier versions was an
-artifact of the previous `p_init=0.1` default; with the realistic `p_init=0.02`
-default the low-power counts calibrate to ≈1×, as above.)
+`Sigma = [[s1, s12], [s12, s2]]`; `s12` is the effect covariance within the
+shared component. The mixture probabilities are
+`pi = (pi00, pi10, pi01, pi11)`.
 
-**Why per-trait states (and not one shared causal indicator).** An earlier
-prototype used a single shared indicator (both traits causal at the same SNPs).
-That helps when the assumption holds but **hurts** badly when it doesn't — with
-disjoint causal variants it forced sharing and dropped the weak trait's accuracy
-by ~0.1. The four-state model *learns* whether causal variants co-occur (`π₁₁`),
-so disjoint traits drive `π₁₁ → 0` and the joint fit reduces to the independent
-ones. The effect covariance `Σ` is re-estimated each sweep by an
-**inverse-Wishart-style shrinkage** update — the standard multiple-trait
-animal-model approach (MTGSAM, [Van Tassell & Van Vleck 1996, *J. Anim. Sci.*](https://doi.org/10.2527/1996.74112586x);
-[Sorensen & Gianola 2002, *Likelihood, Bayesian and MCMC Methods in Quantitative
-Genetics*, Springer](https://doi.org/10.1007/b98952)) — shrinking `(s₁, s₂, s₁₂)`
-toward a weak diagonal prior (zero prior genetic covariance). This keeps `Σ`
-positive-definite by construction and the covariance off the boundary, and
-regularises a weak trait's variance so it does not inflate by borrowing from a
-strong correlated one — without the earlier ad-hoc univariate-h² ceiling (which
-under-estimated h² on noisy dense LD and biased `r_g` upward) or hard PD cap, and
-with no separate univariate pre-pass (so the fit is also faster).
+This per-trait state structure is the important design choice. Shared causal
+variants are learned through `pi11`; they are not forced. When the data support
+little overlap, the shared state can shrink and the two fits largely decouple.
 
-The benchmark is **realistic**: the GWAS is generated from the true population
-(coalescent) LD but fitted with an LD matrix estimated from a finite reference
-panel (`Nref=2000`). For a genuinely under-powered trait 2 (N=2000, polygenic)
-vs a well-powered trait 1 (N=100000), the gain grows with `r_g` and there is **no
-harm** at low `r_g` or disjoint architectures:
+## Gibbs sampler
 
-| architecture | trait-2 alone | trait-2 joint | gain | r_g est |
-|--------------|--------------:|--------------:|-----:|--------:|
-| shared, r_g=0.0 | 0.641 | 0.636 | −0.005 | +0.02 |
-| shared, r_g=0.3 | 0.647 | 0.641 | −0.006 | +0.39 |
-| shared, r_g=0.6 | 0.655 | 0.694 | +0.039 | +0.67 |
-| shared, r_g=0.9 | 0.658 | 0.830 | **+0.173** | +0.89 |
-| disjoint causal | 0.630 | 0.610 | −0.020 | −0.08 |
+For each sweep and SNP, the sampler:
 
-The benefit is **real and large only where it should be** — a weak trait highly
-correlated with a strong one — and negligible otherwise. It scales with how
-under-powered trait 2 is: at N=1000 the rg=0.9 gain reaches ~+0.28, while for an
-already well-powered trait 2 there is little to borrow and a small overhead, so
-use the joint fit to boost an under-powered trait. (An earlier "fit with the true
-LD" benchmark overstated the gains — they shrink markedly under realistic
-reference-panel LD.) `ldpred3_auto_bivariate_blocks` is the streaming genome-wide
-version; both GWAS must use the same LD/ancestry, and sample overlap is handled
-via `cross_corr` (default 0). Regenerate with `benchmarks/bivariate_demo.py`.
+1. forms the residual marginal estimates after subtracting current LD spillover,
+2. evaluates the four bivariate Gaussian state likelihoods,
+3. samples the state,
+4. draws the effect(s) under that state, and
+5. updates `R @ beta` incrementally.
 
-**Genetic correlation vs bivariate LDSC.** The reported `r_g` has an independent
-cross-check in `bipred.ldsc_rg` (cross-trait LD Score regression). Under the same
-realistic reference-panel LD both are roughly unbiased from the same summary
-statistics; bivariate LDpred3 is ~2× more precise (it uses the full LD
-likelihood):
+After each sweep, the global mixture and covariance parameters are updated:
 
-| true r_g | bivariate LDSC | bivariate LDpred3 |
-|---------:|---------------:|------------------:|
-| 0.0 | 0.02 ± 0.11 | −0.00 ± 0.07 |
-| 0.4 | 0.40 ± 0.10 | 0.39 ± 0.07 |
-| 0.6 | 0.60 ± 0.06 | 0.60 ± 0.04 |
-| 0.8 | 0.80 ± 0.03 | 0.79 ± 0.02 |
+- `pi` is drawn from a Dirichlet posterior with concentration `pi_prior`,
+- `s1`, `s2`, and `s12` are updated from sampled effects,
+- the covariance update is shrunk toward a weak diagonal prior controlled by
+  `iw_df`, and
+- optional `noise_inflation=True` learns per-trait residual noise factors.
 
-(An infinitesimal trait on realistic, non-repeating coalescent LD fit from a
-finite reference panel; LDpred3's precision edge is largest — and LDSC's `r_g`
-most fragile — on sparse and major-locus architectures, detailed in
-[rg.md](rg.md).) Regenerate with `benchmarks/rg_architectures.py`.
+The shrinkage keeps `Sigma` positive definite and avoids the older ad hoc
+heritability pre-pass. `h2_cap` remains available as an expert clamp.
 
-### The genetic-correlation estimators (theory & trade-offs)
+## Genetic Correlation
 
-The genetic correlation is `r_g = cov_g / √(h²₁·h²₂)`, where the genetic
-covariance is the **LD-aware** quadratic form `cov_g = β₁ᵀRβ₂` in the true
-standardized effects and `h²_t = β_tᵀRβ_t`. Every estimator differs only in how
-it forms this numerator and denominator from noisy, shrunk effect estimates, and
-one principle governs all of them — **scale matching**: numerator and denominator
-must be built from the *same* (shrunk) quantities, or the shrinkage fails to
-cancel and `r_g` is biased.
+The target is:
 
-1. **Joint sampled-quadratic ("gv", the default).** From the bivariate chain,
-   `r_g = β̂₁ᵀRβ̂₂ / √(β̂₁ᵀRβ̂₁·β̂₂ᵀRβ̂₂)` on the sampled posterior-mean effects.
-   Each `β̂_t` is a shrinkage estimate of `β_t`, but because numerator and
-   denominator are all built from the *same* posterior means the (non-uniform)
-   shrinkage largely cancels in the ratio — which is why `r_g` is recovered even
-   where the individual `h²` are not.
-2. **Decorrelated cross-sweep covariance (`rg_decorrelated=True`).** The
-   same-sweep numerator shares one sweep's sampling noise across the two traits;
-   for an asymmetric pair (strong trait 1, weak trait 2) this leaks trait-1 signal
-   into trait 2 and attenuates the weak trait's covariance. Taking `β₁` and `β₂`
-   from *different* sweeps makes their noise independent, so `E[β₁ᵀRβ₂] =
-   (Eβ₁)ᵀR(Eβ₂)` with no cross-noise — the same trick that makes LDpred2-auto's
-   out-of-sample `r²` a cross-chain product ([Privé et al. 2023,
-   *Am. J. Hum. Genet.*](https://doi.org/10.1016/j.ajhg.2023.10.010)).
-3. **Two univariate runs** (skip the joint model; combine independent `-auto`
-   fits of each trait):
-   - `uni_gv = β̂₁ᵀRβ̂₂ / √(β̂₁ᵀRβ̂₁·β̂₂ᵀRβ̂₂)` — the numerator uses posterior
-     means from two *independent* runs, so their noise is already decorrelated
-     (cross terms vanish in expectation), giving a clean covariance.
-   - `uni_r2 = β̂₁ᵀRβ̂₂ / √(r²₁·r²₂)` — same numerator, but the denominator uses
-     each run's **decorrelated out-of-sample `r²`** (`InferResult.r2_est`, a
-     cross-chain quadratic `bᵢᵀRbⱼ`, `i≠j`), which removes the small positive
-     self-noise bias in `β̂ᵀRβ̂`.
-   In practice **`uni_gv` and `uni_r2` are numerically identical**: `β̂` is
-   averaged over many samples across chains, so its residual variance — the only
-   thing the `r²` denominator de-biases — is negligible. Both are **slightly
-   attenuated** vs the joint fit, because the residual bias lives in the
-   *numerator* (each posterior mean is non-uniformly shrunk across SNPs, so the
-   self-normalizing ratio does not perfectly cancel) — which no choice of
-   denominator can fix.
+```text
+r_g = beta1' R beta2 / sqrt((beta1' R beta1) * (beta2' R beta2))
+```
 
-**Why "calibrating" the denominator with `h²` fails.** It is tempting to correct
-the covariance/count bias by dividing by a well-calibrated `h²` (e.g. from
-univariate runs, which estimate `h²` accurately). This *breaks* scale matching
-and attenuates `r_g`: (a) a shrunk posterior-mean numerator over an *unshrunk*
-`h²` denominator reintroduces the shrinkage; (b) building the covariance from the
-mixture variance components, `cov_g ≈ M·π₁₁·s₁₂`, under-estimates it because that
-diagonal product **ignores the LD cross-terms** in `βᵀRβ` — it sits at ~0.6× the
-true `h²` scale, so dividing by the true-scale `h²` attenuates further. Both were
-measured and both attenuate; the lesson is that `r_g` must be a ratio of
-*like-scaled* quantities. Cross-trait **LDSC** ([Bulik-Sullivan et al. 2015,
-*Nat. Genet.*, "An atlas of genetic correlations"](https://doi.org/10.1038/ng.3406);
-h² regression from [Bulik-Sullivan et al. 2015, *Nat. Genet.*](https://doi.org/10.1038/ng.3211))
-side-steps shrinkage entirely — it regresses the product of the two traits'
-z-scores on the LD score, a method-of-moments covariance — so it does **not**
-attenuate under power asymmetry, at the cost of higher variance (noisier at low
-`r_g`).
+The default estimate uses sampled quadratic forms from the joint chain. This is
+the recommended estimator for most pairs because numerator and denominator are
+formed on the same shrinkage scale.
 
-**Accuracy and running time** (`benchmarks/rg_methods.py`, realistic LD, `m` up
-to 50k, symmetric vs asymmetric power):
+Set `rg_decorrelated=True` for asymmetric-power pairs. It estimates the
+cross-trait covariance from effects sampled at different sweeps, reducing
+same-sweep noise coupling that can attenuate the weak trait's covariance.
 
-| estimator | symmetric (true 0.90) | asymmetric, weak trait 2 (true 0.90) | time / fit (m=20k) |
-|---|---:|---:|---:|
-| bivariate joint fit | **0.90** | **0.90** (borrows for the weak trait) | 1.1 s |
-| cross-trait LDSC | 0.89 (noisier at low `r_g`) | 0.90 (moment-based, no shrinkage) | 0.3 s |
-| `uni_gv` / `uni_r2` | 0.85 (attenuated) | 0.78 (badly attenuated) | 6.3 s |
+Cross-trait LDSC (`bipred.ldsc_rg`) is a separate moment-based estimator. It is
+fast and useful as a screen or cross-check, but it is noisier when marginal LDSC
+heritability estimates are unstable.
 
-So the **bivariate joint fit is both the most accurate and, per fit, ~5× cheaper
-than the univariate pair** (which must run several chains per trait); it is the
-recommended `r_g` estimator, with LDSC as a cheap moment-based screen. The
-univariate estimators are a useful independent cross-check but attenuate under
-power asymmetry — exactly where the joint fit's cross-trait borrowing helps most.
+## Polygenic Overlap
+
+The four-state mixture gives a MiXeR-style decomposition:
+
+```text
+pi1 = pi10 + pi11
+pi2 = pi01 + pi11
+rho_beta = s12 / sqrt(s1 * s2)
+r_g ≈ rho_beta * pi11 / sqrt(pi1 * pi2)
+```
+
+`res.mixer` reports:
+
+- per-trait polygenicity,
+- per-trait causal counts,
+- shared causal count,
+- shared fraction,
+- `rho_beta`, and
+- `rg_from_overlap`.
+
+The ratios are the safer quantities. Absolute counts can be inflated because the
+point-normal mixture assigns partial causal probability to LD neighbours. The
+inflation is usually mild with the current `p_init=0.02` default, but it grows
+with power and reference-panel mismatch.
+
+Mitigations:
+
+- use `noise_inflation=True` for finite reference-panel LD,
+- use `res.mixer_calibrated(infer1, infer2)` to anchor counts on two univariate
+  ldpred3 fits, and
+- validate count calibration with simulations when counts are a primary result.
+
+`res.mixer_posterior()` summarizes posterior uncertainty conditional on the
+supplied LD reference. It does not capture bias from LD-reference mismatch.
+
+## Prediction
+
+The returned `beta1_est` and `beta2_est` are posterior-mean effects. Cross-trait
+borrowing helps most when one trait is weak, the other is strong, and the genetic
+correlation is high. With little shared signal, the model should mostly decouple
+the traits, but prediction gains still need out-of-sample validation.
+
+## Dense-block implementation
+
+`ldpred3_auto_bivariate_blocks` streams dense LD blocks and pools global
+hyperparameters across them. The full genome-wide LD matrix is never
+materialized, but each block must currently be dense. Compact `LowRankLD` blocks
+are rejected by design until the bivariate kernel supports that representation.

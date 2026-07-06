@@ -14,7 +14,6 @@ This is the fast, moment-based cross-check on the bivariate-LDpred joint fit
 machinery: LD scores come from ``ldpred3.ld_scores`` and the weighted-least-
 squares / regression-weight helpers (``_wls`` / ``_weights``) are imported from
 ``ldpred3.ldsc`` so the two implementations stay a single source of truth.
-NumPy only.
 """
 
 from __future__ import annotations

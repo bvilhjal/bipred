@@ -3,8 +3,8 @@
 A joint LDpred model that fits **two traits sharing one LD reference** at once,
 built on top of :mod:`ldpred3`. It estimates each trait's SNP heritability, the
 **genetic correlation** between them, the per-trait and shared polygenicity
-(a MiXeR-style polygenic-overlap summary), and posterior-mean effects that let a
-well-powered trait sharpen a correlated under-powered one.
+(a MiXeR-style polygenic-overlap summary), and posterior-mean effects for
+prediction.
 
 Public API::
 
@@ -22,9 +22,9 @@ regression, with :func:`~bipred.ldsc_rg.estimate_sample_overlap` for shared
 samples. All genetic-correlation estimation lives here; ldpred3 keeps only the
 *univariate* LDSC (``ld_scores`` / ``ldsc_h2``) that these build on.
 
-Names are imported **lazily** (PEP 562) so ``import bipred`` stays cheap; NumPy is
-the only hard dependency (optional Numba accelerates the Gibbs sampler, inherited
-from ldpred3's ``[fast]`` extra).
+Names are imported **lazily** (PEP 562) so ``import bipred`` stays cheap.
+ldpred3 and NumPy are runtime dependencies; optional Numba acceleration comes
+from ldpred3's ``[fast]`` extra.
 """
 
 import importlib
