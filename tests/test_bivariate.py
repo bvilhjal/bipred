@@ -1,9 +1,21 @@
 """Bivariate LDpred-auto: rg / h2 recovery and cross-trait borrowing."""
 
 import numpy as np
+import pytest
 
-from bipred import ldpred3_auto_bivariate_blocks
+import bipred.bivariate as bivariate
+from bipred import ldpred3_auto_bivariate, ldpred3_auto_bivariate_blocks
 from ldpred3 import ldpred3_by_blocks, ldpred3_auto_infer
+
+
+def _ar1_chol(rho, k):
+    """Exact Cholesky factor of the AR(1) correlation ``rho**|i-j|``."""
+    L = np.zeros((k, k))
+    L[:, 0] = rho ** np.arange(k)
+    scale = np.sqrt(1.0 - rho * rho)
+    for j in range(1, k):
+        L[j:, j] = scale * rho ** np.arange(k - j)
+    return L
 
 
 def _blocks(n_blocks=12, k=200, seed=0):
@@ -14,7 +26,7 @@ def _blocks(n_blocks=12, k=200, seed=0):
         d = np.abs(np.subtract.outer(np.arange(k), np.arange(k)))
         R = (rho ** d).astype(np.float64)
         blocks.append((R.astype(np.float32), np.arange(b * k, (b + 1) * k)))
-        chols.append(np.linalg.cholesky(R + 1e-6 * np.eye(k)))
+        chols.append(_ar1_chol(rho, k))
         idxs.append(np.arange(b * k, (b + 1) * k))
     return blocks, chols, idxs
 
@@ -28,7 +40,7 @@ def _sim(blocks, chols, idxs, m, *, p, h2, rg, rng):
     """Shared-causal bivariate effects scaled to (h2[0], h2[1]) with corr rg."""
     causal = rng.random(m) < p
     nc = causal.sum()
-    L = np.linalg.cholesky([[1.0, rg], [rg, 1.0]])
+    L = np.array([[1.0, 0.0], [rg, np.sqrt(1.0 - rg * rg)]])
     raw = (L @ rng.standard_normal((2, nc)))
     b1 = np.zeros(m); b2 = np.zeros(m)
     b1[causal] = raw[0]; b2[causal] = raw[1]
@@ -193,13 +205,15 @@ def test_mixer_calibrated_uses_univariate_polygenicity():
     # floats are accepted in place of InferResult objects
     mf = res.mixer_calibrated(0.1, 0.1)
     assert abs(mf["n_causal"][0] - 0.1 * m) < 1e-6
+    for bad in (-0.1, 1.1, np.nan, True):
+        with pytest.raises(ValueError, match="polygenic"):
+            res.mixer_calibrated(bad, 0.1)
 
 
-def test_mixer_posterior_intervals():
-    # mixer_posterior turns the retained (pi, Sigma) draws into a posterior mean
-    # + credible interval per overlap quantity; the mean matches the point
-    # estimate, the CI brackets it, and under matched LD the interval covers the
-    # truth (which the point estimate is calibrated to here).
+def test_mixer_iterate_intervals_and_point_summaries():
+    # pi and Sigma points both summarize the retained hybrid iterates. The
+    # accurately named API reports empirical central iterate intervals; the old
+    # posterior/CI spelling remains a warning-emitting compatibility alias.
     k, nb = 200, 12
     blocks, chols, idxs = _blocks(nb, k, seed=2)
     m = nb * k
@@ -211,21 +225,32 @@ def test_mixer_posterior_intervals():
                                         burn_in=150, num_iter=200, seed=1)
     assert res.pi_samples is not None and res.pi_samples.shape == (200, 4)
     assert res.sigma_samples.shape == (200, 3)
-    post = res.mixer_posterior(level=0.95)
+    assert np.allclose(res.pi, res.pi_samples.mean(axis=0))
+    s1, s2, s12 = res.sigma_samples.mean(axis=0)
+    assert np.allclose(res.sigma, [[s1, s12], [s12, s2]])
+
+    post = res.mixer_iterate_summary(level=0.95)
     assert set(post) == {"n_causal", "polygenicity", "n_shared", "frac_shared",
                          "rho_beta", "rg_from_overlap", "level"}
     point = res.mixer
     for i in (0, 1):
         entry = post["n_causal"][i]
-        lo, hi = entry["ci"]
-        assert lo <= entry["mean"] <= hi                       # CI brackets mean
+        lo, hi = entry["interval"]
+        assert lo <= entry["mean"] <= hi                 # interval brackets mean
         assert lo <= point["n_causal"][i] <= hi                # and the point est
     for key in ("n_shared", "frac_shared", "rho_beta", "rg_from_overlap"):
-        lo, hi = post[key]["ci"]
+        lo, hi = post[key]["interval"]
         assert lo <= post[key]["mean"] <= hi
         assert post[key]["sd"] >= 0.0
     # frac_shared is a probability in [0, 1]
-    assert 0.0 <= post["frac_shared"]["ci"][0] <= post["frac_shared"]["ci"][1] <= 1.0
+    lo, hi = post["frac_shared"]["interval"]
+    assert 0.0 <= lo <= hi <= 1.0
+
+    with pytest.deprecated_call(match="mixer_posterior"):
+        legacy = res.mixer_posterior(level=0.95)
+    assert legacy["n_shared"]["ci"] == post["n_shared"]["interval"]
+    with pytest.raises(ValueError, match="level"):
+        res.mixer_iterate_summary(level=1.0)
 
 
 def test_noise_inflation_calibrates_counts_under_mismatch():
@@ -241,7 +266,7 @@ def test_noise_inflation_calibrates_counts_under_mismatch():
     for b in range(nb):
         rho = rng.uniform(0.3, 0.85)
         R = (rho ** np.abs(np.subtract.outer(np.arange(k), np.arange(k)))).astype(float)
-        pop.append(R); chol.append(np.linalg.cholesky(R + 1e-6 * np.eye(k)))
+        pop.append(R); chol.append(_ar1_chol(rho, k))
         Z = rng.standard_normal((2000, k)) @ chol[b].T
         Z = (Z - Z.mean(0)) / Z.std(0)
         Rr = 0.95 * (Z.T @ Z) / 2000 + 0.05 * np.eye(k)
@@ -306,7 +331,7 @@ def test_h2_cap_skips_prepass_and_validations():
     overlap = [(blocks[0][0], np.arange(0, k)),
                (blocks[1][0], np.arange(k // 2, k // 2 + k))] + \
         [(blocks[i][0], np.arange(i * k, (i + 1) * k)) for i in range(2, nb)]
-    with pytest.raises(ValueError, match="partition"):
+    with pytest.raises(ValueError, match="overlap|repeat"):
         ldpred3_auto_bivariate_blocks(overlap, bh1, bh2, 40000, 40000,
                                       h2_cap=(0.5, 0.5))
 
@@ -335,14 +360,179 @@ def test_borrows_strength_for_low_power_trait():
 def test_bivariate_rejects_compact_blocks():
     # Compact (low-rank) LD blocks must fail loudly, not crash with a cryptic
     # float() TypeError inside np.ascontiguousarray.
-    import pytest
-    from ldpred3 import lowrank_ld
+    from ldpred3 import LowRankLD, pack_symmetric_int8_ld
     rng = np.random.default_rng(0)
     R = (0.3 ** np.abs(np.subtract.outer(np.arange(40), np.arange(40)))).astype(float)
     b1 = rng.standard_normal(40) * 0.02
     b2 = rng.standard_normal(40) * 0.02
-    for conv in (lowrank_ld,):
-        blocks = [(conv(R), np.arange(40))]
+    compact_blocks = (
+        LowRankLD(np.ones((40, 1), dtype=np.float32), 40),
+        pack_symmetric_int8_ld(R),
+    )
+    for compact in compact_blocks:
+        blocks = [(compact, np.arange(40))]
         with pytest.raises(NotImplementedError, match="dense LD"):
             ldpred3_auto_bivariate_blocks(blocks, b1, b2, 10000, 10000,
                                           burn_in=5, num_iter=5, h2_cap=(0.1, 0.1))
+
+
+@pytest.mark.parametrize(
+    "overrides, match",
+    [
+        ({"ld_int8": 1}, "ld_int8.*boolean"),
+        ({"h2_init": 0.0}, "h2"),
+        ({"h2_init": np.nan}, "h2"),
+        ({"p_init": 0.0}, "p"),
+        ({"p_init": 1.1}, "p"),
+        ({"rg_init": 1.0}, "rg_init"),
+        ({"rg_init": np.nan}, "rg_init"),
+        ({"cross_corr": 1.0}, "cross_corr"),
+        ({"cross_corr": np.nan}, "cross_corr"),
+        ({"burn_in": -1}, "burn_in"),
+        ({"burn_in": 1.5}, "burn_in"),
+        ({"num_iter": 0}, "num_iter"),
+        ({"num_iter": True}, "num_iter"),
+        ({"h2_bounds": (0.1,)}, "h2_bounds"),
+        ({"h2_bounds": (0.2, 0.5)}, "h2_bounds"),
+        ({"h2_bounds": (1e-4, np.inf)}, "h2_bounds"),
+        ({"h2_cap": (0.2,)}, "h2_cap"),
+        ({"h2_cap": (0.0, 0.2)}, "h2_cap"),
+        ({"h2_cap": (0.2, np.nan)}, "h2_cap"),
+        ({"iw_df": 0.0}, "iw_df"),
+        ({"iw_df": np.inf}, "iw_df"),
+        ({"rg_decorrelated": 1}, "rg_decorrelated.*boolean"),
+        ({"noise_inflation": 0}, "noise_inflation.*boolean"),
+        ({"ni_damp": 0.0}, "ni_damp"),
+        ({"ni_damp": 1.1}, "ni_damp"),
+        ({"pi_prior": 0.0}, "pi_prior"),
+        ({"pi_prior": np.nan}, "pi_prior"),
+        ({"sample_every": 0}, "sample_every"),
+        ({"sample_every": 1.5}, "sample_every"),
+        ({"seed": -1}, "seed"),
+        ({"seed": 2**32}, "seed"),
+        ({"seed": True}, "seed"),
+    ],
+)
+def test_bivariate_validates_public_controls(overrides, match):
+    R = np.eye(3)
+    beta = np.zeros(3)
+    kwargs = {"burn_in": 0, "num_iter": 1, "h2_cap": (0.2, 0.2)}
+    kwargs.update(overrides)
+    with pytest.raises(ValueError, match=match):
+        ldpred3_auto_bivariate(R, beta, beta, 1000, 1000, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "beta1, beta2, n1, n2, match",
+    [
+        (np.zeros((1, 2)), np.zeros(2), 1000, 1000, "one-dimensional"),
+        (np.zeros(2), np.zeros((1, 2)), 1000, 1000, "one-dimensional"),
+        (np.zeros(2), np.zeros(3), 1000, 1000, "same length"),
+        (np.array([0.0, np.nan]), np.zeros(2), 1000, 1000, "finite"),
+        (np.zeros(0), np.zeros(0), 1000, 1000, "at least one"),
+        (np.zeros(2), np.zeros(2), 0, 1000, "finite positive"),
+        (np.zeros(2), np.zeros(2), [1000], 1000, "length-2"),
+        (np.zeros(2), np.zeros(2), 1000, [1000, np.inf], "finite positive"),
+        (np.zeros(2), np.zeros(2), True, 1000, "finite positive"),
+    ],
+)
+def test_bivariate_validates_effect_and_sample_size_vectors(
+        beta1, beta2, n1, n2, match):
+    with pytest.raises(ValueError, match=match):
+        ldpred3_auto_bivariate(
+            np.eye(2), beta1, beta2, n1, n2,
+            burn_in=0, num_iter=1, h2_cap=(0.2, 0.2),
+        )
+
+
+@pytest.mark.parametrize(
+    "blocks, m, match",
+    [
+        ([(np.eye(3), np.arange(2))], 2, "shape"),
+        ([(np.ones((2, 3)), np.arange(2))], 2, "shape"),
+        ([(np.array([[1.0, np.nan], [np.nan, 1.0]]), np.arange(2))], 2,
+         "finite"),
+        ([(np.array([[1.0, 0.2], [0.3, 1.0]]), np.arange(2))], 2,
+         "symmetric"),
+        ([(np.array([[0.9, 0.2], [0.2, 1.0]]), np.arange(2))], 2,
+         "diagonal"),
+        ([(np.array([[1.0, 1.2], [1.2, 1.0]]), np.arange(2))], 2,
+         r"\[-1, 1\]"),
+        ([(np.array([[126, 0], [0, 127]], dtype=np.int8), np.arange(2))], 2,
+         "diagonal"),
+        ([(np.array([[127, -128], [-128, 127]], dtype=np.int8), np.arange(2))], 2,
+         "out-of-range"),
+        ([(np.eye(2), np.array([0.0, 1.0]))], 2, "integer"),
+        ([(np.empty((0, 0)), np.array([], dtype=int)),
+          (np.eye(2), np.arange(2))], 2, "must not be empty"),
+        ([(np.eye(2), np.array([0, 2])),
+          (np.eye(1), np.array([1]))], 3, "contiguous"),
+    ],
+)
+def test_bivariate_validates_dense_ld_block_geometry(blocks, m, match):
+    beta = np.zeros(m)
+    with pytest.raises(ValueError, match=match):
+        ldpred3_auto_bivariate_blocks(
+            blocks, beta, beta, 1000, 1000,
+            burn_in=0, num_iter=1, h2_cap=(0.2, 0.2),
+        )
+
+
+def test_per_variant_n_controls_variant_specific_shrinkage():
+    # One retained sweep is enough: Rao-Blackwellized effects are computed before
+    # the stochastic state draw. Equal marginal effects get much less shrinkage
+    # at the high-N variant, exercising the per-variant-N kernel branch.
+    beta_hat = np.full(2, 0.02)
+    n_eff = np.array([100.0, 100_000.0])
+    res = ldpred3_auto_bivariate(
+        np.eye(2), beta_hat, beta_hat, n_eff, n_eff,
+        ld_int8=False, h2_init=0.1, p_init=0.5,
+        burn_in=0, num_iter=1, h2_cap=(0.2, 0.2), seed=1,
+    )
+    assert np.all(np.isfinite(res.beta1_est))
+    assert res.beta1_est[1] > 5.0 * res.beta1_est[0]
+
+
+def test_decorrelated_rg_buffers_are_opt_in_and_path_is_used(monkeypatch):
+    assert bivariate._effect_sample_buffers(False, 10, 2, 10_000_000) == (None, None)
+    s1, s2 = bivariate._effect_sample_buffers(True, 3, 2, 4)
+    assert s1.shape == s2.shape == (2, 4)
+    assert s1.dtype == s2.dtype == np.float32
+
+    calls = []
+
+    def fake_decorrelated(_blocks, samples1, samples2):
+        calls.append((samples1.shape, samples2.shape))
+        return 0.25, 1.0, 1.0
+
+    monkeypatch.setattr(bivariate, "_decorrelated_cov", fake_decorrelated)
+    beta_hat = np.full(4, 0.02)
+    kwargs = dict(
+        ld_int8=False, h2_init=0.1, p_init=0.5, burn_in=0,
+        num_iter=3, sample_every=2, h2_cap=(0.2, 0.2), seed=1,
+    )
+    ldpred3_auto_bivariate(np.eye(4), beta_hat, beta_hat, 1000, 1000, **kwargs)
+    assert calls == []
+    res = ldpred3_auto_bivariate(
+        np.eye(4), beta_hat, beta_hat, 1000, 1000,
+        rg_decorrelated=True, **kwargs,
+    )
+    assert calls == [((2, 4), (2, 4))]
+    assert res.rg == 0.25
+
+
+def test_cross_corr_explains_correlated_sampling_signal():
+    # Identical small marginal effects are consistent with correlated sampling
+    # noise. Supplying a strong positive cross_corr therefore reduces the joint
+    # posterior effects relative to incorrectly assuming independent noise.
+    beta_hat = np.full(4, 0.03)
+    kwargs = dict(
+        ld_int8=False, h2_init=0.1, p_init=0.5, burn_in=0,
+        num_iter=1, h2_cap=(0.2, 0.2), seed=1,
+    )
+    independent = ldpred3_auto_bivariate(
+        np.eye(4), beta_hat, beta_hat, 1000, 1000, cross_corr=0.0, **kwargs)
+    corrected = ldpred3_auto_bivariate(
+        np.eye(4), beta_hat, beta_hat, 1000, 1000, cross_corr=0.8, **kwargs)
+    assert np.linalg.norm(corrected.beta1_est) < 0.25 * np.linalg.norm(
+        independent.beta1_est)

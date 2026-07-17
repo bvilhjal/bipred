@@ -25,6 +25,7 @@ independent GWAS samples.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import warnings
 
 import numpy as np
 
@@ -32,7 +33,20 @@ import numpy as np
 # per-variant-N helper (``_as_n_vector``) and the compact-LD sentinel
 # (``LowRankLD``). They are re-exported from ``ldpred3.ldpred3`` -- the internal
 # seam ldpred3 keeps stable for its own infer / annot / finemap modules.
-from ldpred3.ldpred3 import _jit, _as_n_vector, LowRankLD
+from ldpred3.ldpred3 import (
+    LowRankLD,
+    PackedSymmetricInt8LD,
+    _as_n_vector,
+    _check_h2_p,
+    _finite_control,
+    _integer_at_least,
+    _jit,
+    _validate_beta_hat,
+    _validate_blocks,
+    _validate_boolean_controls,
+    _validate_iterations,
+    _validate_seed,
+)
 
 # int8 LD quantisation scale (127): correlations in [-1, 1] are stored as
 # ``round(R * 127)`` int8 -- a quarter of the float32 memory -- and the sampler
@@ -44,6 +58,26 @@ __all__ = ["BivariateResult", "ldpred3_auto_bivariate",
            "ldpred3_auto_bivariate_blocks"]
 
 DAMP = 0.2          # damping factor for the variance-component updates
+
+
+def _finite_pair(name, value):
+    """Return a pair of finite floats, rejecting scalar/bool surrogates."""
+    if isinstance(value, (str, bytes)):
+        raise ValueError(f"{name} must contain exactly two finite numbers")
+    try:
+        values = tuple(value)
+    except TypeError:
+        raise ValueError(f"{name} must contain exactly two finite numbers") from None
+    if (len(values) != 2
+            or any(isinstance(x, (bool, np.bool_)) for x in values)):
+        raise ValueError(f"{name} must contain exactly two finite numbers")
+    try:
+        pair = tuple(float(x) for x in values)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError(f"{name} must contain exactly two finite numbers") from None
+    if not all(np.isfinite(x) for x in pair):
+        raise ValueError(f"{name} must contain exactly two finite numbers")
+    return pair
 
 
 def _apply_R_rows(fblocks, V):
@@ -75,6 +109,15 @@ def _prepare_block(R, ld_int8):
         q = np.rint(np.clip(np.ascontiguousarray(arr, np.float32), -1.0, 1.0) * _Q8)
         return q.astype(np.int8), 1.0 / _Q8
     return np.ascontiguousarray(arr, dtype=np.float32), 1.0
+
+
+def _effect_sample_buffers(enabled, num_iter, sample_every, m):
+    """Allocate decorrelated-rg effect traces only when explicitly enabled."""
+    if not enabled:
+        return None, None
+    n_saved = (num_iter - 1) // sample_every + 1
+    return (np.zeros((n_saved, m), dtype=np.float32),
+            np.zeros((n_saved, m), dtype=np.float32))
 
 
 def _decorrelated_cov(fblocks, samp1, samp2):
@@ -319,9 +362,11 @@ class BivariateResult:
     ``beta1_est`` / ``beta2_est`` are the posterior-mean (standardized) effects
     for the two traits, ``h2`` the pair of SNP heritabilities, ``rg`` the
     estimated genetic correlation, ``p`` the causal fraction, ``sigma`` the
-    learned 2x2 effect covariance, and ``pi`` the posterior-mean four-state
-    mixture ``(pi00, pi10, pi01, pi11)`` = neither / trait-1-only / trait-2-only /
-    both causal. See :attr:`mixer` for the MiXeR-style polygenic-overlap summary.
+    learned 2x2 effect covariance, and ``pi`` the four-state mixture
+    ``(pi00, pi10, pi01, pi11)`` = neither / trait-1-only / trait-2-only / both
+    causal. ``sigma`` and ``pi`` are both means over the retained stochastic
+    hyperparameter iterates. See :attr:`mixer` for the MiXeR-style
+    polygenic-overlap summary.
     """
 
     beta1_est: np.ndarray
@@ -331,8 +376,8 @@ class BivariateResult:
     p: float
     sigma: np.ndarray
     pi: np.ndarray = None
-    pi_samples: np.ndarray = None       # (n_kept, 4) post-burn-in mixture draws
-    sigma_samples: np.ndarray = None    # (n_kept, 3) post-burn-in (s1, s2, s12) draws
+    pi_samples: np.ndarray = None       # (n_kept, 4) conditional mixture draws
+    sigma_samples: np.ndarray = None    # (n_kept, 3) damped covariance iterates
     noise_scale: tuple = None           # learned (lambda1, lambda2); (1,1) if off
 
     @property
@@ -342,9 +387,10 @@ class BivariateResult:
         Returns ``polygenicity``, ``n_causal``, ``n_shared``, ``frac_shared``,
         ``rho_beta`` and ``rg_from_overlap`` over the fitted variants. The ratios
         are usually more stable than absolute counts; counts can be inflated by
-        LD-spreading and reference-panel mismatch. Use :meth:`mixer_posterior` for
-        posterior intervals and :meth:`mixer_calibrated` to anchor counts on two
-        univariate ldpred3 fits.
+        LD-spreading and reference-panel mismatch. Use
+        :meth:`mixer_iterate_summary` for empirical variability across retained
+        hyperparameter iterates and :meth:`mixer_calibrated` to anchor counts on
+        two univariate ldpred3 fits.
         """
         if self.pi is None:
             raise ValueError("pi not available on this result")
@@ -368,25 +414,32 @@ class BivariateResult:
             "rg_from_overlap": float(rho_beta * pi11 / denom),
         }
 
-    def mixer_posterior(self, level=0.95):
-        """Posterior summaries for the MiXeR-style overlap quantities.
-
-        Maps retained ``(pi, Sigma)`` Gibbs draws through the same decomposition
-        as :attr:`mixer`. Returns means, standard deviations and central credible
-        intervals. These intervals are conditional on the supplied LD reference;
-        they do not cover LD-reference-mismatch bias.
-        """
+    def _mixer_iterate_summary(self, level, interval_key):
         if self.pi_samples is None or self.sigma_samples is None:
-            raise ValueError("posterior samples not available on this result")
-        if len(self.pi_samples) == 0:
-            raise ValueError("no post-burn-in samples were retained")
+            raise ValueError("hyperparameter iterates not available on this result")
+        level = _finite_control("level", level)
+        if not 0.0 < level < 1.0:
+            raise ValueError("level must be in (0, 1)")
+        pi_samples = np.asarray(self.pi_samples, dtype=float)
+        sigma_samples = np.asarray(self.sigma_samples, dtype=float)
+        if (pi_samples.ndim != 2 or pi_samples.shape[1:] != (4,)
+                or sigma_samples.ndim != 2 or sigma_samples.shape[1:] != (3,)
+                or len(pi_samples) != len(sigma_samples)):
+            raise ValueError(
+                "pi_samples and sigma_samples must have matching shapes (n, 4) "
+                "and (n, 3)")
+        if len(pi_samples) == 0:
+            raise ValueError("no post-burn-in hyperparameter iterates were retained")
+        if not (np.all(np.isfinite(pi_samples))
+                and np.all(np.isfinite(sigma_samples))):
+            raise ValueError("hyperparameter iterates must contain only finite values")
         m = len(self.beta1_est)
         lo_q = (1.0 - level) / 2.0 * 100.0
         hi_q = (1.0 + level) / 2.0 * 100.0
         cols = {"n1": [], "n2": [], "n_shared": [], "frac_shared": [],
                 "rho_beta": [], "rg_from_overlap": []}
-        for (_p00, p10, p01, p11), (s1, s2, s12) in zip(self.pi_samples,
-                                                        self.sigma_samples):
+        for (_p00, p10, p01, p11), (s1, s2, s12) in zip(pi_samples,
+                                                        sigma_samples):
             rho_beta = float(s12 / np.sqrt(max(s1 * s2, 1e-300)))
             d = self._mixer_dict(m, p10 + p11, p01 + p11, p11, rho_beta)
             cols["n1"].append(d["n_causal"][0])
@@ -399,23 +452,52 @@ class BivariateResult:
         def summ(a):
             a = np.asarray(a, dtype=float)
             return {"mean": float(a.mean()), "sd": float(a.std()),
-                    "ci": (float(np.percentile(a, lo_q)),
-                           float(np.percentile(a, hi_q)))}
+                    interval_key: (float(np.percentile(a, lo_q)),
+                                   float(np.percentile(a, hi_q)))}
         n1, n2 = summ(cols["n1"]), summ(cols["n2"])
         return {
             "n_causal": (n1, n2),
             "polygenicity": ({**n1, "mean": n1["mean"] / m,
                               "sd": n1["sd"] / m,
-                              "ci": (n1["ci"][0] / m, n1["ci"][1] / m)},
+                              interval_key: (n1[interval_key][0] / m,
+                                             n1[interval_key][1] / m)},
                              {**n2, "mean": n2["mean"] / m,
                               "sd": n2["sd"] / m,
-                              "ci": (n2["ci"][0] / m, n2["ci"][1] / m)}),
+                              interval_key: (n2[interval_key][0] / m,
+                                             n2[interval_key][1] / m)}),
             "n_shared": summ(cols["n_shared"]),
             "frac_shared": summ(cols["frac_shared"]),
             "rho_beta": summ(cols["rho_beta"]),
             "rg_from_overlap": summ(cols["rg_from_overlap"]),
             "level": level,
         }
+
+    def mixer_iterate_summary(self, level=0.95):
+        """Empirical summaries of MiXeR quantities across retained iterates.
+
+        ``pi`` is sampled from its conditional Dirichlet distribution, whereas
+        ``Sigma`` is a deterministic damped moment update driven by stochastic
+        state/effect draws. Consequently, the returned central ``interval`` is
+        an empirical range of the hybrid algorithm's retained iterates, **not**
+        a Bayesian credible interval and not a frequentist confidence interval.
+        It also does not represent LD-reference-mismatch uncertainty.
+        """
+        return self._mixer_iterate_summary(level, "interval")
+
+    def mixer_posterior(self, level=0.95):
+        """Deprecated alias for :meth:`mixer_iterate_summary`.
+
+        The historical ``ci`` fields are retained for compatibility, but they
+        contain empirical central iterate intervals, not credible intervals.
+        """
+        warnings.warn(
+            "mixer_posterior() is deprecated because Sigma is not sampled from "
+            "a conditional posterior; use mixer_iterate_summary() for empirical "
+            "hyperparameter-iterate intervals",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self._mixer_iterate_summary(level, "ci")
 
     def mixer_calibrated(self, infer1, infer2):
         """:attr:`mixer` with counts anchored on two univariate fits.
@@ -426,8 +508,10 @@ class BivariateResult:
         """
         if self.pi is None:
             raise ValueError("pi not available on this result")
-        p1 = float(getattr(infer1, "p_est", infer1))
-        p2 = float(getattr(infer2, "p_est", infer2))
+        p1 = _finite_control("infer1 polygenicity", getattr(infer1, "p_est", infer1))
+        p2 = _finite_control("infer2 polygenicity", getattr(infer2, "p_est", infer2))
+        if not 0.0 <= p1 <= 1.0 or not 0.0 <= p2 <= 1.0:
+            raise ValueError("calibrated polygenicities must be in [0, 1]")
         pi10, pi11, pi01 = float(self.pi[1]), float(self.pi[3]), float(self.pi[2])
         pj1, pj2 = pi10 + pi11, pi01 + pi11
         frac_shared = pi11 / max(min(pj1, pj2), 1e-300)   # reliable joint ratio
@@ -510,14 +594,47 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     -------
     BivariateResult
     """
+    _check_h2_p(h2=h2_init, p=p_init)
+    h2_init, p_init = float(h2_init), float(p_init)
+    rg_init = _finite_control("rg_init", rg_init)
+    if not -1.0 < rg_init < 1.0:
+        raise ValueError("rg_init must be in (-1, 1)")
+    cross_corr = _finite_control("cross_corr", cross_corr)
     if not -1.0 < cross_corr < 1.0:
         raise ValueError("cross_corr must be in (-1, 1)")
+    burn_in, num_iter = _validate_iterations(burn_in, num_iter)
+    _validate_boolean_controls(
+        ld_int8=ld_int8,
+        rg_decorrelated=rg_decorrelated,
+        noise_inflation=noise_inflation,
+    )
+    iw_df = _finite_control("iw_df", iw_df)
+    if iw_df <= 0.0:
+        raise ValueError("iw_df must be positive")
+    ni_damp = _finite_control("ni_damp", ni_damp)
+    if not 0.0 < ni_damp <= 1.0:
+        raise ValueError("ni_damp must be in (0, 1]")
+    pi_prior = _finite_control("pi_prior", pi_prior)
     if pi_prior <= 0.0:
         raise ValueError("pi_prior must be positive (an improper <=0 "
                          "concentration can collapse the mixture)")
-    bh1 = np.ascontiguousarray(beta_hat1, dtype=np.float64)
-    bh2 = np.ascontiguousarray(beta_hat2, dtype=np.float64)
+    sample_every = _integer_at_least("sample_every", sample_every, 1)
+    seed = _validate_seed(seed)
+
+    lo, hi = _finite_pair("h2_bounds", h2_bounds)
+    if not 0.0 < lo <= h2_init <= hi:
+        raise ValueError("h2_bounds must satisfy 0 < lower <= h2_init <= upper")
+    h2_bounds = (lo, hi)
+    if h2_cap is not None:
+        h2_cap = _finite_pair("h2_cap", h2_cap)
+        if h2_cap[0] <= 0.0 or h2_cap[1] <= 0.0:
+            raise ValueError("h2_cap values must be positive")
+
+    bh1 = np.ascontiguousarray(_validate_beta_hat(beta_hat1), dtype=np.float64)
+    bh2 = np.ascontiguousarray(_validate_beta_hat(beta_hat2), dtype=np.float64)
     m = bh1.shape[0]
+    if m == 0:
+        raise ValueError("beta_hat vectors must contain at least one variant")
     if bh2.shape[0] != m:
         raise ValueError("beta_hat1 and beta_hat2 must have the same length")
     n1 = _as_n_vector(n_eff1, m)
@@ -527,25 +644,16 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     # per-SNP loop. Per-variant N falls back to the exact per-SNP computation.
     n_const = bool(n1.min() == n1.max() and n2.min() == n2.max())
 
+    blocks = _validate_blocks(blocks, m, contiguous=True)
     fblocks = []
-    for R, idx in sorted(blocks, key=lambda bi: int(np.asarray(bi[1])[0])):
-        if isinstance(R, LowRankLD):
+    for R, idx in sorted(blocks, key=lambda bi: int(bi[1][0])):
+        if isinstance(R, (LowRankLD, PackedSymmetricInt8LD)):
             raise NotImplementedError(
                 "bivariate LDpred3 needs dense LD blocks, not a "
                 f"{type(R).__name__}; it does not support the compact "
-                "(low-rank) LD representation")
-        idx = np.asarray(idx)
-        if not np.array_equal(idx, np.arange(idx[0], idx[0] + idx.shape[0])):
-            raise ValueError("each block must use contiguous indices")
+                "LD representation")
         Rq, scale = _prepare_block(R, ld_int8)
         fblocks.append((Rq, int(idx[0]), int(idx.shape[0]), scale))
-    starts = [s for _, s, _, _ in fblocks]
-    ends = [s + k for _, s, k, _ in fblocks]
-    if (sum(k for _, _, k, _ in fblocks) != m or starts[0] != 0
-            or starts[1:] != ends[:-1] or ends[-1] != m):
-        raise ValueError("blocks must partition 0..m-1 exactly once")
-
-    lo, hi = h2_bounds
     M = float(m)
 
     # (Co)variance-component regularisation. The effect covariance Sigma is
@@ -566,17 +674,15 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     avg1 = np.zeros(m); avg2 = np.zeros(m)
     count = 0
     gv_acc = np.zeros(3)
-    pi_acc = np.zeros(4)          # posterior-mean 4-state mixture (MiXeR overlap)
-    # Retained post-burn-in posterior samples of the mixture pi and the effect
-    # covariance (s1, s2, s12) -- the raw material for the posterior distribution
-    # (credible intervals) of the overlap counts (see BivariateResult.mixer_posterior).
+    # Retained post-burn-in hyperparameter iterates. pi is a conditional
+    # Dirichlet draw; Sigma is a damped moment update driven by stochastic effect
+    # and state draws, not a conditional posterior draw.
     pi_samples = np.zeros((num_iter, 4))
     sig_samples = np.zeros((num_iter, 3))
-    # Thinned post-burn-in effect samples for the decorrelated rg estimate.
-    sample_every = max(int(sample_every), 1)
-    max_saved = num_iter // sample_every + 1
-    samp1 = np.zeros((max_saved, m), dtype=np.float32)
-    samp2 = np.zeros((max_saved, m), dtype=np.float32)
+    # These two O(num_iter * m) buffers are needed only by the optional
+    # decorrelated-rg estimator. Default runs should not pay their memory cost.
+    samp1, samp2 = _effect_sample_buffers(
+        rg_decorrelated, num_iter, sample_every, m)
     n_saved = 0
 
     # state probabilities (pi00, pi10, pi01, pi11) and slab variances.
@@ -648,16 +754,17 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
         if it >= burn_in:
             avg1 += rbs1; avg2 += rbs2
             gv_acc += (gv11, gv12, gv22)
-            pi_acc += pi
             pi_samples[count] = pi
             sig_samples[count] = (s1, s2, s12)
-            if (it - burn_in) % sample_every == 0:
+            if (rg_decorrelated and (it - burn_in) % sample_every == 0):
                 samp1[n_saved] = curr1
                 samp2[n_saved] = curr2
                 n_saved += 1
             count += 1
 
-    count = max(count, 1)
+    # num_iter >= 1 is validated at the public boundary, so count cannot be 0.
+    if count != num_iter:                         # defensive internal invariant
+        raise RuntimeError("internal error: retained-iteration count mismatch")
     g11, g12, g22 = gv_acc / count
     h2_1 = min(max(g11, lo), hi)
     h2_2 = min(max(g22, lo), hi)
@@ -676,11 +783,14 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
                 rg = float(min(max(num / np.sqrt(v1 * v2), -1.0), 1.0))
     if rg is None:
         rg = float(min(max(g12 / np.sqrt(max(g11 * g22, 1e-12)), -1.0), 1.0))
-    pi_mean = pi_acc / count                     # posterior-mean 4-state mixture
+    # Summarise both hyperparameters over exactly the same retained iterates.
+    pi_mean = pi_samples.mean(axis=0)
+    s1_mean, s2_mean, s12_mean = sig_samples.mean(axis=0)
     return BivariateResult(beta1_est=avg1 / count, beta2_est=avg2 / count,
                            h2=(float(h2_1), float(h2_2)), rg=rg,
                            p=float(pi_mean[1] + pi_mean[2] + pi_mean[3]),
-                           sigma=np.array([[s1, s12], [s12, s2]]),
+                           sigma=np.array([[s1_mean, s12_mean],
+                                           [s12_mean, s2_mean]]),
                            pi=pi_mean,
                            pi_samples=pi_samples[:count].copy(),
                            sigma_samples=sig_samples[:count].copy(),
@@ -695,9 +805,8 @@ def ldpred3_auto_bivariate(corr, beta_hat1, beta_hat2, n_eff1, n_eff2, **kwargs)
     :class:`BivariateResult` for the parameters and output. By default the matrix
     is stored int8-quantised; pass ``ld_int8=False`` for an exact float32 fit.
     """
-    corr = np.asarray(corr)
-    if corr.dtype != np.int8:                    # keep pre-quantised int8 as-is
-        corr = np.ascontiguousarray(corr, dtype=np.float32)
-    m = corr.shape[0]
+    # Derive the logical LD size from the effect vector. The block validator then
+    # checks that ``corr`` is exactly square with this shape before quantisation.
+    m = _validate_beta_hat(beta_hat1).shape[0]
     return ldpred3_auto_bivariate_blocks([(corr, np.arange(m))], beta_hat1,
                                          beta_hat2, n_eff1, n_eff2, **kwargs)
