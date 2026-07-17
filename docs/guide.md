@@ -65,13 +65,15 @@ res = ldpred3_auto_bivariate_blocks(
 
 ## Reading `BivariateResult`
 
+**Table 1. Main result fields.**
+
 | field | meaning |
 |---|---|
 | `beta1_est`, `beta2_est` | posterior-mean standardized effects for PRS scoring |
 | `h2` | `(h2_1, h2_2)` SNP heritabilities |
 | `rg` | genetic correlation |
 | `p` | total non-null mixture fraction |
-| `sigma` | learned 2x2 effect covariance |
+| `sigma` | mean of the retained 2x2 effect-covariance iterates |
 | `pi` | `(pi00, pi10, pi01, pi11)` mixture: neither / trait 1 / trait 2 / both |
 | `noise_scale` | learned `(lambda1, lambda2)` if `noise_inflation=True` |
 
@@ -87,7 +89,10 @@ mx["rho_beta"]         # effect correlation within the shared component
 mx["rg_from_overlap"]  # overlap decomposition of r_g
 ```
 
-`res.mixer_posterior()` maps retained Gibbs draws to posterior intervals.
+`res.mixer_iterate_summary()` maps retained `pi` draws and covariance iterates
+to empirical retained-chain intervals. Because `sigma` uses a damped moment
+update rather than a conditional posterior draw, these are not Bayesian credible
+intervals. `res.mixer_posterior()` is a deprecated compatibility alias.
 `res.mixer_calibrated(infer1, infer2)` rescales counts using two univariate
 `ldpred3_auto_infer` fits.
 
@@ -162,12 +167,14 @@ res = ldpred3_auto_bivariate_blocks(
 
 If known,
 
+**Equation 1. Sampling-noise correlation from shared samples.**
+
 ```text
 cross_corr = N_shared * rho_pheno / sqrt(N1 * N2)
 ```
 
 For fully shared samples, this is the phenotypic correlation among shared
-individuals. If unknown, estimate it from the cross-trait LDSC intercept:
+individuals. If unknown, approximate it from the cross-trait LDSC intercept:
 
 ```python
 from bipred import estimate_sample_overlap
@@ -176,10 +183,20 @@ rgr = ldsc_rg(beta_hat1, beta_hat2, ell, n1, n2)
 estimate_sample_overlap(rgr, n1, n2, pheno_corr=0.4)
 ```
 
+This inversion requires an assumed non-zero phenotypic correlation. The LDSC
+intercept can also contain correlated population structure, measurement effects,
+or other cross-trait confounding, so it does not identify sample overlap by
+itself. Under an overlap-only model with a positive intercept and phenotypic
+correlation, using `pheno_corr=1` gives the effective overlap and the smallest
+shared-sample count compatible with `|rho_pheno| <= 1`--a lower bound, not an
+upper bound.
+
 `cross_corr=0` is a reasonable default for independent studies or first-pass
 analyses, but it can bias `r_g` upward when samples overlap strongly.
 
 ## Main Options
+
+**Table 2. Main sampler options.**
 
 | option | default | use |
 |---|---:|---|
@@ -191,7 +208,7 @@ analyses, but it can bias `r_g` upward when samples overlap strongly.
 | `noise_inflation`, `ni_damp` | `False`, `0.1` | learn residual noise inflation |
 | `pi_prior` | `1.0` | symmetric Dirichlet mixture prior |
 | `h2_bounds`, `h2_cap` | `(1e-4, 1.0)`, `None` | heritability clamps |
-| `iw_df` | `10.0` | shrinkage strength on `sigma` |
+| `iw_df` | `10.0` | shrinkage strength for the moment update of `sigma` |
 | `sample_every` | `5` | thinning for retained effect samples |
 | `seed` | `None` | RNG seed |
 

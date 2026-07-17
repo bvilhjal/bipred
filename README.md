@@ -14,22 +14,44 @@ shared LD utilities and sampler internals.
 
 ## Installation
 
-Until both packages are on PyPI, install ldpred3 first:
+Python 3.9-3.14 is supported. Numba is strongly recommended; Python 3.14 uses
+Numba 0.66 or newer. Until ldpred3 is published, install the exact revision
+tested by bipred, then install bipred:
 
 ```bash
-pip install "ldpred3[fast] @ git+https://github.com/bvilhjal/ldpred3.git"
-pip install "bipred[fast] @ git+https://github.com/bvilhjal/bipred.git"
+python -m pip install "ldpred3[fast] @ git+https://github.com/bvilhjal/ldpred3.git@3444da10aa98d67f764c25756794b27f737244a3"
+python -m pip install "bipred[fast] @ git+https://github.com/bvilhjal/bipred.git"
 ```
 
-For local development:
+The package metadata accepts compatible ldpred3 0.2.x releases, while the source
+install pins a commit because bipred currently shares private sampler and LDSC
+helpers with ldpred3. That pin should be updated deliberately when the seam
+changes. Blindly following a moving branch would be exciting in all the wrong
+ways.
+
+For a Conda environment on Linux, macOS, or Windows:
 
 ```bash
-pip install -e ../ldpred3"[fast]"
-pip install -e ."[fast,test]"
+conda create -n bipred -c conda-forge python-gil=3.14 numpy numba pip
+conda activate bipred
+python -m pip install "ldpred3 @ git+https://github.com/bvilhjal/ldpred3.git@3444da10aa98d67f764c25756794b27f737244a3"
+python -m pip install "bipred @ git+https://github.com/bvilhjal/bipred.git"
 ```
 
-`[fast]` installs Numba support and is strongly recommended. `msprime` is only
-needed for benchmark scripts.
+`python-gil` deliberately selects standard CPython. Conda may otherwise choose
+the separate free-threaded `cp314t` build, which is not the CI compatibility
+target.
+
+For local development with sibling checkouts:
+
+```bash
+python -m pip install -e "../ldpred3[fast]"
+python -m pip install -e ".[fast,test]"
+```
+
+`[sim]` installs only the `msprime` simulator. `[bench]` adds `msprime` and
+Matplotlib for the self-contained benchmark scripts. The HAPNEST and cached-LD
+benchmarks still need their documented external data.
 
 ## Quickstart
 
@@ -46,6 +68,12 @@ res.rg                       # genetic correlation
 res.beta1_est, res.beta2_est # posterior-mean effects for PRS scoring
 res.mixer                    # polygenic-overlap summary
 ```
+
+`res.sigma` is the mean of retained covariance iterates.
+`res.mixer_iterate_summary()` returns empirical retained-chain intervals;
+because the covariance uses a damped moment update rather than a conditional
+posterior draw, these are not Bayesian credible intervals.
+`res.mixer_posterior()` remains only as a deprecated compatibility alias.
 
 For genome-wide runs, stream dense LD blocks:
 

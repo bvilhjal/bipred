@@ -5,6 +5,8 @@ polygenic-overlap outputs. For basic usage, start with [guide.md](guide.md).
 
 ## Estimators
 
+**Table 1. Genetic-correlation estimators.**
+
 | estimator | best use | main caveat |
 |---|---|---|
 | `res.rg` from `ldpred3_auto_bivariate[_blocks]` | default estimate; highest precision in benchmarks | needs dense LD blocks |
@@ -15,12 +17,14 @@ polygenic-overlap outputs. For basic usage, start with [guide.md](guide.md).
 The joint estimator uses the full LD likelihood. Cross-trait LDSC is a
 method-of-moments regression:
 
+**Equation 1. Cross-trait LD Score regression.**
+
 ```text
 E[z1_j z2_j] = intercept + (sqrt(N1 N2) * rho_g / M) * LD_score_j
 ```
 
-The intercept captures cross-trait sampling-noise correlation from sample
-overlap; the slope gives genetic covariance.
+The intercept captures cross-trait sampling-noise correlation and correlated
+confounding; the slope gives genetic covariance under the LDSC assumptions.
 
 ## Practical recommendation
 
@@ -58,6 +62,8 @@ res = ldpred3_auto_bivariate_blocks(
 
 When the overlap is known:
 
+**Equation 2. Sampling-noise correlation from shared samples.**
+
 ```text
 cross_corr = N_shared * rho_pheno / sqrt(N1 * N2)
 ```
@@ -65,7 +71,7 @@ cross_corr = N_shared * rho_pheno / sqrt(N1 * N2)
 For fully shared samples, this reduces to the phenotypic correlation among the
 shared individuals.
 
-When the overlap is unknown, estimate it from cross-trait LDSC:
+When the overlap is unknown, approximate it from cross-trait LDSC:
 
 ```python
 from bipred import ldsc_rg, estimate_sample_overlap
@@ -74,8 +80,14 @@ rgr = ldsc_rg(beta_hat1, beta_hat2, ld_scores, n1, n2)
 estimate_sample_overlap(rgr, n1, n2, pheno_corr=0.4)
 ```
 
-On small panels the LDSC intercept is noisy; treat it as a detector more than a
-precise shared-sample count. At real GWAS scale it is better anchored.
+The intercept does not uniquely identify overlap: correlated population
+structure, measurement effects, and other cross-trait confounding can contribute
+too. The inversion also requires a non-zero assumed phenotypic correlation.
+Under an overlap-only model with a positive intercept and phenotypic correlation,
+`pheno_corr=1` returns the effective overlap and the minimum shared-sample count
+compatible with `|rho_pheno| <= 1`; it is a lower bound, not an upper bound. On
+small panels the intercept is noisy; treat it as an indicator of cross-trait
+sampling correlation or confounding, not as a specific overlap detector.
 
 `cross_corr=0` is fine for independent studies and first-pass analyses, but
 overlap can bias `r_g` upward, especially near true `r_g = 0`.
@@ -87,12 +99,16 @@ that correlation belongs in the sampling-noise term, not in genetic covariance.
 Use the same `cross_corr` mechanism. Cross-trait LDSC handles it through the free
 intercept.
 
-Benchmarks in `benchmarks/rg_env_overlap.py` recover genetic `r_g` under tested
-environmental correlations when the correction is supplied.
+`benchmarks/rg_env_overlap.py` is a stress test, not evidence of guaranteed
+recovery. The committed run shows high variance in the bivariate estimator and
+a failed corrected cell at true `r_g=0`, `r_e=0.6`; inspect every row and its
+standard deviation before interpreting the correction.
 
 ## Polygenic overlap
 
 `res.mixer` derives overlap quantities from the four-state mixture:
+
+**Equation 3. Polygenic-overlap decomposition.**
 
 ```text
 pi1 = pi10 + pi11
@@ -125,8 +141,8 @@ For count-sensitive analyses:
 - set `noise_inflation=True` to reduce reference-mismatch inflation,
 - use `res.mixer_calibrated(infer1, infer2)` to anchor per-trait counts on
   univariate ldpred3 fits,
-- use `res.mixer_posterior()` for posterior intervals conditional on the supplied
-  LD reference, and
+- use `res.mixer_iterate_summary()` for empirical intervals across retained `pi`
+  draws and covariance iterates (not Bayesian credible intervals), and
 - report that the absolute counts are MiXeR-style summaries, not a replacement
   for a dedicated causal-mixture likelihood.
 

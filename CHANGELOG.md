@@ -57,24 +57,23 @@ follow [Semantic Versioning](https://semver.org/).
   variant for asymmetric-power pairs), the four-state causal mixture
   `(π₀₀, π₁₀, π₀₁, π₁₁)`, and posterior-mean effects that let a well-powered
   trait sharpen a correlated under-powered one. Sample overlap is handled via
-  `cross_corr`; the effect-covariance `Σ` is regularised by an inverse-Wishart
-  diagonal prior (`iw_df`).
+  `cross_corr`; the effect-covariance `Σ` uses an inverse-Wishart-inspired
+  diagonal shrinkage target (`iw_df`) in a damped moment update.
 - **MiXeR-style polygenic-overlap parameters** (`BivariateResult.mixer` and
   `.mixer_calibrated`): per-trait and shared polygenicity, the shared fraction,
   the within-shared effect correlation `ρ_β`, and the `r_g` overlap
   decomposition. `mixer_calibrated` anchors the absolute counts on two univariate
   `ldpred3_auto_infer` runs.
-- **Posterior distribution of the overlap counts** — `BivariateResult.mixer_posterior(level=0.95)`.
-  The sampler now retains the post-burn-in mixture / effect-covariance draws
-  (`pi_samples`, `sigma_samples`), and `mixer_posterior` maps each draw through
-  the MiXeR decomposition to return the posterior **mean + credible interval**
-  for `n_causal`, `n_shared`, `frac_shared`, `ρ_β` and `rg_from_overlap` — the
-  posterior overlap counts given the prior and data, rather than only the
-  `mixer` point estimate. Validated on known-truth simulations: under a matched
-  LD reference the interval is calibrated and covers the truth; the interval
-  captures sampling uncertainty, **not** LD-reference-mismatch bias (which
-  inflates the absolute counts, growing with N, and is an LD-quality issue — the
-  ratios stay reliable regardless).
+- **Retained-iterate summaries for overlap counts** —
+  `BivariateResult.mixer_iterate_summary(level=0.95)`. The sampler retains
+  post-burn-in mixture draws and effect-covariance iterates (`pi_samples`,
+  `sigma_samples`) and maps them through the MiXeR decomposition to return an
+  empirical mean and central iterate interval for `n_causal`, `n_shared`,
+  `frac_shared`, `ρ_β`, and `rg_from_overlap`. Because `Sigma` receives a damped
+  moment update rather than a conditional posterior draw, these are not Bayesian
+  credible intervals and no calibration claim is made. They also do not capture
+  LD-reference-mismatch bias. The old `mixer_posterior()` name remains as a
+  deprecated compatibility alias.
 - **Noise-inflation option for calibrated absolute counts** —
   `ldpred3_auto_bivariate*(..., noise_inflation=True)`. Learns a per-trait
   LDSC-intercept-style factor `λ_t ≥ 1` from the residual misfit
@@ -88,7 +87,7 @@ follow [Semantic Versioning](https://semver.org/).
   ~1.6× at N=200k (a scalar `λ` can't absorb structured mismatch entirely). Off
   by default; the learned factors are on `BivariateResult.noise_scale`. New
   `benchmarks/mixer_overlap.py` `calibration` sweep reports the on/off relative
-  polygenicity, `λ`, and `mixer_posterior` coverage across power.
+  polygenicity, `λ`, and retained-iterate interval inclusion across power.
 - **Cross-trait LD Score regression** (`ldsc_rg`, `LDSCRgResult`,
   `estimate_sample_overlap`), moved from ldpred3 so bipred owns *all*
   genetic-correlation estimation. It is the fast, moment-based `r_g` estimator and

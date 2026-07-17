@@ -4,12 +4,11 @@ The hard case for rg: two traits measured on the *same* individuals whose
 **environments** are correlated (`re`) even though the traits may be genetically
 uncorrelated. The shared environment makes the phenotypes correlate, which a
 naive genetic-correlation estimate reads as genetic — a false positive. This
-demonstrates that the corrections recover the true **genetic** rg regardless of
-`re`:
+stress-tests the proposed corrections; it does not assume that they recover the
+true **genetic** rg in every cell:
 
   - bivariate **LDSC** with a free cross-trait intercept — the intercept absorbs
-    the overlap automatically (no knowledge of `re` needed); constraining it to 0
-    leaves the environmental confounding in the estimate.
+    the free and constrained fits are compared directly.
   - bivariate **LDpred3** with ``cross_corr`` set to the phenotypic correlation on
     the overlap (here read straight off the shared cohort, or from the LDSC
     intercept); ``cross_corr=0`` leaves the bias.
@@ -90,6 +89,7 @@ def run_cell(rg, re, seed):
 
 
 def agg(x):
+    """Summarize the script's documented diagnostic window, ``|rg| <= 1.5``."""
     x = np.asarray(x, float)
     x = x[np.abs(x) <= 1.5]
     return (float(np.mean(x)), float(np.std(x))) if x.size else (float("nan"), float("nan"))
@@ -99,6 +99,8 @@ def main():
     rows = []
     print(f"Genetic correlation under environmental overlap — real genotypes, both "
           f"traits on the SAME N={N} individuals (m={G.M}, h2={H2}, {REPS} reps)\n")
+    print("Summary means/SDs exclude non-finite estimates and |rg| > 1.5; inspect "
+          "raw runs when diagnosing divergence.\n")
     print(f"{'rg':>4} {'re':>4} | {'LDSC free':>13} | {'LDSC icpt=0':>13} | "
           f"{'biv cc=0':>13} | {'biv cc=rho':>13} | {'LDSC icpt':>9}")
     print("-" * 86)
@@ -117,9 +119,8 @@ def main():
     with open(os.path.join(HERE, "rg_env_overlap.csv"), "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
         w.writeheader(); w.writerows(rows)
-    print("\nThe two corrected columns (LDSC free intercept, biv cc=rho) recover the "
-          "true genetic rg;\nthe naive columns (icpt=0, cc=0) inflate with re — a "
-          "spurious genetic correlation from shared environment.")
+    print("\nCompare every corrected and uncorrected cell with rg_true, including "
+          "its SD. This stress test can expose an unstable or biased correction.")
     print("wrote rg_env_overlap.csv")
 
 

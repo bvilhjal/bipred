@@ -23,11 +23,11 @@ import os
 import sys
 import csv
 import time
-import resource
 
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from benchmarks._benchmark_utils import peak_rss_bytes                      # noqa: E402
 from ldpred3 import ld_scores                                            # noqa: E402
 from bipred import ldsc_rg, ldpred3_auto_bivariate_blocks                # noqa: E402
 from ldpred3.simulate import simulate_genotypes_by_mutation_rate          # noqa: E402
@@ -269,8 +269,7 @@ def main():
             _write_csv(csv_path, rows)          # checkpoint after every cell
     if not os.environ.get("OUT"):
         make_figure(rows)
-    mem = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    mem_gb = mem / 1e9 if sys.platform == "darwin" else mem / 1e6
+    mem_gb = peak_rss_bytes() / 1e9
     t_ld = np.mean([r["ldsc_t"] for r in rows])
     t_bp = np.mean([r["ldpred3_t"] for r in rows])
     print(f"\nmean time/fit: LDSC {t_ld*1000:.1f} ms, bivariate LDpred3 {t_bp:.2f} s "

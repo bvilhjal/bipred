@@ -25,10 +25,12 @@ import sys
 import csv
 import json
 import time
-import resource
 import subprocess
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from _benchmark_utils import peak_rss_bytes                         # noqa: E402
+
 K = 200                                # SNPs per (unique coalescent) block
 RG = 0.5                               # true genetic correlation for the sweep
 BURN, ITER = 150, 180                  # per-fit sampler sweeps (as rg_architectures)
@@ -65,8 +67,7 @@ def _worker(m):
                                           burn_in=BURN, num_iter=ITER, seed=1).rg
     t_ldpred3 = time.perf_counter() - t
 
-    mem = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    mem_gb = mem / 1e9 if sys.platform == "darwin" else mem / 1e6
+    mem_gb = peak_rss_bytes() / 1e9
     print("RESULT " + json.dumps(
         {"m": m, "nb": nb, "t_ldsc": t_ldsc, "t_ldpred3": t_ldpred3,
          "mem_gb": mem_gb, "rg_ldsc": rg_ldsc, "rg_ldpred3": rg_bp,

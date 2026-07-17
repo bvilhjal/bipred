@@ -25,12 +25,12 @@ import os
 import sys
 import csv
 import time
-import resource
 
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+from _benchmark_utils import peak_rss_bytes                         # noqa: E402
 import rg_architectures as R                                      # noqa: E402
 from bipred import ldsc_rg, ldpred3_auto_bivariate_blocks         # noqa: E402
 
@@ -108,8 +108,7 @@ def main():
             w.writeheader()
             w.writerows(rows)
 
-    mem = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    mem_gb = mem / 1e9 if sys.platform == "darwin" else mem / 1e6
+    mem_gb = peak_rss_bytes() / 1e9
     print(f"\npeak RSS {mem_gb:.2f} GB  (incl. the one-time LD build)  "
           f"| total {time.time() - t0:.0f}s")
     if not os.environ.get("OUT"):                # single-p workers skip the figure

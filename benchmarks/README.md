@@ -8,10 +8,30 @@ by the [`bipred`](../) package — the joint fit (`ldpred3_auto_bivariate`,
 (LD scores, `ldpred3_auto_infer` / `ldpred3_by_blocks`, simulation helpers) from
 `ldpred3`. Both `bipred` and `ldpred3` must be installed to run them.
 
-Run single-core for stable timings:
+From a checkout, `[bench]` installs the dependencies for the self-contained
+simulation and plotting scripts:
 
 ```bash
-OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python benchmarks/<script>.py
+python -m pip install -e ".[fast,bench]"
+```
+
+`[sim]` is deliberately narrower: it installs `msprime` only. HAPNEST and
+`bivariate_demo.py` still require the external inputs described below.
+
+Run single-core for stable timings on POSIX shells:
+
+```bash
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+  python benchmarks/<script>.py
+```
+
+The PowerShell equivalent on Windows is:
+
+```powershell
+$env:OPENBLAS_NUM_THREADS = "1"
+$env:OMP_NUM_THREADS = "1"
+$env:MKL_NUM_THREADS = "1"
+python benchmarks/<script>.py
 ```
 
 Most scripts simulate a **realistic non-repeating coalescent** genome, so they
@@ -20,7 +40,15 @@ need `msprime` (`pip install msprime`). Population LD is cached under
 `ld_library.npz` (100 blocks × 500×500 correlation matrices) from the working
 directory rather than simulating.
 
+Peak RSS is measured with `resource.getrusage` on POSIX and the Windows process
+API on Windows. Wall time and process-start overhead are platform-dependent;
+model validation, interval semantics, and sampler allocation behavior are not
+Windows-specific package defects. Windows is an operating system, not an
+alibi.
+
 ## Scripts
+
+**Table 1. Benchmark scripts and their external simulation requirements.**
 
 | Script | What it measures | Needs msprime |
 |--------|------------------|:---:|
@@ -32,7 +60,7 @@ directory rather than simulating.
 | `overlap_estimation.py` | Bivariate rg sensitivity to sample overlap and how to set `cross_corr` (→ `overlap_estimation.csv`) | ✓ |
 | `sample_overlap.py` | Validates the sample-overlap corrections (free LDSC intercept, bivariate `cross_corr`) on the realistic non-repeating rg LD; also per-fit timing | ✓ |
 | `bivariate_demo.py` | Bivariate prediction gain for a weak trait across two-trait architectures (needs `ld_library.npz` in the cwd) | — |
-| `rg_env_overlap.py` | Genetic rg recovered under **environmental** correlation on shared samples (real individual-level genotypes) (→ `rg_env_overlap.csv`) | ✓ |
+| `rg_env_overlap.py` | Stress test of genetic-rg estimators under **environmental** correlation on shared samples; current results include unstable corrected cells and `agg()` excludes `|rg| > 1.5` (→ `rg_env_overlap.csv`) | ✓ |
 | `hapnest/run_bivariate.py` | rg / h² / MiXeR-overlap recovery **and** out-of-sample PRS gain (bivariate vs univariate) on **HAPNEST** genotypes+phenotypes — synthetic genomes resampled from a real 1000G+HGDP reference, so real LD/MAF/structure with known truth (→ `hapnest/run_bivariate.csv`). See [`hapnest/README.md`](hapnest/README.md). | — (needs HAPNEST) |
 
 `rg_env_overlap.py` reuses the univariate `infer_vs_ldsc_sbayes.py` benchmark

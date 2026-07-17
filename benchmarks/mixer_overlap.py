@@ -26,8 +26,8 @@ replicates on fixed genotypes:
   * ``calibration`` -- on the (realistic) finite reference panel, compares the
     naive count with the **noise-inflation fix** (``noise_inflation=True``): the
     learned per-trait lambda deflates the *mismatch*-inflated polygenicity back
-    toward the truth with h2/rg unchanged, and reports whether the 95%
-    ``mixer_posterior`` credible interval covers the true causal count.
+    toward the truth with h2/rg unchanged, and reports whether the empirical 95%
+    retained-iterate interval includes the true causal count.
   * ``unical`` -- **univariate-anchored calibration** (``res.mixer_calibrated``):
     the four-state count over-counts *more* than a univariate fit (LD-spreading is
     amplified across the four states), so this swaps the joint per-trait counts for
@@ -226,18 +226,19 @@ def sweep_ldmatch(rows):
 
 
 def sweep_calibration(rows):
-    """Absolute-count calibration and posterior credible-interval coverage on the
+    """Absolute-count calibration and retained-iterate interval inclusion on the
     finite reference panel (the realistic, mismatched-LD case), across power.
 
     Compares the naive count (``noise_inflation=False``) with the noise-inflation
     fix (``True``): the fix learns a per-trait lambda >= 1 from the residual misfit
     and deflates the mismatch-inflated polygenicity back toward the truth, while
-    ``h2`` / ``rg`` are unchanged. Also reports whether the 95% credible interval
-    from ``mixer_posterior`` covers the true per-trait causal count."""
-    print("\n== count calibration + posterior coverage (ref-panel LD, "
+    ``h2`` / ``rg`` are unchanged. Also reports whether the empirical 95%
+    interval from ``mixer_iterate_summary`` includes the true per-trait causal
+    count. This is not Bayesian credible-interval coverage."""
+    print("\n== count calibration + retained-iterate inclusion (ref-panel LD, "
           "p=0.10/trait, frac_shared=0.5, rho_beta=0.8) ==", flush=True)
     print(f"{'N':>8} {'Nh2/M':>6} | {'rel off':>7} {'rel ON':>6} {'lam':>5} | "
-          f"{'cov off':>7} {'cov ON':>6} | {'rg off':>6} {'rg ON':>6}", flush=True)
+          f"{'hit off':>7} {'hit ON':>6} | {'rg off':>6} {'rg ON':>6}", flush=True)
     true_n1 = NCAUSAL
     for i, n in enumerate([1000, 2500, 5000, 10000, 20000]):
         ro, rn, lam, covo, covn, rgo, rgn = [], [], [], 0, 0, [], []
@@ -256,13 +257,16 @@ def sweep_calibration(rows):
             lam.append(0.5 * (on.noise_scale[0] + on.noise_scale[1]))
             rgo.append(off.rg); rgn.append(on.rg)
             for res, hit in ((off, "o"), (on, "n")):
-                ci = res.mixer_posterior()["n_causal"][0]["ci"]
-                covered = ci[0] <= true_n1 <= ci[1]
+                interval = res.mixer_iterate_summary()["n_causal"][0]["interval"]
+                covered = interval[0] <= true_n1 <= interval[1]
                 if hit == "o":
                     covo += covered
                 else:
                     covn += covered
         m = lambda a: round(float(np.mean(a)), 3)  # noqa: E731
+        # Keep the historical cov_* CSV columns so regenerated artifacts remain
+        # comparable. They now mean empirical iterate-interval inclusion, not
+        # posterior/credible-interval coverage.
         r = {"sweep": "calibration", "N": n, "true_rg": 0.4,
              "rel_off": m(ro), "rel_on": m(rn), "lam": m(lam),
              "cov_off": covo / REPS, "cov_on": covn / REPS,

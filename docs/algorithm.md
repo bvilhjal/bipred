@@ -3,6 +3,8 @@
 bipred extends LDpred3-auto to two traits sharing one LD reference. It uses the
 same summary-statistic model as univariate LDpred:
 
+**Equation 1. Per-trait summary-statistic model.**
+
 ```text
 beta_hat_t = R beta_t + error_t
 ```
@@ -14,6 +16,8 @@ their cross-trait covariance.
 ## Four-state effect model
 
 Each variant belongs to one latent state:
+
+**Table 1. Four-state effect prior.**
 
 | state | meaning | effect prior |
 |---|---|---|
@@ -30,7 +34,7 @@ This per-trait state structure is the important design choice. Shared causal
 variants are learned through `pi11`; they are not forced. When the data support
 little overlap, the shared state can shrink and the two fits largely decouple.
 
-## Gibbs sampler
+## Sampler and hyperparameter updates
 
 For each sweep and SNP, the sampler:
 
@@ -43,17 +47,21 @@ For each sweep and SNP, the sampler:
 After each sweep, the global mixture and covariance parameters are updated:
 
 - `pi` is drawn from a Dirichlet posterior with concentration `pi_prior`,
-- `s1`, `s2`, and `s12` are updated from sampled effects,
-- the covariance update is shrunk toward a weak diagonal prior controlled by
-  `iw_df`, and
+- `s1`, `s2`, and `s12` receive a damped moment update from the sampled effects,
+  shrunk toward a weak diagonal target controlled by `iw_df`, and
 - optional `noise_inflation=True` learns per-trait residual noise factors.
 
-The shrinkage keeps `Sigma` positive definite and avoids the older ad hoc
-heritability pre-pass. `h2_cap` remains available as an expert clamp.
+The covariance update is deterministic conditional on the sampled effects; it
+is not a conditional inverse-Wishart draw. The shrinkage keeps `Sigma` positive
+definite and avoids the older ad hoc heritability pre-pass. `res.sigma` is the
+mean of the retained covariance iterates, while `res.pi` is the mean of the
+retained Dirichlet draws. `h2_cap` remains available as an expert clamp.
 
 ## Genetic Correlation
 
 The target is:
+
+**Equation 2. LD-adjusted genetic correlation.**
 
 ```text
 r_g = beta1' R beta2 / sqrt((beta1' R beta1) * (beta2' R beta2))
@@ -74,6 +82,8 @@ heritability estimates are unstable.
 ## Polygenic Overlap
 
 The four-state mixture gives a MiXeR-style decomposition:
+
+**Equation 3. Polygenic-overlap decomposition.**
 
 ```text
 pi1 = pi10 + pi11
@@ -103,8 +113,12 @@ Mitigations:
   ldpred3 fits, and
 - validate count calibration with simulations when counts are a primary result.
 
-`res.mixer_posterior()` summarizes posterior uncertainty conditional on the
-supplied LD reference. It does not capture bias from LD-reference mismatch.
+`res.mixer_iterate_summary()` reports empirical means and quantile intervals
+across retained `pi` draws and `Sigma` iterates. These are retained-chain
+intervals, not Bayesian credible intervals, because `Sigma` is updated by a
+damped moment step rather than sampled from its conditional posterior. They also
+do not capture bias from LD-reference mismatch. `res.mixer_posterior()` is a
+deprecated compatibility alias.
 
 ## Prediction
 
