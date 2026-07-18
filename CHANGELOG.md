@@ -18,7 +18,7 @@ follow [Semantic Versioning](https://semver.org/).
   while starts vary. Seeded outputs change because this corrects the actual
   starting covariance rather than merely relabelling it.
 - **int8 is now the default LD representation** for the bivariate sampler,
-  matching ldpred3. LD blocks are stored int8-quantised
+  matching ldpred3's pipeline default. LD blocks are stored int8-quantised
   (`round(clip(R, -1, 1) * 127)`, scale `1/127`) — a quarter of the float32
   memory — and dequantised on the fly in the inner loop (`corr[i, j] * scale`);
   the unit diagonal quantises exactly (`127/127 == 1`). The quantisation error is
@@ -91,10 +91,11 @@ follow [Semantic Versioning](https://semver.org/).
   reference the residual is pure sampling noise so `λ ≈ 1` (a no-op); under
   LD-reference mismatch it is inflated, so `λ > 1` makes the sampler stop reading
   the misfit as extra polygenicity. This removes the **N-growing** component of
-  the polygenic-overlap count inflation with `h²`/`rg` unchanged: on
-  well-conditioned LD the counts calibrate ~fully (e.g. n₁ 909→309 vs truth 300
-  at N=200k), and on realistic coalescent LD it cuts the inflation from ~2.4× to
-  ~1.6× at N=200k (a scalar `λ` can't absorb structured mismatch entirely). Off
+  the polygenic-overlap count inflation with `h²`/`rg` unchanged: in the
+  committed `calibration` sweep (`benchmarks/mixer_overlap.csv`, N = 1k-20k),
+  the reference-mismatch count inflation rises to ~1.2× with the option off and
+  is pulled back to ~1.0× with it on (learned `λ` ≈ 1.1-1.2; a scalar `λ` can't
+  absorb structured mismatch entirely). Off
   by default; the learned factors are on `BivariateResult.noise_scale`. New
   `benchmarks/mixer_overlap.py` `calibration` sweep reports the on/off relative
   polygenicity, `λ`, and retained-iterate interval inclusion across power.
@@ -111,9 +112,31 @@ follow [Semantic Versioning](https://semver.org/).
   sample-overlap corrections, MiXeR-style overlap recovery, and weak-trait
   prediction gain (`benchmarks/`, `docs/`).
 
+### Fixed
+- **Review follow-ups** (theory / documentation / implementation review; see
+  `REVIEW.md`). The shorthand initialization with `|rg_init| > 0.999` (and
+  `pi_init=None`) could produce negative single-trait mixture masses; the
+  shared mass now saturates at the union probability (an all-shared start),
+  keeping the implied moments exact. The fallback `rg` ratio now uses the
+  clamped `h2`-scale denominators, so a non-PD (int8-quantised) block can no
+  longer slam `rg` to ±1 through the variance floor. Validation tightening:
+  `h2_init` / `sigma_prior_scale` reject numeric strings, `ldsc_rg` sample
+  sizes reject mixed bool/string sequences, and `estimate_sample_overlap`
+  validates its result type. Documentation corrections: the `rg_decorrelated`
+  bias mechanism (same-sweep coupling *inflates* the genetic covariance; the
+  sampled-quadratic ratio attenuates through the weak trait's sampled
+  variance), the `res.h2` estimand, the Equation 1 noise covariance, the
+  `noise_inflation` × `cross_corr` interaction, the `PackedSymmetricInt8LD`
+  rejection, the full ldpred3 seam (Notes), and the `mixer_overlap.py` /
+  `bivariate_demo.py` benchmark-table rows; the noise-inflation numbers above
+  now match the committed calibration sweep.
+
 ### Notes
 - bipred depends on `ldpred3` (`>=` the release that removes the in-tree
   `bivariate` and cross-trait-`ldsc_rg` code) for the shared LD representations,
-  the Numba sampler shim and the univariate LDSC machinery. It imports `_jit`,
-  `_as_n_vector` and `LowRankLD` from `ldpred3.ldpred3`, and `_wls` / `_weights`
-  from `ldpred3.ldsc`.
+  the Numba sampler shim and the univariate LDSC machinery. The private seam:
+  `_jit`, `_as_n_vector`, `LowRankLD`, `PackedSymmetricInt8LD`, `_check_h2_p`,
+  `_finite_control`, `_integer_at_least`, `_validate_beta_hat`,
+  `_validate_blocks`, `_validate_boolean_controls`, `_validate_iterations` and
+  `_validate_seed` from `ldpred3.ldpred3`; `_wls` and `_weights` from
+  `ldpred3.ldsc`; and `_Q8` from `ldpred3._kernels`.

@@ -32,11 +32,12 @@ You need:
 4. Optional `cross_corr` if the GWAS share samples.
 
 bipred does not build LD or harmonize summary statistics. Use ldpred3 for that
-preparation. The bivariate sampler currently requires dense LD blocks; ldpred3
-`LowRankLD` blocks are rejected.
+preparation. The bivariate sampler currently requires dense LD blocks; ldpred3's
+compact representations (`LowRankLD` and packed-int8 `PackedSymmetricInt8LD`)
+are rejected.
 
 By default the LD is stored **int8**-quantised (a quarter of the float32 memory;
-the sampler dequantises on the fly), matching ldpred3's default representation.
+the sampler dequantises on the fly), matching ldpred3's pipeline default representation.
 int8 blocks from `ldpred3.compute_ld_blocks(quantize=True)` are consumed as-is;
 pass `ld_int8=False` for an exact dense-float32 fit. The quantisation error is
 negligible and the diagonal stays exactly 1.
@@ -75,7 +76,7 @@ res = ldpred3_auto_bivariate_blocks(
 | `p` | total non-null mixture fraction |
 | `sigma` | mean of the retained 2x2 effect-covariance iterates |
 | `pi` | `(pi00, pi10, pi01, pi11)` mixture: neither / trait 1 / trait 2 / both |
-| `noise_scale` | learned `(lambda1, lambda2)` if `noise_inflation=True` |
+| `noise_scale` | learned `(lambda1, lambda2)`; always present, `(1.0, 1.0)` when `noise_inflation=False` |
 
 Overlap summary:
 
@@ -211,7 +212,7 @@ analyses, but it can bias `r_g` upward when samples overlap strongly.
 | `pi_prior` | `1.0` | symmetric Dirichlet mixture prior |
 | `h2_bounds`, `h2_cap` | `(1e-4, 1.0)`, `None` | heritability clamps |
 | `iw_df` | `10.0` | shrinkage strength for the moment update of `sigma` |
-| `sample_every` | `5` | thinning for retained effect samples |
+| `sample_every` | `5` | thinning for retained effect samples (only with `rg_decorrelated=True`) |
 | `seed` | `None` | RNG seed |
 
 ## Pitfalls

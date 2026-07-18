@@ -83,13 +83,13 @@ def _finite_pair(name, value):
 
 def _finite_scalar_or_pair(name, value):
     """Return a positive finite pair, expanding a scalar to both traits."""
-    if isinstance(value, (bool, np.bool_)):
+    if isinstance(value, (bool, np.bool_, str, bytes)):
         raise ValueError(f"{name} must be a positive finite scalar or pair")
     try:
         raw = np.asarray(value, dtype=object)
     except (TypeError, ValueError, OverflowError):
         raise ValueError(f"{name} must be a positive finite scalar or pair") from None
-    if any(isinstance(x, (bool, np.bool_)) for x in raw.flat):
+    if any(isinstance(x, (bool, np.bool_, str, bytes)) for x in raw.flat):
         raise ValueError(f"{name} must be a positive finite scalar or pair")
     try:
         arr = raw.astype(float, copy=False)
@@ -132,6 +132,12 @@ def _initial_hyperparameters(m, h2_init, p_init, rg_init, pi_init=None):
                 shared,
                 abs(rg_init) * q / (2.0 * _INIT_RHO_MAX - abs(rg_init)),
             )
+        # |rg_init| above the 0.999 boundary would require more shared mass
+        # than the union probability. Saturate at an all-shared start rather
+        # than producing negative single-trait mass: with single == 0 the
+        # implied rg equals rho_beta = rg_init, so the implied moments stay
+        # exact for every rg_init in (-1, 1).
+        shared = min(shared, q)
         single = (q - shared) / 2.0
         pi = np.array([1.0 - q, single, single, shared], dtype=float)
     else:
@@ -627,11 +633,14 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     ``blocks`` is ``[(R, idx), ...]`` with contiguous ``idx`` arrays partitioning
     ``0..m-1``. The two traits share the same LD. Effects are updated block by
     block while ``pi`` and ``Sigma`` are pooled globally, so the genome-wide LD is
-    never materialised. Compact ``LowRankLD`` blocks are not supported.
+    never materialised. Compact ldpred3 representations (``LowRankLD`` and
+    packed-int8 ``PackedSymmetricInt8LD``) are not supported; pass dense float
+    or dense int8 blocks.
 
     By default the LD is stored **int8**-quantised (a quarter of the float32
-    memory; the sampler dequantises on the fly), matching ldpred3's default
-    representation. int8 blocks from ``ldpred3.compute_ld_blocks(quantize=True)``
+    memory; the sampler dequantises on the fly), matching ldpred3's
+    pipeline default representation. int8 blocks from
+    ``ldpred3.compute_ld_blocks(quantize=True)``
     are consumed as-is; pass ``ld_int8=False`` to keep dense float32.
 
     Parameters
@@ -892,7 +901,10 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
             if v1 > 0.0 and v2 > 0.0:
                 rg = float(min(max(num / np.sqrt(v1 * v2), -1.0), 1.0))
     if rg is None:
-        rg = float(min(max(g12 / np.sqrt(max(g11 * g22, 1e-12)), -1.0), 1.0))
+        # Use the reported (clamped) h2 scale for the denominator: raw sampled
+        # quadratics can go non-positive on non-PD (int8-quantised) blocks,
+        # which would slam rg to +/-1 through the floor.
+        rg = float(min(max(g12 / np.sqrt(h2_1 * h2_2), -1.0), 1.0))
     # Summarise both hyperparameters over exactly the same retained iterates.
     pi_mean = pi_samples.mean(axis=0)
     s1_mean, s2_mean, s12_mean = sig_samples.mean(axis=0)

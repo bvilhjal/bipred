@@ -87,11 +87,12 @@ res = ldpred3_auto_bivariate_blocks(
 ```
 
 `blocks` must be `[(R, idx), ...]` with dense LD matrices and contiguous indices
-that partition `0..m-1`. The current bivariate sampler rejects ldpred3 low-rank
-`LowRankLD` blocks.
+that partition `0..m-1`. The current bivariate sampler rejects ldpred3's compact
+representations (low-rank `LowRankLD` and packed-int8 `PackedSymmetricInt8LD`);
+pass dense float or dense int8 blocks.
 
 By default the LD is stored **int8**-quantised (a quarter of the float32 memory;
-the sampler dequantises on the fly), matching ldpred3's default. int8 blocks from
+the sampler dequantises on the fly), matching ldpred3's pipeline default. int8 blocks from
 `ldpred3.compute_ld_blocks(quantize=True)` are used as-is; pass `ld_int8=False`
 for an exact dense-float32 fit.
 

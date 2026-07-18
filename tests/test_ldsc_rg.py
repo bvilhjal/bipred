@@ -121,6 +121,8 @@ def test_ldsc_rg_validates_summary_statistic_vectors(name, bad):
     ("n_eff1", np.ones(3)),
     ("n_eff2", -1.0),
     ("n_eff2", np.ones(4, dtype=bool)),
+    ("n_eff1", [True, 100.0, 100.0, 100.0]),
+    ("n_eff2", "100"),
     ("n_eff2", np.array([100.0, 100.0, np.nan, 100.0])),
 ])
 def test_ldsc_rg_validates_sample_sizes(name, bad):
@@ -222,3 +224,43 @@ def test_golden_ldsc_rg():
     ell = ld_scores(blocks)
     res = ldsc_rg(beta_hat, _beta_hat2(beta_hat, m), ell, 10000, 10000, m_snps=m)
     np.testing.assert_allclose(res.rg, _LDSC_RG, rtol=1e-6)
+
+
+def test_estimate_sample_overlap_requires_result_type():
+    with pytest.raises(ValueError, match="LDSCRgResult"):
+        estimate_sample_overlap(0.1, 60000.0, 40000.0)
+
+
+def test_ldsc_rg_constrain_intercept_recovers_rg():
+    # Fixing the cross-trait intercept at its true value (0: no sample
+    # overlap) leaves the genetic-correlation estimate on target.
+    k, nb, n1, n2 = 200, 60, 40000, 20000
+    blocks, chols = _varied_blocks(nb, k, seed=5)
+    m = nb * k
+    idxs = [np.arange(b * k, (b + 1) * k) for b in range(nb)]
+    ell = ld_scores(blocks)
+
+    def gv(a, b):
+        return sum(a[ix] @ (blocks[i][0].astype(float) @ b[ix])
+                   for i, ix in enumerate(idxs))
+
+    def sumstats(beta, n, rng):
+        bh = np.empty(m)
+        for i, ix in enumerate(idxs):
+            bh[ix] = blocks[i][0].astype(float) @ beta[ix] + \
+                (chols[i] @ rng.standard_normal(k)) / np.sqrt(n)
+        return bh
+
+    ests = []
+    for rep in range(5):
+        rng = np.random.default_rng(180 + rep)
+        c = rng.random(m) < 0.05
+        L = np.linalg.cholesky([[1, 0.6], [0.6, 1]])
+        raw = L @ rng.standard_normal((2, c.sum()))
+        b1 = np.zeros(m); b2 = np.zeros(m); b1[c] = raw[0]; b2[c] = raw[1]
+        b1 *= np.sqrt(0.5 / gv(b1, b1)); b2 *= np.sqrt(0.5 / gv(b2, b2))
+        res = ldsc_rg(sumstats(b1, n1, rng), sumstats(b2, n2, rng), ell,
+                      n1, n2, n_blocks=60, constrain_intercept=0.0)
+        assert res.gcov_intercept == 0.0
+        ests.append(res.rg)
+    assert abs(np.mean(ests) - 0.6) < 0.15, np.mean(ests)

@@ -56,10 +56,17 @@ def _as_finite_vector(value, name):
 
 def _as_sample_size(value, name, m):
     """Return a positive finite scalar sample size expanded to length m, or a vector."""
-    if np.asarray(value).dtype.kind == "b":
+    if isinstance(value, (bool, np.bool_, str, bytes)):
         raise ValueError(f"{name} must be a positive finite scalar or length-m vector")
     try:
-        value = np.asarray(value, dtype=float)
+        raw = np.asarray(value, dtype=object)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be a positive finite scalar or length-m vector") \
+            from None
+    if any(isinstance(x, (bool, np.bool_, str, bytes)) for x in raw.flat):
+        raise ValueError(f"{name} must be a positive finite scalar or length-m vector")
+    try:
+        value = raw.astype(float)
     except (TypeError, ValueError):
         raise ValueError(f"{name} must be a positive finite scalar or length-m vector") \
             from None
@@ -290,6 +297,8 @@ def estimate_sample_overlap(rg_result, n_eff1, n_eff2, pheno_corr=1.0):
         raise ValueError("pheno_corr must lie in [-1, 1]")
     if rho == 0.0:
         raise ValueError("pheno_corr must be non-zero to solve for N_shared")
+    if not isinstance(rg_result, LDSCRgResult):
+        raise ValueError("rg_result must be an LDSCRgResult returned by ldsc_rg")
     overlap_corr = _as_finite_scalar(
         rg_result.gcov_intercept, "rg_result.gcov_intercept")
     effective_overlap = overlap_corr * float(np.sqrt(n1) * np.sqrt(n2))

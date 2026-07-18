@@ -9,9 +9,14 @@ same summary-statistic model as univariate LDpred:
 beta_hat_t = R beta_t + error_t
 ```
 
-where `R` is the LD correlation matrix and `error_t` has variance determined by
-the effective sample size. The bivariate extension models two effect vectors and
-their cross-trait covariance.
+where `R` is the LD correlation matrix. The sampling errors have
+`Var(error_tj) = 1/N_t` per trait and cross-trait covariance
+`Cov(error_1j, error_2j) = cross_corr / sqrt(N_1 N_2)` from correlated sampling
+noise (sample overlap). The bivariate extension models two effect vectors and
+their cross-trait covariance. The per-SNP conditional update treats the noise
+as independent across variants with these per-trait variances (the usual
+LDpred-style diagonal approximation), keeping only the cross-trait correlation
+`cross_corr` at each variant.
 
 ## Four-state effect model
 
@@ -40,8 +45,10 @@ little overlap, the shared state can shrink and the two fits largely decouple.
 is the initial union probability `P(trait 1 or trait 2 causal)`; by default its
 non-null mass is divided equally among `10`, `01`, and `11`. For large
 `|rg_init|`, the shorthand increases the initial shared mass just enough to keep
-the within-shared covariance positive definite. Supply `pi_init` to specify the
-overlap directly.
+the within-shared covariance positive definite; above the sampler's 0.999
+boundary the shared mass saturates at the union probability (an all-shared
+start), which keeps the implied moments exact for any `rg_init` in `(-1, 1)`.
+Supply `pi_init` to specify the overlap directly.
 
 For an explicit `pi_init`, define marginal causal probabilities as follows:
 
@@ -84,10 +91,17 @@ For each sweep and SNP, the sampler:
 
 After each sweep, the global mixture and covariance parameters are updated:
 
-- `pi` is drawn from a Dirichlet posterior with concentration `pi_prior`,
+- `pi` is drawn from a Dirichlet posterior with prior concentration `pi_prior`
+  plus the sweep's state counts,
 - `s1`, `s2`, and `s12` receive a damped moment update from the sampled effects,
   shrunk toward a weak diagonal target controlled by `iw_df`, and
-- optional `noise_inflation=True` learns per-trait residual noise factors.
+- optional `noise_inflation=True` learns per-trait residual noise factors
+  `lambda_t >= 1` and fits with effective sample sizes `N_t / lambda_t`.
+
+When `noise_inflation` is combined with `cross_corr`, the deflated sample sizes
+also enter the cross-trait noise covariance `E12 = cross_corr / sqrt(N_1 N_2)`,
+so the learned excess noise is treated as cross-correlated at `cross_corr`.
+Keep this in mind when interpreting `lambda` under sample overlap.
 
 The covariance update is deterministic conditional on the sampled effects; it
 is not a conditional inverse-Wishart draw. The shrinkage keeps `Sigma` positive
@@ -106,12 +120,20 @@ r_g = beta1' R beta2 / sqrt((beta1' R beta1) * (beta2' R beta2))
 ```
 
 The default estimate uses sampled quadratic forms from the joint chain. This is
-the recommended estimator for most pairs because numerator and denominator are
-formed on the same shrinkage scale.
+the recommended estimator for most pairs: the posterior-noise inflation the
+sampling adds to each quadratic partially cancels between numerator and
+denominator.
+
+`res.h2` reports the denominators of that ratio: the mean sampled LD-adjusted
+quadratics `beta_t' R beta_t`, clamped to `h2_bounds`. Because they are formed
+from sampled (not Rao-Blackwellized) effects, they include posterior-noise
+variance and are mildly upward-biased at low power.
 
 Set `rg_decorrelated=True` for asymmetric-power pairs. It estimates the
-cross-trait covariance from effects sampled at different sweeps, reducing
-same-sweep noise coupling that can attenuate the weak trait's covariance.
+cross-trait covariance from effects sampled at different sweeps, removing
+the same-sweep noise coupling that inflates the genetic covariance, and recovers
+the weak trait's covariance from its posterior mean — the sampled-quadratic
+ratio attenuates it through the weak trait's inflated sampled variance.
 
 Cross-trait LDSC (`bipred.ldsc_rg`) is a separate moment-based estimator. It is
 fast and useful as a screen or cross-check, but it is noisier when marginal LDSC
@@ -169,11 +191,14 @@ the traits, but prediction gains still need out-of-sample validation.
 
 `ldpred3_auto_bivariate_blocks` streams dense LD blocks and pools global
 hyperparameters across them. The full genome-wide LD matrix is never
-materialized, but each block must currently be dense. Compact `LowRankLD` blocks
-are rejected by design until the bivariate kernel supports that representation.
+materialized, but each block must currently be dense. Compact `LowRankLD` and
+packed-int8 `PackedSymmetricInt8LD` blocks are rejected by design until the
+bivariate kernel supports those representations; pass dense float or dense
+int8 blocks.
 
 By default the LD is stored **int8**-quantised (`round(clip(R, -1, 1) * 127)`,
-scale `1/127`) — a quarter of the float32 memory, matching ldpred3's default
+scale `1/127`) — a quarter of the float32 memory, matching ldpred3's
+pipeline default
 representation. The sampler dequantises each entry on the fly in the
 bandwidth-bound inner loop (`corr[i, j] * scale`); the unit diagonal quantises
 exactly (`127/127 == 1`), which the residual update `d = beta_hat − R·beta + beta`

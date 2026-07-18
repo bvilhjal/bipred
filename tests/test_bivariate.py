@@ -451,6 +451,8 @@ def test_bivariate_rejects_compact_blocks():
         ({"h2_init": (0.1,)}, "h2_init"),
         ({"h2_init": (0.1, -0.2)}, "h2_init"),
         ({"h2_init": (0.1, True)}, "h2_init"),
+        ({"h2_init": "0.1"}, "h2_init"),
+        ({"sigma_prior_scale": "0.1"}, "sigma_prior_scale"),
         ({"p_init": 0.0}, "p"),
         ({"p_init": 1.1}, "p"),
         ({"rg_init": 1.0}, "rg_init"),
@@ -613,3 +615,97 @@ def test_cross_corr_explains_correlated_sampling_signal():
         np.eye(4), beta_hat, beta_hat, 1000, 1000, cross_corr=0.8, **kwargs)
     assert np.linalg.norm(corrected.beta1_est) < 0.25 * np.linalg.norm(
         independent.beta1_est)
+
+
+def test_initial_hyperparameters_extreme_rg_saturates_shared():
+    # |rg_init| above the 0.999 boundary would require more shared mass than
+    # the union probability; the shorthand must saturate at an all-shared
+    # start (a valid probability vector) while keeping the implied moments
+    # exact.
+    m = 1000
+    for rg_init in (0.999, 0.9999, -0.9999):
+        pi, s1, s2, s12 = bivariate._initial_hyperparameters(
+            m, (0.1, 0.05), 0.02, rg_init,
+        )
+        assert np.all(pi >= 0.0)
+        np.testing.assert_allclose(pi, (0.98, 0.0, 0.0, 0.02), atol=1e-15)
+        p1, p2, shared = pi[1] + pi[3], pi[2] + pi[3], pi[3]
+        h1, h2 = m * p1 * s1, m * p2 * s2
+        rg = m * shared * s12 / np.sqrt(h1 * h2)
+        np.testing.assert_allclose((h1, h2, rg), (0.1, 0.05, rg_init),
+                                   rtol=1e-12)
+        assert abs(s12 / np.sqrt(s1 * s2)) < 1.0
+
+
+def test_rg_decorrelated_recovers_rg_for_asymmetric_power():
+    # With one strong and one weak trait the decorrelated estimator recovers
+    # rg (and exercises the retained effect-sample path end to end).
+    k, nb = 200, 12
+    blocks, chols, idxs = _blocks(nb, k, seed=3)
+    m = nb * k
+    rgs = []
+    for rep in range(3):
+        rng = np.random.default_rng(30 + rep)
+        b1, b2 = _sim(blocks, chols, idxs, m, p=0.05, h2=(0.5, 0.5), rg=0.8,
+                      rng=rng)
+        bh1 = _sumstats(blocks, chols, idxs, b1, 100000, k, rng)
+        bh2 = _sumstats(blocks, chols, idxs, b2, 5000, k, rng)
+        res = ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, 100000, 5000,
+                                            rg_decorrelated=True,
+                                            burn_in=150, num_iter=200, seed=rep)
+        assert np.isfinite(res.rg)
+        rgs.append(res.rg)
+    assert abs(np.mean(rgs) - 0.8) < 0.15, np.mean(rgs)
+
+
+def test_cross_corr_with_per_variant_n():
+    # The per-SNP branch of the noise covariance (E12 != 0 with per-variant N)
+    # stays finite and still shrinks correlated sampling noise.
+    beta_hat = np.full(4, 0.03)
+    n_vec = np.array([500.0, 2000.0, 1000.0, 4000.0])
+    kwargs = dict(ld_int8=False, h2_init=0.1, p_init=0.5, burn_in=0,
+                  num_iter=1, h2_cap=(0.2, 0.2), seed=1)
+    independent = ldpred3_auto_bivariate(
+        np.eye(4), beta_hat, beta_hat, n_vec, n_vec, cross_corr=0.0, **kwargs)
+    corrected = ldpred3_auto_bivariate(
+        np.eye(4), beta_hat, beta_hat, n_vec, n_vec, cross_corr=0.6, **kwargs)
+    assert np.all(np.isfinite(corrected.beta1_est))
+    assert np.all(np.isfinite(corrected.beta2_est))
+    assert np.isfinite(corrected.rg)
+    assert np.linalg.norm(corrected.beta1_est) < np.linalg.norm(
+        independent.beta1_est)
+
+
+def test_noise_inflation_with_per_variant_n():
+    # noise_inflation with per-variant N runs the deflation loop per SNP and
+    # stays sane on matched LD (lambda near 1).
+    k, nb = 200, 4
+    blocks, chols, idxs = _blocks(nb, k, seed=6)
+    m = nb * k
+    rng = np.random.default_rng(7)
+    b1, b2 = _sim(blocks, chols, idxs, m, p=0.05, h2=(0.5, 0.5), rg=0.6, rng=rng)
+    n_vec = np.full(m, 40000.0)
+    n_vec[::7] = 15000.0
+    bh1 = _sumstats(blocks, chols, idxs, b1, 40000, k, rng)
+    bh2 = _sumstats(blocks, chols, idxs, b2, 40000, k, rng)
+    res = ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, n_vec, n_vec,
+                                        burn_in=60, num_iter=80,
+                                        noise_inflation=True, seed=1)
+    assert np.all(np.isfinite(res.beta1_est))
+    assert -1.0 <= res.rg <= 1.0
+    assert all(1.0 <= lam < 2.0 for lam in res.noise_scale)
+
+
+def test_single_variant_fit_is_well_formed():
+    # Degenerate one-SNP input must not crash or produce NaNs; with no signal
+    # the heritabilities sit at the lower bound and rg stays in [-1, 1].
+    kw = dict(burn_in=0, num_iter=2, h2_cap=(0.2, 0.2), seed=0)
+    beta = np.array([0.05])
+    single = ldpred3_auto_bivariate(np.eye(1), beta, beta, 1000, 1000, **kw)
+    blocked = ldpred3_auto_bivariate_blocks(
+        [(np.eye(1), np.arange(1))], beta, beta, 1000, 1000, **kw)
+    for res in (single, blocked):
+        assert np.all(np.isfinite(res.beta1_est))
+        assert np.all(np.isfinite(res.beta2_est))
+        assert -1.0 <= res.rg <= 1.0
+        assert res.h2[0] >= 1e-4 and res.h2[1] >= 1e-4

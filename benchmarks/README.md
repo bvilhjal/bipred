@@ -37,7 +37,7 @@ python benchmarks/<script>.py
 Most scripts simulate a **realistic non-repeating coalescent** genome, so they
 need `msprime` (`pip install msprime`). Population LD is cached under
 `benchmarks/.rg_cache/`. `bivariate_demo.py` instead reads a cached
-`ld_library.npz` (100 blocks × 500×500 correlation matrices) from the working
+`ld_library.npz` (12 blocks × 500×500 correlation matrices) from the working
 directory rather than simulating.
 
 Peak RSS is measured with `resource.getrusage` on POSIX and the Windows process
@@ -56,7 +56,7 @@ alibi.
 | `rg_polygenicity.py` | Genetic-correlation recovery vs polygenicity (p=0.1…1e-4) at larger m (denser blocks via higher mutation rate); LD simulated once, reused across p (→ `rg_polygenicity.{csv,png}`) | ✓ |
 | `rg_methods.py` | rg estimators compared — cross-trait LDSC / `uni_gv` / `uni_r2` / the bivariate joint fit: accuracy (symmetric & asymmetric power) + running time + a timing scan across m (→ `rg_methods.{csv,png}`, `rg_methods_timing.csv`) | ✓ |
 | `rg_scaling.py` | Genetic-correlation estimation scaling with m (bivariate LDSC vs LDpred3): per-fit time / peak RSS / accuracy, one subprocess per size (→ `rg_scaling.{csv,png}`) | ✓ |
-| `mixer_overlap.py` | MiXeR-style polygenic-overlap recovery (`res.mixer`): overlap fraction, within-shared ρ_β, the r_g decomposition and relative polygenicity across overlap / ρ_β / power sweeps (→ `mixer_overlap.{csv,png}`) | ✓ |
+| `mixer_overlap.py` | MiXeR-style polygenic-overlap recovery (`res.mixer`): overlap fraction, within-shared ρ_β, the r_g decomposition and relative polygenicity across six sweeps (`overlap`, `rho`, `power`, `ldmatch` — LD-spreading vs reference mismatch, `calibration` — noise-inflation on/off, `unical` — `mixer_calibrated` vs truth) (→ `mixer_overlap.{csv,png}`) | ✓ |
 | `overlap_estimation.py` | Bivariate rg sensitivity to sample overlap and how to set `cross_corr` (→ `overlap_estimation.csv`) | ✓ |
 | `sample_overlap.py` | Validates the sample-overlap corrections (free LDSC intercept, bivariate `cross_corr`) on the realistic non-repeating rg LD; also per-fit timing | ✓ |
 | `bivariate_demo.py` | Bivariate prediction gain for a weak trait across two-trait architectures (needs `ld_library.npz` in the cwd) | — |
