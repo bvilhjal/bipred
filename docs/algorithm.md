@@ -34,6 +34,44 @@ This per-trait state structure is the important design choice. Shared causal
 variants are learned through `pi11`; they are not forced. When the data support
 little overlap, the shared state can shrink and the two fits largely decouple.
 
+## Coherent initialization
+
+`h2_init`, `p_init`, and `rg_init` are calibrated jointly. The scalar `p_init`
+is the initial union probability `P(trait 1 or trait 2 causal)`; by default its
+non-null mass is divided equally among `10`, `01`, and `11`. For large
+`|rg_init|`, the shorthand increases the initial shared mass just enough to keep
+the within-shared covariance positive definite. Supply `pi_init` to specify the
+overlap directly.
+
+For an explicit `pi_init`, define marginal causal probabilities as follows:
+
+**Equation 2. Initial marginal and shared causal probabilities.**
+
+```text
+p1 = pi10 + pi11
+p2 = pi01 + pi11
+u  = pi11
+```
+
+The slab covariance is then calibrated rather than guessed:
+
+**Equation 3. Initial slab calibration.**
+
+```text
+s1 = h2_init_1 / (M * p1)
+s2 = h2_init_2 / (M * p2)
+rho_beta = rg_init * sqrt(p1 * p2) / u
+s12 = rho_beta * sqrt(s1 * s2)
+```
+
+This makes the implied genetic moments equal the documented starting values:
+`M*p1*s1 = h2_init_1`, `M*p2*s2 = h2_init_2`, and
+`M*u*s12 = rg_init*sqrt(h2_init_1*h2_init_2)`. A requested combination is
+rejected when it would require `|rho_beta| >= 1`. `sigma_prior_scale` optionally
+sets the persistent diagonal shrinkage target separately from this starting
+covariance; this separation is required when comparing chains with different
+starts but the same prior.
+
 ## Sampler and hyperparameter updates
 
 For each sweep and SNP, the sampler:
@@ -61,7 +99,7 @@ retained Dirichlet draws. `h2_cap` remains available as an expert clamp.
 
 The target is:
 
-**Equation 2. LD-adjusted genetic correlation.**
+**Equation 4. LD-adjusted genetic correlation.**
 
 ```text
 r_g = beta1' R beta2 / sqrt((beta1' R beta1) * (beta2' R beta2))
@@ -83,7 +121,7 @@ heritability estimates are unstable.
 
 The four-state mixture gives a MiXeR-style decomposition:
 
-**Equation 3. Polygenic-overlap decomposition.**
+**Equation 5. Polygenic-overlap decomposition.**
 
 ```text
 pi1 = pi10 + pi11

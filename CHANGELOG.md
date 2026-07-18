@@ -7,6 +7,16 @@ follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **Coherent four-state initialization.** `h2_init` (now scalar or per-trait),
+  `p_init`, and `rg_init` now initialize a `pi`/`Sigma` pair whose implied
+  marginal heritabilities and genetic correlation equal those values exactly.
+  Previously, the equal non-null split made the implied marginal `h2` only
+  `2/3 * h2_init` and the implied genetic correlation `rg_init / 2`.
+  `p_init` is now documented precisely as the union-causal probability;
+  `pi_init` exposes the otherwise-unidentified four-state overlap, and
+  `sigma_prior_scale` can hold the persistent covariance-prior target fixed
+  while starts vary. Seeded outputs change because this corrects the actual
+  starting covariance rather than merely relabelling it.
 - **int8 is now the default LD representation** for the bivariate sampler,
   matching ldpred3. LD blocks are stored int8-quantised
   (`round(clip(R, -1, 1) * 127)`, scale `1/127`) — a quarter of the float32

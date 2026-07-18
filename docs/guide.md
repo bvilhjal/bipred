@@ -202,7 +202,9 @@ analyses, but it can bias `r_g` upward when samples overlap strongly.
 |---|---:|---|
 | `ld_int8` | `True` | store LD int8-quantised (¼ the memory); `False` = exact float32 |
 | `burn_in`, `num_iter` | `200`, `200` | Gibbs burn-in and sampling sweeps |
-| `h2_init`, `p_init`, `rg_init` | `0.1`, `0.02`, `0.0` | starting values |
+| `h2_init`, `p_init`, `rg_init` | `0.1`, `0.02`, `0.0` | exact genetic-moment starts; `h2_init` may be a pair and `p_init` is union-causal |
+| `pi_init` | `None` | explicit `(pi00, pi10, pi01, pi11)` start for overlap-sensitive work |
+| `sigma_prior_scale` | `None` | fixed per-trait slab-variance shrinkage target; decouples starts from the prior |
 | `cross_corr` | `0.0` | sample-overlap noise correlation |
 | `rg_decorrelated` | `False` | better `r_g` for asymmetric-power pairs |
 | `noise_inflation`, `ni_damp` | `False`, `0.1` | learn residual noise inflation |
@@ -221,3 +223,5 @@ analyses, but it can bias `r_g` upward when samples overlap strongly.
   LD is int8-quantised by default (`ld_int8=False` for exact float32).
 - Do not over-interpret absolute overlap counts at low power.
 - Increase `burn_in` and `num_iter` if `h2` or `r_g` is unstable across seeds.
+- At low power, vary `pi_init` as a pre-specified sensitivity analysis: scalar
+  `p_init` cannot determine marginal polygenicity and causal overlap separately.

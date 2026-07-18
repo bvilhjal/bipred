@@ -175,6 +175,72 @@ def test_pi_prior_default_and_validation():
                                       pi_prior=0.0, **kw)
 
 
+def test_initial_hyperparameters_match_documented_genetic_moments():
+    """The four-state start must encode h2_init and rg_init, not fractions of them."""
+    m = 100
+    pi, s1, s2, s12 = bivariate._initial_hyperparameters(
+        m, (0.4, 0.2), 0.3, 0.4,
+    )
+    p1, p2, shared = pi[1] + pi[3], pi[2] + pi[3], pi[3]
+    h1, h2 = m * p1 * s1, m * p2 * s2
+    rg = m * shared * s12 / np.sqrt(h1 * h2)
+    np.testing.assert_allclose((h1, h2, rg), (0.4, 0.2, 0.4), rtol=1e-12)
+    np.testing.assert_allclose(pi, (0.7, 0.1, 0.1, 0.1), rtol=1e-12)
+
+    # A large genetic correlation needs more initial shared mass than the equal
+    # non-null split; the helper increases it while preserving the union p.
+    high, hs1, hs2, hs12 = bivariate._initial_hyperparameters(
+        m, 0.3, 0.3, 0.9,
+    )
+    hp = high[1] + high[3]
+    hrg = m * high[3] * hs12 / np.sqrt(
+        (m * hp * hs1) * (m * hp * hs2)
+    )
+    assert high[3] > 0.1
+    assert abs(hs12 / np.sqrt(hs1 * hs2)) <= bivariate._INIT_RHO_MAX
+    np.testing.assert_allclose(hrg, 0.9, rtol=1e-12)
+
+
+def test_explicit_pi_init_controls_overlap_and_validates_rg_feasibility():
+    m = 200
+    pi0 = np.array([0.78, 0.02, 0.12, 0.08])  # p1=.10, p2=.20
+    pi, s1, s2, s12 = bivariate._initial_hyperparameters(
+        m, (0.5, 0.25), 0.02, 0.3, pi_init=pi0,
+    )
+    p1, p2, shared = pi[1] + pi[3], pi[2] + pi[3], pi[3]
+    h1, h2 = m * p1 * s1, m * p2 * s2
+    rg = m * shared * s12 / np.sqrt(h1 * h2)
+    np.testing.assert_allclose((h1, h2, rg), (0.5, 0.25, 0.3), rtol=1e-12)
+
+    # Float32 simplex rounding is accepted and normalised. Explicit pi_init
+    # also makes the scalar p_init shorthand irrelevant at the public boundary.
+    pi32 = np.array(
+        [0.37767145, 0.10645247, 0.46477157, 0.05110449],
+        dtype=np.float32,
+    )
+    normalized, *_ = bivariate._initial_hyperparameters(
+        m, 0.2, 0.0, 0.0, pi_init=pi32,
+    )
+    np.testing.assert_allclose(normalized.sum(), 1.0, rtol=0.0, atol=1e-15)
+    public = ldpred3_auto_bivariate(
+        np.eye(3), np.zeros(3), np.zeros(3), 1000, 1000,
+        h2_init=0.1, p_init=0.0, pi_init=(0.7, 0.1, 0.1, 0.1),
+        burn_in=0, num_iter=1, seed=0,
+    )
+    assert np.isfinite(public.rg)
+
+    with pytest.raises(ValueError, match="cannot represent rg_init"):
+        bivariate._initial_hyperparameters(
+            m, (0.5, 0.25), 0.02, 0.9, pi_init=pi0,
+        )
+    for bad in ([0.8, 0.1, 0.1], [0.8, 0.1, 0.1, 0.1],
+                [0.8, -0.1, 0.2, 0.1], [1.0, 0.0, 0.0, 0.0]):
+        with pytest.raises(ValueError, match="pi_init"):
+            bivariate._initial_hyperparameters(
+                m, 0.2, 0.02, 0.0, pi_init=bad,
+            )
+
+
 def test_mixer_calibrated_uses_univariate_polygenicity():
     # mixer_calibrated keeps the joint fit's reliable ratios (frac_shared,
     # rho_beta) but replaces per-trait polygenicity with two univariate runs'
@@ -382,10 +448,16 @@ def test_bivariate_rejects_compact_blocks():
         ({"ld_int8": 1}, "ld_int8.*boolean"),
         ({"h2_init": 0.0}, "h2"),
         ({"h2_init": np.nan}, "h2"),
+        ({"h2_init": (0.1,)}, "h2_init"),
+        ({"h2_init": (0.1, -0.2)}, "h2_init"),
+        ({"h2_init": (0.1, True)}, "h2_init"),
         ({"p_init": 0.0}, "p"),
         ({"p_init": 1.1}, "p"),
         ({"rg_init": 1.0}, "rg_init"),
         ({"rg_init": np.nan}, "rg_init"),
+        ({"pi_init": (0.8, 0.1, 0.1)}, "pi_init"),
+        ({"pi_init": (0.8, 0.05, 0.05, 0.1), "rg_init": 0.9},
+         "cannot represent rg_init"),
         ({"cross_corr": 1.0}, "cross_corr"),
         ({"cross_corr": np.nan}, "cross_corr"),
         ({"burn_in": -1}, "burn_in"),
@@ -394,6 +466,8 @@ def test_bivariate_rejects_compact_blocks():
         ({"num_iter": True}, "num_iter"),
         ({"h2_bounds": (0.1,)}, "h2_bounds"),
         ({"h2_bounds": (0.2, 0.5)}, "h2_bounds"),
+        ({"h2_bounds": (0.0, 1.0)}, "h2_bounds"),
+        ({"h2_bounds": (-1.0, 1.0)}, "h2_bounds"),
         ({"h2_bounds": (1e-4, np.inf)}, "h2_bounds"),
         ({"h2_cap": (0.2,)}, "h2_cap"),
         ({"h2_cap": (0.0, 0.2)}, "h2_cap"),
@@ -406,6 +480,9 @@ def test_bivariate_rejects_compact_blocks():
         ({"ni_damp": 1.1}, "ni_damp"),
         ({"pi_prior": 0.0}, "pi_prior"),
         ({"pi_prior": np.nan}, "pi_prior"),
+        ({"sigma_prior_scale": 0.0}, "sigma_prior_scale"),
+        ({"sigma_prior_scale": (0.1,)}, "sigma_prior_scale"),
+        ({"sigma_prior_scale": (0.1, True)}, "sigma_prior_scale"),
         ({"sample_every": 0}, "sample_every"),
         ({"sample_every": 1.5}, "sample_every"),
         ({"seed": -1}, "seed"),

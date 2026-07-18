@@ -58,6 +58,7 @@ __all__ = ["BivariateResult", "ldpred3_auto_bivariate",
            "ldpred3_auto_bivariate_blocks"]
 
 DAMP = 0.2          # damping factor for the variance-component updates
+_INIT_RHO_MAX = 0.999
 
 
 def _finite_pair(name, value):
@@ -78,6 +79,93 @@ def _finite_pair(name, value):
     if not all(np.isfinite(x) for x in pair):
         raise ValueError(f"{name} must contain exactly two finite numbers")
     return pair
+
+
+def _finite_scalar_or_pair(name, value):
+    """Return a positive finite pair, expanding a scalar to both traits."""
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError(f"{name} must be a positive finite scalar or pair")
+    try:
+        raw = np.asarray(value, dtype=object)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError(f"{name} must be a positive finite scalar or pair") from None
+    if any(isinstance(x, (bool, np.bool_)) for x in raw.flat):
+        raise ValueError(f"{name} must be a positive finite scalar or pair")
+    try:
+        arr = raw.astype(float, copy=False)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError(f"{name} must be a positive finite scalar or pair") from None
+    if arr.ndim == 0:
+        pair = (float(arr), float(arr))
+    elif arr.shape == (2,):
+        pair = (float(arr[0]), float(arr[1]))
+    else:
+        raise ValueError(f"{name} must be a positive finite scalar or pair")
+    if not all(np.isfinite(x) and x > 0.0 for x in pair):
+        raise ValueError(f"{name} must be a positive finite scalar or pair")
+    return pair
+
+
+def _initial_hyperparameters(m, h2_init, p_init, rg_init, pi_init=None):
+    """Build a four-state start whose implied h2 and genetic rg are exact.
+
+    ``p_init`` is the union probability P(trait 1 or trait 2 causal). Its
+    shorthand start divides the non-null mass equally unless a larger shared
+    component is required to represent ``rg_init`` with a valid within-shared
+    effect correlation. ``pi_init`` exposes the otherwise-unidentified overlap
+    degree of freedom directly.
+    """
+    h21, h22 = _finite_scalar_or_pair("h2_init", h2_init)
+    rg_init = _finite_control("rg_init", rg_init)
+    if not -1.0 < rg_init < 1.0:
+        raise ValueError("rg_init must be in (-1, 1)")
+
+    if pi_init is None:
+        _check_h2_p(p=p_init)
+        q = float(p_init)
+        # Preserve the historical equal split at modest |rg|. For large |rg|,
+        # increase the shared mass just enough that the within-shared effect
+        # correlation remains at or below the sampler's safe 0.999 boundary.
+        shared = q / 3.0
+        if rg_init != 0.0:
+            shared = max(
+                shared,
+                abs(rg_init) * q / (2.0 * _INIT_RHO_MAX - abs(rg_init)),
+            )
+        single = (q - shared) / 2.0
+        pi = np.array([1.0 - q, single, single, shared], dtype=float)
+    else:
+        try:
+            pi = np.asarray(pi_init, dtype=float)
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError("pi_init must contain four finite probabilities") from None
+        if (pi.shape != (4,) or not np.all(np.isfinite(pi))
+                or np.any(pi < 0.0) or not np.isclose(pi.sum(), 1.0,
+                                                     rtol=0.0, atol=1e-7)):
+            raise ValueError("pi_init must contain four nonnegative probabilities summing to 1")
+        pi = pi / pi.sum()
+
+    p1 = float(pi[1] + pi[3])
+    p2 = float(pi[2] + pi[3])
+    shared = float(pi[3])
+    if p1 <= 0.0 or p2 <= 0.0:
+        raise ValueError("pi_init must give each trait positive causal probability")
+
+    s1 = h21 / (float(m) * p1)
+    s2 = h22 / (float(m) * p2)
+    if rg_init == 0.0:
+        rho_beta = 0.0
+    else:
+        if shared <= 0.0:
+            raise ValueError("nonzero rg_init requires positive shared pi_init mass")
+        rho_beta = rg_init * np.sqrt(p1 * p2) / shared
+        if abs(rho_beta) >= 1.0:
+            raise ValueError(
+                "pi_init cannot represent rg_init: the implied within-shared "
+                "effect correlation lies outside (-1, 1)"
+            )
+    s12 = float(rho_beta * np.sqrt(s1 * s2))
+    return pi, float(s1), float(s2), s12
 
 
 def _apply_R_rows(fblocks, V):
@@ -528,6 +616,7 @@ class BivariateResult:
 def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, *,
                                   ld_int8=True,
                                   h2_init=0.1, p_init=0.02, rg_init=0.0,
+                                  pi_init=None, sigma_prior_scale=None,
                                   cross_corr=0.0, burn_in=200, num_iter=200,
                                   h2_bounds=(1e-4, 1.0), h2_cap=None,
                                   iw_df=10.0, rg_decorrelated=False,
@@ -560,8 +649,23 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
         quantisation error is negligible (the diagonal stays exactly 1); set
         ``False`` for an exact dense-float32 fit. Blocks already int8 stay int8
         regardless of this flag.
-    h2_init, p_init, rg_init : float
-        Initial heritability, causal fraction and genetic correlation.
+    h2_init : float or pair
+        Initial per-trait heritability. A scalar applies to both traits.
+    p_init : float, default 0.02
+        Initial union causal fraction, ``P(trait 1 or trait 2 causal)``. Used by
+        the symmetric shorthand when ``pi_init`` is omitted.
+    rg_init : float, default 0
+        Initial genetic correlation.
+    pi_init : length-4 array, optional
+        Explicit initial ``(pi00, pi10, pi01, pi11)`` mixture. This exposes the
+        overlap degree of freedom that ``p_init`` alone cannot determine. The
+        slab covariance is calibrated so the supplied ``h2_init`` and
+        ``rg_init`` are the implied genetic moments exactly.
+    sigma_prior_scale : float or pair, optional
+        Persistent diagonal shrinkage target for the per-causal effect
+        covariance. A scalar applies to both traits. By default it equals the
+        coherently calibrated initial slab variances; set it explicitly when
+        varying starts across chains so the chains retain the same prior.
     cross_corr : float, default 0.0
         Cross-trait correlation of the sampling noise (sample overlap); must lie
         in ``(-1, 1)``. 0 assumes independent GWAS samples.
@@ -594,8 +698,7 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     -------
     BivariateResult
     """
-    _check_h2_p(h2=h2_init, p=p_init)
-    h2_init, p_init = float(h2_init), float(p_init)
+    h2_init = _finite_scalar_or_pair("h2_init", h2_init)
     rg_init = _finite_control("rg_init", rg_init)
     if not -1.0 < rg_init < 1.0:
         raise ValueError("rg_init must be in (-1, 1)")
@@ -622,8 +725,10 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     seed = _validate_seed(seed)
 
     lo, hi = _finite_pair("h2_bounds", h2_bounds)
-    if not 0.0 < lo <= h2_init <= hi:
-        raise ValueError("h2_bounds must satisfy 0 < lower <= h2_init <= upper")
+    if not (0.0 < lo <= min(h2_init) and max(h2_init) <= hi):
+        raise ValueError(
+            "h2_bounds must contain both positive h2_init values"
+        )
     h2_bounds = (lo, hi)
     if h2_cap is not None:
         h2_cap = _finite_pair("h2_cap", h2_cap)
@@ -654,18 +759,25 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
                 "LD representation")
         Rq, scale = _prepare_block(R, ld_int8)
         fblocks.append((Rq, int(idx[0]), int(idx.shape[0]), scale))
-    M = float(m)
+    pi, s1, s2, s12 = _initial_hyperparameters(
+        m, h2_init, p_init, rg_init, pi_init=pi_init,
+    )
+    if sigma_prior_scale is None:
+        psi1, psi2 = s1, s2
+    else:
+        psi1, psi2 = _finite_scalar_or_pair(
+            "sigma_prior_scale", sigma_prior_scale,
+        )
 
     # (Co)variance-component regularisation. The effect covariance Sigma is
     # updated each sweep by shrinking toward a weak inverse-Wishart prior (MTGSAM
-    # / Sorensen-Gianola): scale PSI0 (the expected per-variant slab) on the
-    # diagonal, zero off-diagonal, with iw_df pseudo-counts. This replaces the old
+    # / Sorensen-Gianola): per-trait slab scales (psi1, psi2) on the diagonal,
+    # zero off-diagonal, with iw_df pseudo-counts. This replaces the old
     # scheme (a univariate-auto h2 ceiling + a hard 0.999 PD cap): the univariate
     # anchor under-estimates h2 on noisy dense LD -> shrinks the rg denominator ->
     # inflated rg, while the diagonal prior here keeps Sigma positive-definite and
     # the off-diagonal from riding the PD boundary. A caller may still pass
     # ``h2_cap`` to additionally clamp the implied per-trait h2 (expert override).
-    PSI0 = float(h2_init) / max(p_init * M, 1.0)
     nu0 = float(iw_df)
 
     rng = np.random.default_rng(seed)
@@ -685,10 +797,8 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
         rg_decorrelated, num_iter, sample_every, m)
     n_saved = 0
 
-    # state probabilities (pi00, pi10, pi01, pi11) and slab variances.
-    pi = np.array([1.0 - p_init, p_init / 3.0, p_init / 3.0, p_init / 3.0])
-    s1 = s2 = float(h2_init) / max(p_init * M, 1.0)
-    s12 = float(rg_init) * s1
+    # ``pi`` and the slab covariance were calibrated together above: their
+    # implied marginal h2 and genetic rg equal the documented starting values.
     # Per-trait noise-inflation factors (LDSC-intercept analog); 1 = off.
     lam1 = lam2 = 1.0
 
@@ -735,13 +845,13 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
         n1c = c10 + c11
         n2c = c01 + c11
         # Inverse-Wishart-style shrinkage of (s1, s2, s12) toward the weak
-        # diagonal prior (scale PSI0, nu0 pseudo-counts, zero prior covariance).
+        # diagonal prior (psi1/psi2, nu0 pseudo-counts, zero prior covariance).
         # Marginal variances pool all trait-causal variants; the covariance uses
         # the both-causal pairs and is pulled toward 0 by the prior (no genetic
         # covariance a priori), which keeps s12 off the PD boundary. Damped for
         # cross-sweep stability.
-        s1 = (1.0 - DAMP) * s1 + DAMP * (nu0 * PSI0 + S1) / (nu0 + n1c)
-        s2 = (1.0 - DAMP) * s2 + DAMP * (nu0 * PSI0 + S2) / (nu0 + n2c)
+        s1 = (1.0 - DAMP) * s1 + DAMP * (nu0 * psi1 + S1) / (nu0 + n1c)
+        s2 = (1.0 - DAMP) * s2 + DAMP * (nu0 * psi2 + S2) / (nu0 + n2c)
         s12 = (1.0 - DAMP) * s12 + DAMP * (S12 / (nu0 + c11))
         s1 = max(s1, 1e-12)
         s2 = max(s2, 1e-12)
