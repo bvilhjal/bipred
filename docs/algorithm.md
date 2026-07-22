@@ -96,7 +96,8 @@ traces, with explicit degeneracy flags. It does not diagnose variant-level
 effects. It is diagnostic metadata, not a convergence decision, and no
 `converged` flag is produced.
 `rg_decorrelated=True` is unsupported because that estimator requires a
-different cross-chain trace contract.
+different cross-chain trace contract. Chains remain sequential; `ncores`
+parallelises independent blocks within one chain, not chains themselves.
 
 ## Sampler and hyperparameter updates
 
@@ -233,6 +234,14 @@ row-normalised factors are handled backward-compatibly with `d = 0`. LR8
 factors remain int8 and float factors are canonicalised to float32. The
 effective LD is the approximation encoded by the factor and diagonal residual,
 so its accuracy still depends on the construction rank or retained variance.
+
+With Numba and `ncores>1`, homogeneous dense blocks sharing a dtype and scale,
+or homogeneous low-rank factors sharing a factor dtype, enter one fused
+block-parallel sweep. Random arrays are generated in sorted genome order before
+workers start. Each worker owns one block's effects and persistent projections;
+the three integer counts and six floating statistics are then reduced in the
+original block order. Consequently seeded `ncores=1` and `ncores>1` fits are
+array-identical. Mixed representations or dtypes retain the serial path.
 
 With the default `ld_int8=None`, supplied dense int8 blocks are consumed as-is;
 float blocks with at most 1500 variants are stored as

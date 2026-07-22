@@ -34,17 +34,21 @@ import numpy as np
 # (``LowRankLD``). They are re-exported from ``ldpred3.ldpred3`` -- the internal
 # seam ldpred3 keeps stable for its own infer / annot / finemap modules.
 from ldpred3.ldpred3 import (
+    HAVE_NUMBA,
     LowRankLD,
     _as_n_vector,
     _check_h2_p,
     _finite_control,
     _integer_at_least,
     _jit,
+    _jit_parallel,
+    _set_threads,
     _validate_beta_hat,
     _validate_blocks,
     _validate_boolean_controls,
     _validate_iterations,
     _validate_seed,
+    prange,
 )
 
 # int8 LD quantisation scale (127): correlations in [-1, 1] are stored as
@@ -665,6 +669,69 @@ def _bivar_one_sweep_lowrank(
 _bivar_one_sweep_lowrank_jit = _jit(_bivar_one_sweep_lowrank)
 
 
+def _bivar_dense_sweep_all(
+        blocks, starts, sizes, bh1, bh2, n1, n2, curr1, curr2, rb1, rb2,
+        rbsum1, rbsum2, unif, z1, z2,
+        lpi00, lpi10, lpi01, lpi11, s1, s2, s12, cross_corr,
+        scale, n_const, resync, counts, stats):
+    """Sweep homogeneous independent dense blocks under block-level prange."""
+    for bb in prange(len(blocks)):
+        b = np.int64(bb)
+        start = starts[b]
+        stop = start + sizes[b]
+        sl = slice(start, stop)
+        (a10, a01, a11, s1sq, s2sq, s12s,
+         g11, g12, g22) = _bivar_one_sweep_jit(
+            blocks[b], bh1[sl], bh2[sl], n1[sl], n2[sl], curr1[sl],
+            curr2[sl], rb1[sl], rb2[sl], rbsum1[sl], rbsum2[sl],
+            unif[sl], z1[sl], z2[sl], lpi00, lpi10, lpi01, lpi11,
+            s1, s2, s12, cross_corr, scale, n_const, resync)
+        counts[b, 0] = a10
+        counts[b, 1] = a01
+        counts[b, 2] = a11
+        stats[b, 0] = s1sq
+        stats[b, 1] = s2sq
+        stats[b, 2] = s12s
+        stats[b, 3] = g11
+        stats[b, 4] = g12
+        stats[b, 5] = g22
+
+
+_bivar_dense_sweep_all_par_jit = _jit_parallel(_bivar_dense_sweep_all)
+
+
+def _bivar_lowrank_sweep_all(
+        factors, row_scales, residuals, proj1s, proj2s, starts, sizes,
+        bh1, bh2, n1, n2, curr1, curr2, rb1, rb2, rbsum1, rbsum2,
+        unif, z1, z2, lpi00, lpi10, lpi01, lpi11,
+        s1, s2, s12, cross_corr, n_const, resync, write_rb, counts, stats):
+    """Sweep homogeneous independent low-rank blocks under block-level prange."""
+    for bb in prange(len(factors)):
+        b = np.int64(bb)
+        start = starts[b]
+        stop = start + sizes[b]
+        sl = slice(start, stop)
+        (a10, a01, a11, s1sq, s2sq, s12s,
+         g11, g12, g22) = _bivar_one_sweep_lowrank_jit(
+            factors[b], row_scales[b], residuals[b], bh1[sl], bh2[sl],
+            n1[sl], n2[sl], curr1[sl], curr2[sl], proj1s[b], proj2s[b],
+            rb1[sl], rb2[sl], rbsum1[sl], rbsum2[sl], unif[sl], z1[sl],
+            z2[sl], lpi00, lpi10, lpi01, lpi11, s1, s2, s12,
+            cross_corr, n_const, resync, write_rb)
+        counts[b, 0] = a10
+        counts[b, 1] = a01
+        counts[b, 2] = a11
+        stats[b, 0] = s1sq
+        stats[b, 1] = s2sq
+        stats[b, 2] = s12s
+        stats[b, 3] = g11
+        stats[b, 4] = g12
+        stats[b, 5] = g22
+
+
+_bivar_lowrank_sweep_all_par_jit = _jit_parallel(_bivar_lowrank_sweep_all)
+
+
 @dataclass
 class BivariateResult:
     """Output of :func:`ldpred3_auto_bivariate`.
@@ -847,7 +914,8 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
                                   h2_bounds=(1e-4, 1.0), h2_cap=None,
                                   iw_df=10.0, rg_decorrelated=False,
                                   noise_inflation=False, ni_damp=0.1,
-                                  pi_prior=1.0, sample_every=5, seed=None):
+                                  pi_prior=1.0, sample_every=5, ncores=1,
+                                  seed=None):
     """Genome-wide bivariate LDpred3-auto over dense or low-rank LD blocks.
 
     ``blocks`` is ``[(R, idx), ...]`` with contiguous ``idx`` arrays partitioning
@@ -925,6 +993,11 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
         Thinning for the retained effect samples used by the decorrelated ``rg``.
     pi_prior : float, default 1.0
         Symmetric Dirichlet concentration for the four-state mixture prior.
+    ncores : int, default 1
+        Threads used for a fused block-parallel sweep when all prepared blocks
+        are homogeneous dense or homogeneous ``LowRankLD`` factors and Numba is
+        available. SNP updates remain sequential within each block. Mixed
+        representations or dtypes use the deterministic serial fallback.
     seed : int or None
 
     Returns
@@ -957,6 +1030,7 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
         raise ValueError("pi_prior must be positive (an improper <=0 "
                          "concentration can collapse the mixture)")
     sample_every = _integer_at_least("sample_every", sample_every, 1)
+    ncores = _integer_at_least("ncores", ncores, 1)
     seed = _validate_seed(seed)
 
     lo, hi = _finite_pair("h2_bounds", h2_bounds)
@@ -1001,6 +1075,70 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
             Rq, scale = _prepare_block(R, ld_int8)
             fblocks.append((_DENSE, Rq, int(idx[0]), int(idx.shape[0]),
                             scale, None, None, None))
+
+    # One fused native call is worthwhile only for ncores > 1. Homogeneous
+    # readonly views give variable-size heap/mmap payloads one typed.List element
+    # type without copying or changing the caller's writeability flags.
+    parallel_kind = 0                 # 0=serial, 1=dense, 2=low-rank
+    parallel_payloads = None
+    parallel_aux = parallel_residuals = None
+    parallel_proj1s = parallel_proj2s = None
+    parallel_starts = parallel_sizes = None
+    parallel_counts = parallel_stats = None
+    parallel_scale = 1.0
+    if HAVE_NUMBA and ncores > 1 and fblocks:
+        kinds = [kind for kind, *_rest in fblocks]
+        if all(kind == _DENSE for kind in kinds):
+            first_dtype = np.asarray(fblocks[0][1]).dtype
+            first_scale = float(fblocks[0][4])
+            if all(np.asarray(data).dtype == first_dtype
+                   and np.asarray(data).flags.c_contiguous
+                   and float(aux) == first_scale
+                   for _kind, data, _start, _k, aux, _res, _p1, _p2
+                   in fblocks):
+                parallel_kind = 1
+                parallel_scale = first_scale
+        elif all(kind == _LOWRANK for kind in kinds):
+            first_dtype = np.asarray(fblocks[0][1]).dtype
+            if all(np.asarray(data).dtype == first_dtype
+                   and np.asarray(data).flags.c_contiguous
+                   for _kind, data, _start, _k, _aux, _res, _p1, _p2
+                   in fblocks):
+                parallel_kind = 2
+
+    if parallel_kind:
+        from numba.typed import List as NumbaList
+
+        parallel_payloads = NumbaList()
+        parallel_starts = np.asarray(
+            [start for _kind, _data, start, _k, _aux, _res, _p1, _p2
+             in fblocks], dtype=np.int64)
+        parallel_sizes = np.asarray(
+            [k for _kind, _data, _start, k, _aux, _res, _p1, _p2
+             in fblocks], dtype=np.int64)
+        parallel_counts = np.empty((len(fblocks), 3), dtype=np.int64)
+        parallel_stats = np.empty((len(fblocks), 6), dtype=np.float64)
+        for _kind, data, _start, _k, _aux, _res, _p1, _p2 in fblocks:
+            payload_view = np.asarray(data).view()
+            payload_view.setflags(write=False)
+            parallel_payloads.append(payload_view)
+        if parallel_kind == 2:
+            parallel_aux = NumbaList()
+            parallel_residuals = NumbaList()
+            parallel_proj1s = NumbaList()
+            parallel_proj2s = NumbaList()
+            for (_kind, _data, _start, _k, aux, residual, proj1, proj2
+                 ) in fblocks:
+                aux_view = np.asarray(aux).view()
+                residual_view = np.asarray(residual).view()
+                aux_view.setflags(write=False)
+                residual_view.setflags(write=False)
+                parallel_aux.append(aux_view)
+                parallel_residuals.append(residual_view)
+                parallel_proj1s.append(proj1)
+                parallel_proj2s.append(proj2)
+        _set_threads(ncores)
+
     pi, s1, s2, s12 = _initial_hyperparameters(
         m, h2_init, p_init, rg_init, pi_init=pi_init,
     )
@@ -1060,27 +1198,58 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
         # lambda preserves the constant-N fast path (n_const unchanged).
         n1e = n1 / lam1 if noise_inflation else n1
         n2e = n2 / lam2 if noise_inflation else n2
-        for kind, data, start, k, aux, residual, proj1, proj2 in fblocks:
-            sl = slice(start, start + k)
-            if kind == _LOWRANK:
-                result = _bivar_one_sweep_lowrank_jit(
-                    data, aux, residual, bh1[sl], bh2[sl], n1e[sl], n2e[sl],
-                    curr1[sl], curr2[sl], proj1, proj2, rb1[sl], rb2[sl],
-                    rbs1[sl], rbs2[sl], unif[sl], z1[sl], z2[sl],
-                    float(lpi[0]), float(lpi[1]), float(lpi[2]), float(lpi[3]),
-                    float(s1), float(s2), float(s12), float(cross_corr),
-                    n_const, resync, bool(noise_inflation))
-            else:
-                result = _bivar_one_sweep_jit(
-                    data, bh1[sl], bh2[sl], n1e[sl], n2e[sl],
-                    curr1[sl], curr2[sl], rb1[sl], rb2[sl], rbs1[sl], rbs2[sl],
-                    unif[sl], z1[sl], z2[sl], float(lpi[0]), float(lpi[1]),
-                    float(lpi[2]), float(lpi[3]), float(s1), float(s2),
-                    float(s12), float(cross_corr), float(aux), n_const, resync)
-            a10, a01, a11, s1sq, s2sq, s12s, g11, g12, g22 = result
-            c10 += a10; c01 += a01; c11 += a11
-            S1 += s1sq; S2 += s2sq; S12 += s12s
-            gv11 += g11; gv12 += g12; gv22 += g22
+        if parallel_kind == 1:
+            _bivar_dense_sweep_all_par_jit(
+                parallel_payloads, parallel_starts, parallel_sizes,
+                bh1, bh2, n1e, n2e, curr1, curr2, rb1, rb2, rbs1, rbs2,
+                unif, z1, z2, float(lpi[0]), float(lpi[1]), float(lpi[2]),
+                float(lpi[3]), float(s1), float(s2), float(s12),
+                float(cross_corr), float(parallel_scale), n_const, resync,
+                parallel_counts, parallel_stats)
+        elif parallel_kind == 2:
+            _bivar_lowrank_sweep_all_par_jit(
+                parallel_payloads, parallel_aux, parallel_residuals,
+                parallel_proj1s, parallel_proj2s, parallel_starts,
+                parallel_sizes, bh1, bh2, n1e, n2e, curr1, curr2, rb1,
+                rb2, rbs1, rbs2, unif, z1, z2, float(lpi[0]),
+                float(lpi[1]), float(lpi[2]), float(lpi[3]), float(s1),
+                float(s2), float(s12), float(cross_corr), n_const, resync,
+                bool(noise_inflation), parallel_counts, parallel_stats)
+
+        if parallel_kind:
+            # Match the serial driver's exact block and floating reduction order.
+            for b in range(len(fblocks)):
+                c10 += int(parallel_counts[b, 0])
+                c01 += int(parallel_counts[b, 1])
+                c11 += int(parallel_counts[b, 2])
+                S1 += float(parallel_stats[b, 0])
+                S2 += float(parallel_stats[b, 1])
+                S12 += float(parallel_stats[b, 2])
+                gv11 += float(parallel_stats[b, 3])
+                gv12 += float(parallel_stats[b, 4])
+                gv22 += float(parallel_stats[b, 5])
+        else:
+            for kind, data, start, k, aux, residual, proj1, proj2 in fblocks:
+                sl = slice(start, start + k)
+                if kind == _LOWRANK:
+                    result = _bivar_one_sweep_lowrank_jit(
+                        data, aux, residual, bh1[sl], bh2[sl], n1e[sl], n2e[sl],
+                        curr1[sl], curr2[sl], proj1, proj2, rb1[sl], rb2[sl],
+                        rbs1[sl], rbs2[sl], unif[sl], z1[sl], z2[sl],
+                        float(lpi[0]), float(lpi[1]), float(lpi[2]), float(lpi[3]),
+                        float(s1), float(s2), float(s12), float(cross_corr),
+                        n_const, resync, bool(noise_inflation))
+                else:
+                    result = _bivar_one_sweep_jit(
+                        data, bh1[sl], bh2[sl], n1e[sl], n2e[sl],
+                        curr1[sl], curr2[sl], rb1[sl], rb2[sl], rbs1[sl], rbs2[sl],
+                        unif[sl], z1[sl], z2[sl], float(lpi[0]), float(lpi[1]),
+                        float(lpi[2]), float(lpi[3]), float(s1), float(s2),
+                        float(s12), float(cross_corr), float(aux), n_const, resync)
+                a10, a01, a11, s1sq, s2sq, s12s, g11, g12, g22 = result
+                c10 += a10; c01 += a01; c11 += a11
+                S1 += s1sq; S2 += s2sq; S12 += s12s
+                gv11 += g11; gv12 += g12; gv22 += g22
 
         if noise_inflation:
             # Update lambda_t from the residual mean-chi2. rb1/rb2 hold R@beta

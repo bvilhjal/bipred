@@ -597,6 +597,125 @@ def test_mixed_lowrank_dense_supports_optional_estimators():
     assert np.all(np.isfinite(result.noise_scale))
 
 
+def _assert_bivariate_result_array_equal(observed, expected):
+    for name in ("beta1_est", "beta2_est", "sigma", "pi", "pi_samples",
+                 "sigma_samples", "genetic_samples", "noise_scale_samples"):
+        np.testing.assert_array_equal(getattr(observed, name),
+                                      getattr(expected, name))
+    assert observed.h2 == expected.h2
+    assert observed.rg == expected.rg
+    assert observed.p == expected.p
+    assert observed.noise_scale == expected.noise_scale
+
+
+@pytest.mark.skipif(not bivariate.HAVE_NUMBA, reason="Numba is required")
+def test_ncores_two_matches_one_for_readonly_variable_size_d8_blocks():
+    sizes = (7, 10, 6)
+    blocks = []
+    start = 0
+    for k, rho in zip(sizes, (0.25, 0.45, 0.6)):
+        corr = rho ** np.abs(np.subtract.outer(np.arange(k), np.arange(k)))
+        payload = np.rint(corr * 127.0).astype(np.int8)
+        payload.setflags(write=False)
+        blocks.append((payload, np.arange(start, start + k)))
+        start += k
+    rng = np.random.default_rng(21)
+    bh1 = rng.standard_normal(start) * 0.02
+    bh2 = 0.4 * bh1 + rng.standard_normal(start) * 0.015
+    kwargs = dict(burn_in=5, num_iter=8, seed=22)
+
+    serial = ldpred3_auto_bivariate_blocks(
+        blocks, bh1, bh2, 20_000, 18_000, ncores=1, **kwargs)
+    parallel = ldpred3_auto_bivariate_blocks(
+        blocks, bh1, bh2, 20_000, 18_000, ncores=2, **kwargs)
+
+    _assert_bivariate_result_array_equal(parallel, serial)
+    assert all(not block.flags.writeable for block, _idx in blocks)
+
+
+@pytest.mark.skipif(not bivariate.HAVE_NUMBA, reason="Numba is required")
+def test_ncores_two_matches_one_for_float32_blocks_with_per_variant_n():
+    sizes = (8, 11)
+    blocks = []
+    start = 0
+    for k, rho in zip(sizes, (0.2, 0.5)):
+        corr = rho ** np.abs(np.subtract.outer(np.arange(k), np.arange(k)))
+        blocks.append((corr.astype(np.float32), np.arange(start, start + k)))
+        start += k
+    rng = np.random.default_rng(211)
+    bh1 = rng.standard_normal(start) * 0.02
+    bh2 = 0.3 * bh1 + rng.standard_normal(start) * 0.016
+    n1 = np.linspace(12_000.0, 20_000.0, start)
+    n2 = np.linspace(10_000.0, 18_000.0, start)[::-1].copy()
+    kwargs = dict(burn_in=4, num_iter=7, seed=212, ld_int8=False)
+
+    serial = ldpred3_auto_bivariate_blocks(
+        blocks, bh1, bh2, n1, n2, ncores=1, **kwargs)
+    parallel = ldpred3_auto_bivariate_blocks(
+        blocks, bh1, bh2, n1, n2, ncores=2, **kwargs)
+
+    _assert_bivariate_result_array_equal(parallel, serial)
+
+
+@pytest.mark.skipif(not bivariate.HAVE_NUMBA, reason="Numba is required")
+@pytest.mark.parametrize("quantize", [False, True], ids=["lr32", "lr8"])
+def test_ncores_two_matches_one_for_variable_rank_lowrank_blocks(quantize):
+    from ldpred3 import lowrank_ld
+
+    blocks = []
+    start = 0
+    for k, rho, rank in ((8, 0.35, 2), (11, 0.55, 4), (7, 0.25, 3)):
+        corr = rho ** np.abs(np.subtract.outer(np.arange(k), np.arange(k)))
+        compact = lowrank_ld(corr, variance=0.7, max_rank=rank,
+                             quantize=quantize)
+        compact.U.setflags(write=False)
+        blocks.append((compact, np.arange(start, start + k)))
+        start += k
+    rng = np.random.default_rng(23)
+    bh1 = rng.standard_normal(start) * 0.018
+    bh2 = 0.5 * bh1 + rng.standard_normal(start) * 0.012
+    kwargs = dict(burn_in=5, num_iter=8, seed=24, noise_inflation=True)
+
+    serial = ldpred3_auto_bivariate_blocks(
+        blocks, bh1, bh2, 22_000, 17_000, ncores=1, **kwargs)
+    parallel = ldpred3_auto_bivariate_blocks(
+        blocks, bh1, bh2, 22_000, 17_000, ncores=2, **kwargs)
+
+    _assert_bivariate_result_array_equal(parallel, serial)
+    assert all(not block.U.flags.writeable for block, _idx in blocks)
+
+
+def test_ncores_mixed_blocks_use_serial_fallback(monkeypatch):
+    from ldpred3 import lowrank_ld
+
+    k = 6
+    corr = 0.3 ** np.abs(np.subtract.outer(np.arange(k), np.arange(k)))
+    d8 = np.rint(corr * 127.0).astype(np.int8)
+    f32 = corr.astype(np.float32)
+    lr8 = lowrank_ld(corr, variance=0.7, max_rank=3, quantize=True)
+    blocks = [(d8, np.arange(k)),
+              (f32, np.arange(k, 2 * k)),
+              (lr8, np.arange(2 * k, 3 * k))]
+    rng = np.random.default_rng(25)
+    bh1 = rng.standard_normal(3 * k) * 0.02
+    bh2 = rng.standard_normal(3 * k) * 0.02
+    kwargs = dict(burn_in=3, num_iter=5, seed=26, ld_int8=False)
+    serial = ldpred3_auto_bivariate_blocks(
+        blocks, bh1, bh2, 16_000, 14_000, ncores=1, **kwargs)
+
+    def fail_parallel(*_args, **_kwargs):
+        pytest.fail("mixed block collections must use the serial fallback")
+
+    monkeypatch.setattr(bivariate, "_bivar_dense_sweep_all_par_jit",
+                        fail_parallel)
+    monkeypatch.setattr(bivariate, "_bivar_lowrank_sweep_all_par_jit",
+                        fail_parallel)
+    requested = ldpred3_auto_bivariate_blocks(
+        blocks, bh1, bh2, 16_000, 14_000, ncores=2, **kwargs)
+
+    _assert_bivariate_result_array_equal(requested, serial)
+
+
 @pytest.mark.parametrize(
     "overrides, match",
     [
@@ -643,6 +762,9 @@ def test_mixed_lowrank_dense_supports_optional_estimators():
         ({"sigma_prior_scale": (0.1, True)}, "sigma_prior_scale"),
         ({"sample_every": 0}, "sample_every"),
         ({"sample_every": 1.5}, "sample_every"),
+        ({"ncores": 0}, "ncores"),
+        ({"ncores": 1.5}, "ncores"),
+        ({"ncores": True}, "ncores"),
         ({"seed": -1}, "seed"),
         ({"seed": 2**32}, "seed"),
         ({"seed": True}, "seed"),

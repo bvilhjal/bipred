@@ -61,9 +61,13 @@ from bipred import ldpred3_auto_bivariate_blocks
 
 res = ldpred3_auto_bivariate_blocks(
     blocks, beta_hat1, beta_hat2, n1, n2,
-    burn_in=200, num_iter=200, seed=0,
+    burn_in=200, num_iter=200, ncores=2, seed=0,
 )
 ```
+
+With Numba, `ncores>1` sweeps homogeneous dense or homogeneous low-rank blocks
+concurrently and returns the same seeded arrays as `ncores=1`. Mixed
+representations or dtypes use the serial fallback.
 
 For auditable dispersed starts, run chains sequentially:
 
@@ -81,7 +85,8 @@ All finite, equal-length chains contribute equally. Any non-finite or
 wrong-length chain aborts instead of being discarded. `fit.basic_split_rhat`
 contains classical basic split-Rhat values plus explicit degeneracy flags; it
 does not filter chains or claim convergence. The driver does not support
-`rg_decorrelated=True`.
+`rg_decorrelated=True`. Chains remain sequential; `ncores` controls block
+parallelism within each chain only.
 
 ## Reading `BivariateResult`
 
@@ -234,6 +239,7 @@ analyses, but it can bias `r_g` upward when samples overlap strongly.
 | `h2_bounds`, `h2_cap` | `(1e-4, 1.0)`, `None` | heritability clamps |
 | `iw_df` | `10.0` | shrinkage strength for the moment update of `sigma` |
 | `sample_every` | `5` | thinning for retained effect samples (only with `rg_decorrelated=True`) |
+| `ncores` | `1` | deterministic within-chain block threads for homogeneous dense or low-rank inputs; mixed inputs fall back serially |
 | `seed` | `None` | RNG seed |
 
 ## Pitfalls

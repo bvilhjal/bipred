@@ -43,6 +43,13 @@ follow [Semantic Versioning](https://semver.org/).
   unaffected.
 
 ### Added
+- **Deterministic within-chain block parallelism.** `ncores>1` now fuses
+  homogeneous dense or homogeneous low-rank blocks into one Numba `prange`
+  sweep. Random arrays are generated before launch and the three counts plus six
+  floating statistics are reduced in genome order, preserving seeded
+  `ncores=1` results exactly. Mixed representations or dtypes fall back
+  serially. Multi-chain inference still runs chains sequentially; this setting
+  parallelises blocks within each chain.
 - **Sequential multi-chain bivariate inference.**
   `ldpred3_auto_bivariate_chains` runs deterministic dispersed chains one at a
   time under one shared covariance prior and pools every finite, equal-length
@@ -51,7 +58,7 @@ follow [Semantic Versioning](https://semver.org/).
   split-Rhat values with degeneracy metadata, but makes no convergence claim
   and has no `converged` flag. `rg_decorrelated=True` is not supported by
   this driver.
-- **Compact low-rank LD inference.** The serial bivariate block sampler now
+- **Compact low-rank LD inference.** The bivariate block sampler now
   consumes ldpred3 float `LowRankLD` and LR8 factors without materialising dense
   LD, and permits mixed dense/low-rank block lists. It maintains two persistent
   rank-size score vectors per low-rank block, giving `O(k*r)` sweep work and
@@ -154,7 +161,8 @@ follow [Semantic Versioning](https://semver.org/).
 - bipred depends on `ldpred3` (`>=` the release that removes the in-tree
   `bivariate` and cross-trait-`ldsc_rg` code) for the shared LD representations,
   the Numba sampler shim and the univariate LDSC machinery. The private seam:
-  `_jit`, `_as_n_vector`, `LowRankLD`, `_check_h2_p`,
+  `HAVE_NUMBA`, `_jit`, `_jit_parallel`, `_set_threads`, `prange`,
+  `_as_n_vector`, `LowRankLD`, `_check_h2_p`,
   `_finite_control`, `_integer_at_least`, `_validate_beta_hat`,
   `_validate_blocks`, `_validate_boolean_controls`, `_validate_iterations` and
   `_validate_seed` from `ldpred3.ldpred3`; `_wls` and `_weights` from
