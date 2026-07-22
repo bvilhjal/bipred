@@ -191,10 +191,9 @@ the traits, but prediction gains still need out-of-sample validation.
 
 `ldpred3_auto_bivariate_blocks` streams dense LD blocks and pools global
 hyperparameters across them. The full genome-wide LD matrix is never
-materialized, but each block must currently be dense. Compact `LowRankLD` and
-packed-int8 `PackedSymmetricInt8LD` blocks are rejected by design until the
-bivariate kernel supports those representations; pass dense float or dense
-int8 blocks.
+materialized, but each block must currently be dense. Compact low-rank
+`LowRankLD` blocks are rejected by design until the bivariate kernel supports
+that representation; pass dense float or dense int8 blocks.
 
 By default the LD is stored **int8**-quantised (`round(clip(R, -1, 1) * 127)`,
 scale `1/127`) — a quarter of the float32 memory, matching ldpred3's

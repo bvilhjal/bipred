@@ -423,23 +423,19 @@ def test_borrows_strength_for_low_power_trait():
     assert np.mean(bi) > np.mean(uni) + 0.02, (np.mean(bi), np.mean(uni))
 
 
-def test_bivariate_rejects_compact_blocks():
+def test_bivariate_rejects_lowrank_blocks():
     # Compact (low-rank) LD blocks must fail loudly, not crash with a cryptic
     # float() TypeError inside np.ascontiguousarray.
-    from ldpred3 import LowRankLD, pack_symmetric_int8_ld
+    from ldpred3 import LowRankLD
     rng = np.random.default_rng(0)
-    R = (0.3 ** np.abs(np.subtract.outer(np.arange(40), np.arange(40)))).astype(float)
     b1 = rng.standard_normal(40) * 0.02
     b2 = rng.standard_normal(40) * 0.02
-    compact_blocks = (
-        LowRankLD(np.ones((40, 1), dtype=np.float32), 40),
-        pack_symmetric_int8_ld(R),
-    )
-    for compact in compact_blocks:
-        blocks = [(compact, np.arange(40))]
-        with pytest.raises(NotImplementedError, match="dense LD"):
-            ldpred3_auto_bivariate_blocks(blocks, b1, b2, 10000, 10000,
-                                          burn_in=5, num_iter=5, h2_cap=(0.1, 0.1))
+    blocks = [(LowRankLD(np.ones((40, 1), dtype=np.float32), 40),
+               np.arange(40))]
+    with pytest.raises(NotImplementedError, match="dense LD"):
+        ldpred3_auto_bivariate_blocks(blocks, b1, b2, 10000, 10000,
+                                      burn_in=5, num_iter=5,
+                                      h2_cap=(0.1, 0.1))
 
 
 @pytest.mark.parametrize(

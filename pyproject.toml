@@ -14,7 +14,7 @@ authors = [{ name = "Bjarni Vilhjálmsson" }]
 # bipred consumes ldpred3's internal sampler/LDSC compatibility seam. It is not
 # yet on PyPI; install it alongside bipred as documented in README.
 # CI and README pin a tested Git revision; metadata bounds the seam to 0.2.x.
-dependencies = ["numpy>=1.20", "ldpred3>=0.2.0.dev0,<0.3"]
+dependencies = ["numpy>=1.20", "ldpred3>=0.2.13,<0.3"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",

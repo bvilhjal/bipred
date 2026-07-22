@@ -29,8 +29,22 @@ from ldpred3.ldsc import _wls, _weights
 __all__ = ["ldsc_rg", "LDSCRgResult", "estimate_sample_overlap"]
 
 
+def _require_slope_information(x, constrain):
+    """Raise when a slope is not identified by the selected design."""
+    if x.size == 0:
+        raise np.linalg.LinAlgError("LDSC regression has no observations")
+    if constrain is None:
+        if x.size < 2 or not np.any(x != x[0]):
+            raise np.linalg.LinAlgError(
+                "LDSC slope and intercept require variation in LD score times N")
+    elif not np.any(x != 0.0):
+        raise np.linalg.LinAlgError(
+            "constrained-intercept LDSC requires a nonzero slope predictor")
+
+
 def _fit_slope(y, x, ell_w, n_iter, constrain):
     """Iterated WLS of y on x with LDSC heteroscedasticity/overcounting weights."""
+    _require_slope_information(x, constrain)
     pred = np.ones_like(y)
     slope = intercept = 0.0
     for _ in range(n_iter + 1):
@@ -141,6 +155,11 @@ def ldsc_rg(beta_hat1, beta_hat2, ld_scores, n_eff1, n_eff2, *, m_snps=None,
         LD scores from ``ldpred3.ld_scores``.
     n_eff1, n_eff2 : float or array_like
         Per-trait GWAS sample sizes.
+    m_snps : float, optional
+        Number of variants over which the heritabilities and genetic covariance
+        are defined. Defaults to the number of supplied summary-statistic rows.
+        When those rows are a subset of a larger reference variant map, pass the
+        full reference-map count so the LDSC slope uses the intended estimand.
     constrain_intercept : float, optional
         Fix the cross-trait intercept (e.g. ``0.0`` for non-overlapping samples).
     n_blocks : int, default 200
@@ -184,6 +203,7 @@ def ldsc_rg(beta_hat1, beta_hat2, ld_scores, n_eff1, n_eff2, *, m_snps=None,
     def fit(sel):
         h1, i1 = _fit_slope(chi1[sel], x1[sel], ell_w[sel], n_iter, None)
         h2, i2 = _fit_slope(chi2[sel], x2[sel], ell_w[sel], n_iter, None)
+        _require_slope_information(xc[sel], constrain_intercept)
         pred1 = np.maximum(i1 + h1 * x1[sel], 1.0)
         pred2 = np.maximum(i2 + h2 * x2[sel], 1.0)
         # For approximately bivariate-normal z scores,

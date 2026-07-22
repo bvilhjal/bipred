@@ -7,6 +7,14 @@ follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **LDpred3 0.2.13 compatibility.** The tested dependency revision is now
+  `e0f6171a2635f87d60134b6d76bc8cdb7ab81119`. BiPred no longer imports or
+  advertises LDpred3's removed packed-triangular D8T representation, and its
+  declared minimum is now `ldpred3>=0.2.13`. Cross-trait LDSC explicitly checks
+  predictor variation before calling LDpred3's WLS helper, preserving the
+  documented full-fit error and undefined jackknife SE for unidentified fits.
+  A public-export smoke test now catches lazy import failures at the dependency
+  seam.
 - **Coherent four-state initialization.** `h2_init` (now scalar or per-trait),
   `p_init`, and `rg_init` now initialize a `pi`/`Sigma` pair whose implied
   marginal heritabilities and genetic correlation equal those values exactly.
@@ -126,8 +134,8 @@ follow [Semantic Versioning](https://semver.org/).
   bias mechanism (same-sweep coupling *inflates* the genetic covariance; the
   sampled-quadratic ratio attenuates through the weak trait's sampled
   variance), the `res.h2` estimand, the Equation 1 noise covariance, the
-  `noise_inflation` × `cross_corr` interaction, the `PackedSymmetricInt8LD`
-  rejection, the full ldpred3 seam (Notes), and the `mixer_overlap.py` /
+  `noise_inflation` × `cross_corr` interaction, compact-LD rejection, the full
+  ldpred3 seam (Notes), and the `mixer_overlap.py` /
   `bivariate_demo.py` benchmark-table rows; the noise-inflation numbers above
   now match the committed calibration sweep.
 
@@ -135,7 +143,7 @@ follow [Semantic Versioning](https://semver.org/).
 - bipred depends on `ldpred3` (`>=` the release that removes the in-tree
   `bivariate` and cross-trait-`ldsc_rg` code) for the shared LD representations,
   the Numba sampler shim and the univariate LDSC machinery. The private seam:
-  `_jit`, `_as_n_vector`, `LowRankLD`, `PackedSymmetricInt8LD`, `_check_h2_p`,
+  `_jit`, `_as_n_vector`, `LowRankLD`, `_check_h2_p`,
   `_finite_control`, `_integer_at_least`, `_validate_beta_hat`,
   `_validate_blocks`, `_validate_boolean_controls`, `_validate_iterations` and
   `_validate_seed` from `ldpred3.ldpred3`; `_wls` and `_weights` from

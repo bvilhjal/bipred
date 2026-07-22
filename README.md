@@ -19,22 +19,22 @@ Numba 0.66 or newer. Until ldpred3 is published, install the exact revision
 tested by bipred, then install bipred:
 
 ```bash
-python -m pip install "ldpred3[fast] @ git+https://github.com/bvilhjal/ldpred3.git@3444da10aa98d67f764c25756794b27f737244a3"
+python -m pip install "ldpred3[fast] @ git+https://github.com/bvilhjal/ldpred3.git@e0f6171a2635f87d60134b6d76bc8cdb7ab81119"
 python -m pip install "bipred[fast] @ git+https://github.com/bvilhjal/bipred.git"
 ```
 
-The package metadata accepts compatible ldpred3 0.2.x releases, while the source
-install pins a commit because bipred currently shares private sampler and LDSC
-helpers with ldpred3. That pin should be updated deliberately when the seam
-changes. Blindly following a moving branch would be exciting in all the wrong
-ways.
+The package metadata requires ldpred3 0.2.13 or newer within the 0.2 series,
+while the source install pins the exact tested commit because bipred currently
+shares private sampler and LDSC helpers with ldpred3. That pin should be updated
+deliberately when the seam changes. Blindly following a moving branch would be
+exciting in all the wrong ways.
 
 For a Conda environment on Linux, macOS, or Windows:
 
 ```bash
 conda create -n bipred -c conda-forge python-gil=3.14 numpy numba pip
 conda activate bipred
-python -m pip install "ldpred3 @ git+https://github.com/bvilhjal/ldpred3.git@3444da10aa98d67f764c25756794b27f737244a3"
+python -m pip install "ldpred3 @ git+https://github.com/bvilhjal/ldpred3.git@e0f6171a2635f87d60134b6d76bc8cdb7ab81119"
 python -m pip install "bipred @ git+https://github.com/bvilhjal/bipred.git"
 ```
 
@@ -88,8 +88,7 @@ res = ldpred3_auto_bivariate_blocks(
 
 `blocks` must be `[(R, idx), ...]` with dense LD matrices and contiguous indices
 that partition `0..m-1`. The current bivariate sampler rejects ldpred3's compact
-representations (low-rank `LowRankLD` and packed-int8 `PackedSymmetricInt8LD`);
-pass dense float or dense int8 blocks.
+low-rank `LowRankLD` representation; pass dense float or dense int8 blocks.
 
 By default the LD is stored **int8**-quantised (a quarter of the float32 memory;
 the sampler dequantises on the fly), matching ldpred3's pipeline default. int8 blocks from

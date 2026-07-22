@@ -35,7 +35,6 @@ import numpy as np
 # seam ldpred3 keeps stable for its own infer / annot / finemap modules.
 from ldpred3.ldpred3 import (
     LowRankLD,
-    PackedSymmetricInt8LD,
     _as_n_vector,
     _check_h2_p,
     _finite_control,
@@ -633,9 +632,8 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     ``blocks`` is ``[(R, idx), ...]`` with contiguous ``idx`` arrays partitioning
     ``0..m-1``. The two traits share the same LD. Effects are updated block by
     block while ``pi`` and ``Sigma`` are pooled globally, so the genome-wide LD is
-    never materialised. Compact ldpred3 representations (``LowRankLD`` and
-    packed-int8 ``PackedSymmetricInt8LD``) are not supported; pass dense float
-    or dense int8 blocks.
+    never materialised. The compact ldpred3 ``LowRankLD`` representation is
+    not supported; pass dense float or dense int8 blocks.
 
     By default the LD is stored **int8**-quantised (a quarter of the float32
     memory; the sampler dequantises on the fly), matching ldpred3's
@@ -761,7 +759,7 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     blocks = _validate_blocks(blocks, m, contiguous=True)
     fblocks = []
     for R, idx in sorted(blocks, key=lambda bi: int(bi[1][0])):
-        if isinstance(R, (LowRankLD, PackedSymmetricInt8LD)):
+        if isinstance(R, LowRankLD):
             raise NotImplementedError(
                 "bivariate LDpred3 needs dense LD blocks, not a "
                 f"{type(R).__name__}; it does not support the compact "

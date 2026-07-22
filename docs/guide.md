@@ -33,8 +33,7 @@ You need:
 
 bipred does not build LD or harmonize summary statistics. Use ldpred3 for that
 preparation. The bivariate sampler currently requires dense LD blocks; ldpred3's
-compact representations (`LowRankLD` and packed-int8 `PackedSymmetricInt8LD`)
-are rejected.
+compact low-rank `LowRankLD` representation is rejected.
 
 By default the LD is stored **int8**-quantised (a quarter of the float32 memory;
 the sampler dequantises on the fly), matching ldpred3's pipeline default representation.

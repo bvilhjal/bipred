@@ -9,7 +9,7 @@ on:
 env:
   # ldpred3 is not published yet and bipred consumes an internal compatibility
   # seam. Keep CI reproducible instead of silently following its moving branch.
-  LDPRED3_REV: "3444da10aa98d67f764c25756794b27f737244a3"
+  LDPRED3_REV: "e0f6171a2635f87d60134b6d76bc8cdb7ab81119"
 
 jobs:
   lint:

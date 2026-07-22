@@ -25,6 +25,10 @@ E[z1_j z2_j] = intercept + (sqrt(N1 N2) * rho_g / M) * LD_score_j
 
 The intercept captures cross-trait sampling-noise correlation and correlated
 confounding; the slope gives genetic covariance under the LDSC assumptions.
+Here `M` is the number of variants over which heritability and covariance are
+defined. If the supplied summary statistics are a subset of a larger reference
+variant map, pass that full count as `m_snps`; otherwise it defaults to the
+number of supplied rows.
 
 ## Practical recommendation
 

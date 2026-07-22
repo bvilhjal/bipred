@@ -8,6 +8,11 @@ implementation (`bipred/bivariate.py`, `bipred/ldsc_rg.py`, tests).
 **Test suite:** 117 passed, 0 warnings (Python 3.14.6 + Numba, conda env `bipred`),
 including the bit-exact float32/int8 golden tests and the LDSC-rg golden.
 
+> **Addendum (2026-07-22):** LDpred3 0.2.13 subsequently removed the D8T
+> `PackedSymmetricInt8LD` representation. References below describe the older
+> pinned compatibility surface reviewed on 2026-07-18; current BiPred no longer
+> imports, documents, or tests that removed type.
+
 ## Verdict
 
 No critical defects. The math in both docs and both code files is sound; every formula

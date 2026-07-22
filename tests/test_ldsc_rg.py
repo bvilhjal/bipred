@@ -162,6 +162,22 @@ def test_ldsc_rg_accepts_per_variant_sample_sizes_and_one_block():
     assert np.isnan(res.rg_se)
 
 
+def test_ldsc_rg_rejects_unidentified_full_fit():
+    beta = np.array([0.01, 0.02, 0.03, 0.04])
+    with pytest.raises(ValueError, match="singular.*LD scores must vary"):
+        ldsc_rg(beta, beta, np.ones(4), 100.0, 100.0, n_blocks=2)
+
+
+def test_ldsc_rg_singular_jackknife_replicate_makes_se_undefined():
+    ell = np.array([1.0, 1.0, 2.0, 2.0])
+    n = 100.0
+    x = n * ell / ell.size
+    beta = np.sqrt((1.0 + 0.2 * x) / n)
+    res = ldsc_rg(beta, beta, ell, n, n, n_blocks=2, n_iter=0)
+    assert res.rg == pytest.approx(1.0)
+    assert np.isnan(res.rg_se)
+
+
 def test_ldsc_rg_nonpositive_h2_is_undefined():
     ell = np.array([1.0, 2.0, 3.0, 4.0])
     beta = np.sqrt(np.array([4.0, 3.0, 2.0, 1.0]) / 100.0)
