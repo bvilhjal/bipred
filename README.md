@@ -97,6 +97,27 @@ large dense blocks where quantisation can alter conditioning. Use
 `ld_int8=True` to quantise every dense float block or `False` to keep dense float
 inputs float32. This setting does not alter compact low-rank factors.
 
+## Multiple Chains
+
+```python
+from bipred import ldpred3_auto_bivariate_chains
+
+fit = ldpred3_auto_bivariate_chains(
+    blocks, beta_hat1, beta_hat2, n1, n2, seed=0,
+)
+res = fit.posterior
+fit.basic_split_rhat.rhat
+```
+
+The default four chains run sequentially, with union-causal starts log-spaced
+from `1e-4` to `0.2` and one covariance-prior scale shared across chains.
+Every finite, equal-length chain is pooled with equal weight. A non-finite or
+wrong-length chain aborts the fit; chains are never filtered by their estimates
+or diagnostics. The returned classical basic split-Rhat values are diagnostics,
+not a convergence claim, and there is deliberately no `converged` flag. They
+cover scalar genetic and hyperparameter traces, not variant-level effects.
+`rg_decorrelated=True` is not supported by the multi-chain driver.
+
 ## Model In Brief
 
 Each variant has one of four states:

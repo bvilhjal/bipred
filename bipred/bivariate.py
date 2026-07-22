@@ -675,8 +675,10 @@ class BivariateResult:
     learned 2x2 effect covariance, and ``pi`` the four-state mixture
     ``(pi00, pi10, pi01, pi11)`` = neither / trait-1-only / trait-2-only / both
     causal. ``sigma`` and ``pi`` are both means over the retained stochastic
-    hyperparameter iterates. See :attr:`mixer` for the MiXeR-style
-    polygenic-overlap summary.
+    hyperparameter iterates. ``genetic_samples`` retains raw
+    ``(gvar1, gcov, gvar2)`` quadratics and ``noise_scale_samples`` retains the
+    two noise scales at every post-burn-in sweep. See :attr:`mixer` for the
+    MiXeR-style polygenic-overlap summary.
     """
 
     beta1_est: np.ndarray
@@ -689,6 +691,8 @@ class BivariateResult:
     pi_samples: np.ndarray = None       # (n_kept, 4) conditional mixture draws
     sigma_samples: np.ndarray = None    # (n_kept, 3) damped covariance iterates
     noise_scale: tuple = None           # learned (lambda1, lambda2); (1,1) if off
+    genetic_samples: np.ndarray = None  # (n_kept, 3) raw (gvar1, gcov, gvar2)
+    noise_scale_samples: np.ndarray = None  # (n_kept, 2); ones if inflation off
 
     @property
     def mixer(self):
@@ -1029,6 +1033,8 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     # and state draws, not a conditional posterior draw.
     pi_samples = np.zeros((num_iter, 4))
     sig_samples = np.zeros((num_iter, 3))
+    genetic_samples = np.zeros((num_iter, 3))
+    noise_scale_samples = np.zeros((num_iter, 2))
     # These two O(num_iter * m) buffers are needed only by the optional
     # decorrelated-rg estimator. Default runs should not pay their memory cost.
     samp1, samp2 = _effect_sample_buffers(
@@ -1114,6 +1120,8 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
             gv_acc += (gv11, gv12, gv22)
             pi_samples[count] = pi
             sig_samples[count] = (s1, s2, s12)
+            genetic_samples[count] = (gv11, gv12, gv22)
+            noise_scale_samples[count] = (lam1, lam2)
             if (rg_decorrelated and (it - burn_in) % sample_every == 0):
                 samp1[n_saved] = curr1
                 samp2[n_saved] = curr2
@@ -1155,7 +1163,9 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
                            pi=pi_mean,
                            pi_samples=pi_samples[:count].copy(),
                            sigma_samples=sig_samples[:count].copy(),
-                           noise_scale=(float(lam1), float(lam2)))
+                           noise_scale=(float(lam1), float(lam2)),
+                           genetic_samples=genetic_samples[:count].copy(),
+                           noise_scale_samples=noise_scale_samples[:count].copy())
 
 
 def ldpred3_auto_bivariate(corr, beta_hat1, beta_hat2, n_eff1, n_eff2, **kwargs):

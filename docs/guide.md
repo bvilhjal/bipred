@@ -65,6 +65,24 @@ res = ldpred3_auto_bivariate_blocks(
 )
 ```
 
+For auditable dispersed starts, run chains sequentially:
+
+```python
+from bipred import ldpred3_auto_bivariate_chains
+
+fit = ldpred3_auto_bivariate_chains(
+    blocks, beta_hat1, beta_hat2, n1, n2,
+    n_chains=4, seed=0,
+)
+res = fit.posterior
+```
+
+All finite, equal-length chains contribute equally. Any non-finite or
+wrong-length chain aborts instead of being discarded. `fit.basic_split_rhat`
+contains classical basic split-Rhat values plus explicit degeneracy flags; it
+does not filter chains or claim convergence. The driver does not support
+`rg_decorrelated=True`.
+
 ## Reading `BivariateResult`
 
 **Table 1. Main result fields.**
@@ -78,6 +96,8 @@ res = ldpred3_auto_bivariate_blocks(
 | `sigma` | mean of the retained 2x2 effect-covariance iterates |
 | `pi` | `(pi00, pi10, pi01, pi11)` mixture: neither / trait 1 / trait 2 / both |
 | `noise_scale` | learned `(lambda1, lambda2)`; always present, `(1.0, 1.0)` when `noise_inflation=False` |
+| `genetic_samples` | retained raw `(gvar_1, gcov, gvar_2)` quadratic traces |
+| `noise_scale_samples` | retained `(lambda1, lambda2)` trace; all ones when inflation is off |
 
 Overlap summary:
 

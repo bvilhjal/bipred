@@ -12,9 +12,14 @@ Public API::
     res = ldpred3_auto_bivariate(corr, beta_hat1, beta_hat2, n1, n2)
     res.rg, res.h2, res.mixer
 
+    from bipred import ldpred3_auto_bivariate_chains
+    multi = ldpred3_auto_bivariate_chains(blocks, beta_hat1, beta_hat2, n1, n2)
+    multi.posterior, multi.basic_split_rhat
+
 ``ldpred3_auto_bivariate`` runs on a single dense LD matrix;
 ``ldpred3_auto_bivariate_blocks`` streams the genome block by block. Both return
-a :class:`~bipred.bivariate.BivariateResult`.
+a :class:`~bipred.bivariate.BivariateResult`. The multi-chain driver runs
+dispersed chains sequentially and pools every finite, equal-length chain.
 
 For a fast, moment-based genetic-correlation estimate (the cross-check on the
 joint fit), :func:`~bipred.ldsc_rg.ldsc_rg` implements cross-trait LD Score
@@ -35,6 +40,9 @@ __version__ = "0.1.0.dev0"
 _EXPORTS = {
     "bivariate": ["ldpred3_auto_bivariate", "ldpred3_auto_bivariate_blocks",
                   "BivariateResult"],
+    "multichain": ["ldpred3_auto_bivariate_chains",
+                   "MultiChainBivariateResult", "BivariateChainSummary",
+                   "BivariateBasicSplitRHat"],
     "ldsc_rg": ["ldsc_rg", "LDSCRgResult", "estimate_sample_overlap"],
 }
 

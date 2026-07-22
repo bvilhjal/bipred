@@ -79,6 +79,25 @@ sets the persistent diagonal shrinkage target separately from this starting
 covariance; this separation is required when comparing chains with different
 starts but the same prior.
 
+## Sequential multi-chain inference
+
+`ldpred3_auto_bivariate_chains` runs chains one at a time, using deterministic
+child seeds. Its default four union-causal starts are log-spaced from `1e-4` to
+`0.2`; explicit four-state `pi_inits` are the alternative. Every chain uses
+the same covariance-prior scale, derived once from `prior_p_init=0.02` unless
+set explicitly.
+
+Each retained sweep records raw genetic quadratics `(gvar_1, gcov, gvar_2)` and
+the two noise scales. The driver pools all finite, equal-length traces and
+posterior effects with equal weight. A non-finite or unequal chain is a hard
+failure: there is no estimate-based chain filtering. Classical basic split-Rhat
+is reported for scalar genetic, mixture, covariance, and—when enabled—noise-scale
+traces, with explicit degeneracy flags. It does not diagnose variant-level
+effects. It is diagnostic metadata, not a convergence decision, and no
+`converged` flag is produced.
+`rg_decorrelated=True` is unsupported because that estimator requires a
+different cross-chain trace contract.
+
 ## Sampler and hyperparameter updates
 
 For each sweep and SNP, the sampler:

@@ -43,6 +43,14 @@ follow [Semantic Versioning](https://semver.org/).
   unaffected.
 
 ### Added
+- **Sequential multi-chain bivariate inference.**
+  `ldpred3_auto_bivariate_chains` runs deterministic dispersed chains one at a
+  time under one shared covariance prior and pools every finite, equal-length
+  chain with equal weight. Non-finite or unequal chains abort rather than being
+  filtered. The result exposes auditable starts/seeds and classical basic
+  split-Rhat values with degeneracy metadata, but makes no convergence claim
+  and has no `converged` flag. `rg_decorrelated=True` is not supported by
+  this driver.
 - **Compact low-rank LD inference.** The serial bivariate block sampler now
   consumes ldpred3 float `LowRankLD` and LR8 factors without materialising dense
   LD, and permits mixed dense/low-rank block lists. It maintains two persistent
