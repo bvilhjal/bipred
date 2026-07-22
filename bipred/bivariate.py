@@ -1016,7 +1016,10 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
         Threads used for a fused block-parallel sweep when all prepared blocks
         are homogeneous dense or homogeneous ``LowRankLD`` factors and Numba is
         available. SNP updates remain sequential within each block. Mixed
-        representations or dtypes use the deterministic serial fallback.
+        representations or dtypes use the deterministic serial fallback. These
+        are persistent threads, not subprocesses, but each sweep waits for every
+        block before updating global parameters; imbalanced blocks can therefore
+        limit speed-up.
     seed : int or None
 
     Returns

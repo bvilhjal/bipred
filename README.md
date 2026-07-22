@@ -107,7 +107,10 @@ With Numba, set `ncores>1` to sweep homogeneous dense blocks or homogeneous
 low-rank factors concurrently. Random draws are generated before the fused
 sweep and block statistics are reduced in genome order, so seeded results
 match `ncores=1` exactly. Mixed representations or dtypes fall back to the
-serial sweep.
+serial sweep. This uses one persistent Numba thread team, not per-sweep
+subprocesses. There is nevertheless a synchronization barrier after every
+sweep: global parameter updates wait for all blocks, so the slowest block can
+limit scaling and gains depend on having enough reasonably balanced blocks.
 
 ## Multiple Chains
 
@@ -124,7 +127,8 @@ fit.basic_split_rhat.rhat
 The default four chains run sequentially, with union-causal starts log-spaced
 from `1e-4` to `0.2` and one covariance-prior scale shared across chains.
 `ncores` parallelises independent LD blocks within each chain; it does not run
-multiple chains concurrently.
+multiple chains concurrently, and each within-chain sweep still has the barrier
+described above.
 Every finite, equal-length chain is pooled with equal weight. A non-finite or
 wrong-length chain aborts the fit; chains are never filtered by their estimates
 or diagnostics. The returned classical basic split-Rhat values are diagnostics,

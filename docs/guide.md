@@ -67,7 +67,10 @@ res = ldpred3_auto_bivariate_blocks(
 
 With Numba, `ncores>1` sweeps homogeneous dense or homogeneous low-rank blocks
 concurrently and returns the same seeded arrays as `ncores=1`. Mixed
-representations or dtypes use the serial fallback.
+representations or dtypes use the serial fallback. These are persistent threads,
+not subprocesses, but every sweep waits for all blocks before updating the
+global parameters. Unequal block workloads can therefore limit the speed-up;
+leave `ncores=1` unless a representative run demonstrates a benefit.
 
 For auditable dispersed starts, run chains sequentially:
 
@@ -86,7 +89,8 @@ wrong-length chain aborts instead of being discarded. `fit.basic_split_rhat`
 contains classical basic split-Rhat values plus explicit degeneracy flags; it
 does not filter chains or claim convergence. The driver does not support
 `rg_decorrelated=True`. Chains remain sequential; `ncores` controls block
-parallelism within each chain only.
+parallelism within each chain only, including its per-sweep synchronization
+barrier.
 
 ## Reading `BivariateResult`
 

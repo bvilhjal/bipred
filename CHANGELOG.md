@@ -50,7 +50,10 @@ follow [Semantic Versioning](https://semver.org/).
   floating statistics are reduced in genome order, preserving seeded
   `ncores=1` results exactly. Mixed representations or dtypes fall back
   serially. Multi-chain inference still runs chains sequentially; this setting
-  parallelises blocks within each chain.
+  parallelises blocks within each chain. The persistent worker threads meet at
+  a required barrier before every global parameter update, so speed-up depends
+  on block count and workload balance rather than scaling automatically with
+  `ncores`.
 - **Sequential multi-chain bivariate inference.**
   `ldpred3_auto_bivariate_chains` runs deterministic dispersed chains one at a
   time under one shared covariance prior and pools every finite, equal-length

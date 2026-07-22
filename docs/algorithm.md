@@ -241,7 +241,12 @@ block-parallel sweep. Random arrays are generated in sorted genome order before
 workers start. Each worker owns one block's effects and persistent projections;
 the three integer counts and six floating statistics are then reduced in the
 original block order. Consequently seeded `ncores=1` and `ncores>1` fits are
-array-identical. Mixed representations or dtypes retain the serial path.
+array-identical. Mixed representations or dtypes retain the serial path. The
+Numba workers are threads in one process and persist across sweeps, but every
+sweep ends at a required barrier before the global mixture, covariance, and
+optional noise-scale updates. The slowest block therefore determines the
+parallel portion of a sweep; speed-up depends on the number and workload balance
+of the blocks and is not expected to scale linearly with `ncores`.
 
 With the default `ld_int8=None`, supplied dense int8 blocks are consumed as-is;
 float blocks with at most 1500 variants are stored as
