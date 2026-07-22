@@ -19,7 +19,7 @@ Numba 0.66 or newer. Until ldpred3 is published, install the exact revision
 tested by bipred, then install bipred:
 
 ```bash
-python -m pip install "ldpred3[fast] @ git+https://github.com/bvilhjal/ldpred3.git@e0f6171a2635f87d60134b6d76bc8cdb7ab81119"
+python -m pip install "ldpred3[fast] @ git+https://github.com/bvilhjal/ldpred3.git@db3ebd2385b7e3f347712f8761682c0eb49df3e4"
 python -m pip install "bipred[fast] @ git+https://github.com/bvilhjal/bipred.git"
 ```
 
@@ -34,7 +34,7 @@ For a Conda environment on Linux, macOS, or Windows:
 ```bash
 conda create -n bipred -c conda-forge python-gil=3.14 numpy numba pip
 conda activate bipred
-python -m pip install "ldpred3 @ git+https://github.com/bvilhjal/ldpred3.git@e0f6171a2635f87d60134b6d76bc8cdb7ab81119"
+python -m pip install "ldpred3 @ git+https://github.com/bvilhjal/ldpred3.git@db3ebd2385b7e3f347712f8761682c0eb49df3e4"
 python -m pip install "bipred @ git+https://github.com/bvilhjal/bipred.git"
 ```
 
@@ -90,10 +90,16 @@ res = ldpred3_auto_bivariate_blocks(
 `0..m-1`. Each `R` may be a dense LD matrix or ldpred3's compact `LowRankLD`
 representation, including LR8; dense and low-rank blocks may be mixed.
 
+The revision pinned above includes ldpred3's corrected low-rank-plus-diagonal
+contract introduced in `382fb90`. BiPred rejects older row-normalised factors by
+default because they can greatly exaggerate LD for weak factor rows. Set
+`allow_legacy_lowrank=True` only to reproduce that legacy effective matrix.
+
 The default `ld_int8=None` policy keeps supplied int8 blocks as-is, quantises
 float blocks with at most 1500 variants, and keeps larger float blocks float32.
 This retains D8's fourfold storage saving on small blocks without applying it to
-large dense blocks where quantisation can alter conditioning. Use
+large dense blocks where quantisation can alter conditioning. The 1500-variant
+cutoff is a storage heuristic, not a bivariate real-data accuracy guarantee. Use
 `ld_int8=True` to quantise every dense float block or `False` to keep dense float
 inputs float32. This setting does not alter compact low-rank factors.
 

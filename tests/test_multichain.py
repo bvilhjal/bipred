@@ -389,6 +389,27 @@ def test_nonfinite_or_unequal_chain_aborts_the_fit(monkeypatch):
         )
 
 
+def test_sampler_failure_reports_chain_and_seed(monkeypatch):
+    calls = []
+
+    def fail(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, **kwargs):
+        calls.append(kwargs)
+        raise ArithmeticError("deliberate numerical failure")
+
+    monkeypatch.setattr(multichain, "ldpred3_auto_bivariate_blocks", fail)
+    blocks, beta1, beta2 = _inputs()
+    expected_seed = int(multichain._deterministic_chain_seeds(19, 4)[0])
+    with pytest.raises(
+        RuntimeError,
+        match=rf"chain 0 \(seed {expected_seed}\) failed: deliberate",
+    ) as caught:
+        multichain.ldpred3_auto_bivariate_chains(
+            blocks, beta1, beta2, 10_000, 12_000, num_iter=4, seed=19
+        )
+    assert isinstance(caught.value.__cause__, ArithmeticError)
+    assert len(calls) == 1
+
+
 @pytest.mark.parametrize("num_iter", [2, 5])
 def test_split_rhat_requires_even_retained_length_at_least_four(num_iter):
     blocks, beta1, beta2 = _inputs()
@@ -423,12 +444,16 @@ def test_basic_split_rhat_formula_and_degeneracy_metadata():
             "moving": np.array([[0.0, 2.0, 0.0, 2.0],
                                 [1.0, 3.0, 1.0, 3.0]]),
             "flat": np.ones((2, 4)),
+            "stuck_apart": np.array([[1.0, 1.0, 1.0, 1.0],
+                                      [2.0, 2.0, 2.0, 2.0]]),
         }
     )
     assert diagnostic.rhat["moving"] == pytest.approx(np.sqrt(2.0 / 3.0))
     assert not diagnostic.degenerate["moving"]
     assert np.isnan(diagnostic.rhat["flat"])
     assert diagnostic.degenerate["flat"]
+    assert np.isposinf(diagnostic.rhat["stuck_apart"])
+    assert diagnostic.degenerate["stuck_apart"]
     assert diagnostic.n_chains == 2
     assert diagnostic.half_length == 2
     assert not hasattr(diagnostic, "converged")

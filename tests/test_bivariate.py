@@ -456,18 +456,34 @@ def test_lowrank_matmul_includes_diagonal_residual_and_zero_factor_row():
     U = rng.standard_normal((9, 4)).astype(np.float32)
     U *= np.sqrt(0.6) / np.linalg.norm(U, axis=1)[:, None]
     U[-1] = 0.0
+    supplied_residual = np.r_[np.full(8, 0.40001), 1.0]
     R = SimpleNamespace(U=U, scale=1.0,
-                        residual_diag=np.r_[np.full(8, 0.4), 1.0])
+                        residual_diag=supplied_residual)
     payload, scales, residual = bivariate._prepare_lowrank_block(R)
     fblocks = [(bivariate._LOWRANK, payload, 0, 9, scales, residual,
                 np.zeros(4), np.zeros(4))]
     V = rng.standard_normal((5, 9)).astype(np.float32)
 
     observed = bivariate._apply_R_rows(fblocks, V)
-    expected_R = U @ U.T + np.diag(np.r_[np.full(8, 0.4), 1.0])
+    expected_R = U @ U.T + np.diag(supplied_residual)
     expected = V @ expected_R.astype(np.float32)
     assert residual[-1] == 1.0
+    np.testing.assert_array_equal(residual, supplied_residual)
     np.testing.assert_allclose(observed, expected, rtol=2e-6, atol=2e-6)
+
+
+def test_legacy_lowrank_requires_explicit_opt_in():
+    from types import SimpleNamespace
+
+    legacy = SimpleNamespace(U=np.eye(3, dtype=np.float32), scale=1.0)
+    with pytest.raises(ValueError, match="legacy row-normalised LowRankLD"):
+        bivariate._prepare_lowrank_block(legacy)
+    payload, scales, residual = bivariate._prepare_lowrank_block(
+        legacy, allow_legacy=True
+    )
+    np.testing.assert_array_equal(payload, legacy.U)
+    np.testing.assert_array_equal(scales, np.ones(3))
+    np.testing.assert_array_equal(residual, np.zeros(3))
 
 
 def test_lowrank_kernel_diagonal_residual_matches_dense_sweep():
@@ -529,7 +545,8 @@ def test_truncated_float_lowrank_matches_its_effective_dense_matrix():
         [(dense, np.arange(k))], bh1, bh2, 30000, 25000, **kwargs)
     observed = ldpred3_auto_bivariate_blocks(
         [(R, np.arange(k))], bh1, bh2, 30000, 25000,
-        **{**kwargs, "ld_int8": True})
+        **{**kwargs, "ld_int8": True,
+           "allow_legacy_lowrank": not hasattr(R, "residual_diag")})
 
     np.testing.assert_allclose(observed.beta1_est, expected.beta1_est,
                                rtol=3e-5, atol=3e-7)
@@ -560,10 +577,12 @@ def test_lr8_matches_effective_dense_and_ignores_dense_storage_policy():
         ld_int8=False, **kwargs)
     observed = ldpred3_auto_bivariate_blocks(
         [(R, np.arange(k))], bh1, bh2, 20000, 18000,
-        ld_int8=True, **kwargs)
+        ld_int8=True, allow_legacy_lowrank=not hasattr(R, "residual_diag"),
+        **kwargs)
     automatic = ldpred3_auto_bivariate_blocks(
         [(R, np.arange(k))], bh1, bh2, 20000, 18000,
-        ld_int8=None, **kwargs)
+        ld_int8=None, allow_legacy_lowrank=not hasattr(R, "residual_diag"),
+        **kwargs)
 
     np.testing.assert_allclose(observed.beta1_est, expected.beta1_est,
                                rtol=2e-5, atol=2e-7)
@@ -588,13 +607,17 @@ def test_mixed_lowrank_dense_supports_optional_estimators():
 
     result = ldpred3_auto_bivariate_blocks(
         blocks, bh1, bh2, 25000, 15000, burn_in=8, num_iter=12, seed=7,
-        rg_decorrelated=True, sample_every=2, noise_inflation=True)
+        rg_decorrelated=True, sample_every=2, noise_inflation=True,
+        allow_legacy_lowrank=not hasattr(lowrank, "residual_diag"))
 
     assert np.all(np.isfinite(result.beta1_est))
     assert np.all(np.isfinite(result.beta2_est))
     assert np.isfinite(result.rg)
     assert np.all(np.isfinite(result.h2))
     assert np.all(np.isfinite(result.noise_scale))
+    np.testing.assert_allclose(
+        result.noise_scale, result.noise_scale_samples.mean(axis=0)
+    )
 
 
 def _assert_bivariate_result_array_equal(observed, expected):
@@ -674,7 +697,10 @@ def test_ncores_two_matches_one_for_variable_rank_lowrank_blocks(quantize):
     rng = np.random.default_rng(23)
     bh1 = rng.standard_normal(start) * 0.018
     bh2 = 0.5 * bh1 + rng.standard_normal(start) * 0.012
-    kwargs = dict(burn_in=5, num_iter=8, seed=24, noise_inflation=True)
+    kwargs = dict(
+        burn_in=5, num_iter=8, seed=24, noise_inflation=True,
+        allow_legacy_lowrank=not hasattr(blocks[0][0], "residual_diag"),
+    )
 
     serial = ldpred3_auto_bivariate_blocks(
         blocks, bh1, bh2, 22_000, 17_000, ncores=1, **kwargs)
@@ -699,7 +725,10 @@ def test_ncores_mixed_blocks_use_serial_fallback(monkeypatch):
     rng = np.random.default_rng(25)
     bh1 = rng.standard_normal(3 * k) * 0.02
     bh2 = rng.standard_normal(3 * k) * 0.02
-    kwargs = dict(burn_in=3, num_iter=5, seed=26, ld_int8=False)
+    kwargs = dict(
+        burn_in=3, num_iter=5, seed=26, ld_int8=False,
+        allow_legacy_lowrank=not hasattr(lr8, "residual_diag"),
+    )
     serial = ldpred3_auto_bivariate_blocks(
         blocks, bh1, bh2, 16_000, 14_000, ncores=1, **kwargs)
 
@@ -721,6 +750,7 @@ def test_ncores_mixed_blocks_use_serial_fallback(monkeypatch):
     [
         ({"ld_int8": 1}, "ld_int8.*boolean"),
         ({"ld_int8": "auto"}, "ld_int8.*boolean"),
+        ({"allow_legacy_lowrank": 1}, "allow_legacy_lowrank.*boolean"),
         ({"h2_init": 0.0}, "h2"),
         ({"h2_init": np.nan}, "h2"),
         ({"h2_init": (0.1,)}, "h2_init"),

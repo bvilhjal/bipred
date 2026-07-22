@@ -8,7 +8,8 @@ follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 - **LDpred3 0.2.13 compatibility.** The tested dependency revision is now
-  `e0f6171a2635f87d60134b6d76bc8cdb7ab81119`. BiPred no longer imports or
+  `db3ebd2385b7e3f347712f8761682c0eb49df3e4`, including the corrected
+  low-rank-plus-diagonal contract introduced in `382fb90`. BiPred no longer imports or
   advertises LDpred3's removed packed-triangular D8T representation, and its
   declared minimum is now `ldpred3>=0.2.13`. Cross-trait LDSC explicitly checks
   predictor variation before calling LDpred3's WLS helper, preserving the
@@ -57,7 +58,9 @@ follow [Semantic Versioning](https://semver.org/).
   filtered. The result exposes auditable starts/seeds and classical basic
   split-Rhat values with degeneracy metadata, but makes no convergence claim
   and has no `converged` flag. `rg_decorrelated=True` is not supported by
-  this driver.
+  this driver. Split chains stuck at different constants report infinite
+  Rhat, sampler failures include the chain seed, and the reported noise scale
+  is consistently the retained-iterate mean for single- and multi-chain fits.
 - **Compact low-rank LD inference.** The bivariate block sampler now
   consumes ldpred3 float `LowRankLD` and LR8 factors without materialising dense
   LD, and permits mixed dense/low-rank block lists. It maintains two persistent
@@ -65,6 +68,9 @@ follow [Semantic Versioning](https://semver.org/).
   storage for block size `k` and rank `r`. The adapter supports both released
   row-normalised factors and ldpred3's newer globally scaled factor plus
   diagonal-residual contract; `ld_int8` continues to control dense storage only.
+  Because legacy row normalisation can fabricate strong LD for weak factor rows,
+  it now requires explicit `allow_legacy_lowrank=True`; corrected compact
+  inference requires ldpred3 revision `382fb90` or newer.
 - **Configurable four-state mixture prior (`pi_prior`).** The Dirichlet
   concentration for the per-sweep `π` draw is now a parameter (default `1.0`,
   the historical uniform prior; `0.5` is Jeffreys). Backward compatible. Mirrors

@@ -114,11 +114,13 @@ def _basic_split_rhat(traces):
         variance_hat = ((half - 1) / half * within + between / half)
         is_degenerate = within <= 0.0
         degenerate[name] = bool(is_degenerate)
-        rhat[name] = (
-            float("nan")
-            if is_degenerate
-            else float(np.sqrt(max(variance_hat, 0.0) / within))
-        )
+        if is_degenerate:
+            # Identical constant split chains contain no scale information;
+            # different constants have zero within-chain variance but positive
+            # between-chain variance and therefore infinite disagreement.
+            rhat[name] = float("inf") if between > 0.0 else float("nan")
+        else:
+            rhat[name] = float(np.sqrt(max(variance_hat, 0.0) / within))
     return BivariateBasicSplitRHat(
         rhat=rhat,
         degenerate=degenerate,
@@ -355,19 +357,24 @@ def ldpred3_auto_bivariate_chains(
     for index, (chain_seed, p_start, pi_start) in enumerate(
         zip(chain_seeds, p_starts, start_pi)
     ):
-        chain_result = ldpred3_auto_bivariate_blocks(
-            blocks,
-            beta_hat1,
-            beta_hat2,
-            n_eff1,
-            n_eff2,
-            p_init=float(p_start),
-            pi_init=pi_start if explicit_pi else None,
-            sigma_prior_scale=shared_prior_scale,
-            seed=int(chain_seed),
-            rg_decorrelated=False,
-            **bivariate_kwargs,
-        )
+        try:
+            chain_result = ldpred3_auto_bivariate_blocks(
+                blocks,
+                beta_hat1,
+                beta_hat2,
+                n_eff1,
+                n_eff2,
+                p_init=float(p_start),
+                pi_init=pi_start if explicit_pi else None,
+                sigma_prior_scale=shared_prior_scale,
+                seed=int(chain_seed),
+                rg_decorrelated=False,
+                **bivariate_kwargs,
+            )
+        except Exception as error:
+            raise RuntimeError(
+                f"chain {index} (seed {int(chain_seed)}) failed: {error}"
+            ) from error
         trace = _validated_chain_traces(
             chain_result, m, retained, index, int(chain_seed)
         )

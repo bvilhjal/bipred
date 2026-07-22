@@ -205,8 +205,9 @@ def _prepare_block(R, ld_int8):
     Blocks that are already int8 (built by
     ``ldpred3.compute_ld_blocks(quantize=True)``) are kept int8 as-is. Otherwise,
     ``ld_int8=None`` automatically quantises float blocks with at most 1500
-    variants and keeps larger blocks float32. ``True`` quantises every float
-    block; ``False`` keeps every float block float32. The paired ``scale``
+    variants and keeps larger blocks float32. This cutoff is a storage heuristic,
+    not a bivariate accuracy guarantee. ``True`` quantises every float block;
+    ``False`` keeps every float block float32. The paired ``scale``
     (``1/127`` for int8, ``1.0`` for float32) is what the sampler multiplies each
     LD entry by to dequantise on the fly."""
     arr = np.asarray(R)
@@ -220,7 +221,7 @@ def _prepare_block(R, ld_int8):
     return np.ascontiguousarray(arr, dtype=np.float32), 1.0
 
 
-def _prepare_lowrank_block(R):
+def _prepare_lowrank_block(R, *, allow_legacy=False):
     """Canonicalise one compact LD factor across ldpred3 contracts.
 
     Released ldpred3 factors encode a unit diagonal by normalising every row of
@@ -239,6 +240,12 @@ def _prepare_lowrank_block(R):
         raise ValueError("LowRankLD U must contain only finite values")
 
     if not hasattr(R, "residual_diag"):
+        if not allow_legacy:
+            raise ValueError(
+                "legacy row-normalised LowRankLD can exaggerate weak-row LD; "
+                "rebuild it with ldpred3 revision 382fb90 or newer, or set "
+                "allow_legacy_lowrank=True only to reproduce legacy semantics"
+            )
         # Historical contract: the global LR8 scale cancels, and each row is
         # normalised after float32 canonicalisation so diag(W W.T) is exactly 1.
         if np.any(norm2 <= 0.0):
@@ -247,19 +254,26 @@ def _prepare_lowrank_block(R):
         residual = np.zeros(U.shape[0], dtype=np.float64)
     else:
         # Low-rank-plus-diagonal contract: preserve factor geometry with one
-        # global scale and put all missing diagonal mass in residual_diag.
+        # global scale and use the supplied discarded diagonal mass verbatim.
         scale = float(R.scale)
+        if not np.isfinite(scale) or scale <= 0.0:
+            raise ValueError("LowRankLD scale must be a finite value > 0")
         factor_diag = scale * scale * norm2
-        max_diag = float(factor_diag.max(initial=0.0))
-        if max_diag > 1.0:
-            if max_diag > 1.0 + 2e-5:
-                raise ValueError("LowRankLD factor diagonal exceeds one")
-            # A float64 -> float32 cast can move the largest row microscopically
-            # above one. Contract globally rather than changing relative rows.
-            scale /= np.sqrt(max_diag)
-            factor_diag = scale * scale * norm2
+        residual = np.asarray(R.residual_diag, dtype=np.float64)
+        if (residual.shape != (U.shape[0],)
+                or not np.all(np.isfinite(residual))
+                or np.any(residual < -2e-5)):
+            raise ValueError(
+                "LowRankLD residual_diag must be a finite non-negative vector"
+            )
+        if not np.allclose(
+            factor_diag + residual, 1.0, rtol=2e-5, atol=2e-5
+        ):
+            raise ValueError(
+                "LowRankLD factor and residual_diag must sum to unit diagonal"
+            )
         row_scales = np.full(U.shape[0], scale, dtype=np.float64)
-        residual = np.maximum(1.0 - factor_diag, 0.0)
+        residual = np.maximum(residual, 0.0)
 
     return (U, np.ascontiguousarray(row_scales, dtype=np.float64),
             np.ascontiguousarray(residual, dtype=np.float64))
@@ -741,8 +755,8 @@ class BivariateResult:
     estimated genetic correlation, ``p`` the causal fraction, ``sigma`` the
     learned 2x2 effect covariance, and ``pi`` the four-state mixture
     ``(pi00, pi10, pi01, pi11)`` = neither / trait-1-only / trait-2-only / both
-    causal. ``sigma`` and ``pi`` are both means over the retained stochastic
-    hyperparameter iterates. ``genetic_samples`` retains raw
+    causal. ``sigma``, ``pi``, and ``noise_scale`` are means over the retained
+    stochastic hyperparameter iterates. ``genetic_samples`` retains raw
     ``(gvar1, gcov, gvar2)`` quadratics and ``noise_scale_samples`` retains the
     two noise scales at every post-burn-in sweep. See :attr:`mixer` for the
     MiXeR-style polygenic-overlap summary.
@@ -907,7 +921,7 @@ class BivariateResult:
 
 
 def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, *,
-                                  ld_int8=None,
+                                  ld_int8=None, allow_legacy_lowrank=False,
                                   h2_init=0.1, p_init=0.02, rg_init=0.0,
                                   pi_init=None, sigma_prior_scale=None,
                                   cross_corr=0.0, burn_in=200, num_iter=200,
@@ -925,7 +939,8 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     mixed representations are supported. Low-rank blocks retain their compact
     factor (including LR8 int8 factors) and optional diagonal residual. Both the
     released row-normalised contract and newer low-rank-plus-diagonal contract
-    are supported.
+    are supported, but the legacy contract requires explicit opt-in because it
+    can exaggerate correlations for weak factor rows.
 
     By default, supplied int8 blocks stay int8, float blocks with at most 1500
     variants are int8-quantised, and larger float blocks stay float32. This
@@ -947,9 +962,13 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     ld_int8 : bool or None, default None
         Dense-LD storage policy. ``None`` keeps supplied int8 blocks as-is,
         quantises float blocks of at most 1500 variants, and keeps larger float
-        blocks float32. ``True`` quantises every float block; ``False`` keeps
-        every float block float32. Supplied int8 blocks stay int8 under all
-        three settings. This option does not alter ``LowRankLD`` factors.
+        blocks float32. The cutoff is a storage heuristic that has not been
+        calibrated on bivariate real data. ``True`` quantises every float block;
+        ``False`` keeps every float block float32. Supplied int8 blocks stay int8
+        under all three settings. This option does not alter ``LowRankLD`` factors.
+    allow_legacy_lowrank : bool, default False
+        Permit ldpred3's older row-normalised ``LowRankLD`` contract. Keep this
+        disabled for new analyses; it exists only to reproduce legacy fits.
     h2_init : float or pair
         Initial per-trait heritability. A scalar applies to both traits.
     p_init : float, default 0.02
@@ -1016,6 +1035,7 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
         _validate_boolean_controls(ld_int8=ld_int8)
         ld_int8 = bool(ld_int8)
     _validate_boolean_controls(
+        allow_legacy_lowrank=allow_legacy_lowrank,
         rg_decorrelated=rg_decorrelated,
         noise_inflation=noise_inflation,
     )
@@ -1067,7 +1087,9 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     fblocks = []
     for R, idx in sorted(blocks, key=lambda bi: int(bi[1][0])):
         if isinstance(R, LowRankLD):
-            U, row_scales, residual = _prepare_lowrank_block(R)
+            U, row_scales, residual = _prepare_lowrank_block(
+                R, allow_legacy=bool(allow_legacy_lowrank)
+            )
             rank = int(U.shape[1])
             fblocks.append((_LOWRANK, U, int(idx[0]), int(idx.shape[0]),
                             row_scales, residual, np.zeros(rank), np.zeros(rank)))
@@ -1324,6 +1346,7 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     # Summarise both hyperparameters over exactly the same retained iterates.
     pi_mean = pi_samples.mean(axis=0)
     s1_mean, s2_mean, s12_mean = sig_samples.mean(axis=0)
+    noise_mean = noise_scale_samples.mean(axis=0)
     return BivariateResult(beta1_est=avg1 / count, beta2_est=avg2 / count,
                            h2=(float(h2_1), float(h2_2)), rg=rg,
                            p=float(pi_mean[1] + pi_mean[2] + pi_mean[3]),
@@ -1332,7 +1355,8 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
                            pi=pi_mean,
                            pi_samples=pi_samples[:count].copy(),
                            sigma_samples=sig_samples[:count].copy(),
-                           noise_scale=(float(lam1), float(lam2)),
+                           noise_scale=(float(noise_mean[0]),
+                                        float(noise_mean[1])),
                            genetic_samples=genetic_samples[:count].copy(),
                            noise_scale_samples=noise_scale_samples[:count].copy())
 
