@@ -95,8 +95,8 @@ def test_rg_zero_is_recovered():
 
 
 def test_int8_ld_matches_float_and_accepts_prequantized():
-    # int8-quantised LD (the default) tracks the exact float32 fit closely, and a
-    # block handed in already int8 is detected and consumed as-is -- bit-identical
+    # Small blocks use the automatic int8 path and track the exact float32 fit
+    # closely. A block handed in already int8 is consumed as-is -- bit-identical
     # to quantising the float block on the fly.
     k, nb = 200, 12
     blocks, chols, idxs = _blocks(nb, k, seed=2)
@@ -110,7 +110,7 @@ def test_int8_ld_matches_float_and_accepts_prequantized():
     flt = ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, 60000, 60000,
                                         ld_int8=False, **kw)
     q8 = ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, 60000, 60000, **kw)
-    # int8 (default) stays close to the exact float fit -- quantisation error only
+    # Automatic small-block int8 stays close to the exact float fit.
     assert abs(q8.rg - flt.rg) < 0.05, (q8.rg, flt.rg)
     assert abs(q8.h2[0] - flt.h2[0]) < 0.05 and abs(q8.h2[1] - flt.h2[1]) < 0.05
     assert np.max(np.abs(q8.beta1_est - flt.beta1_est)) < 0.02
@@ -124,6 +124,25 @@ def test_int8_ld_matches_float_and_accepts_prequantized():
                                            ld_int8=False, **kw)
     assert q8_pre.rg == q8.rg
     assert np.array_equal(q8_pre.beta1_est, q8.beta1_est)
+
+
+def test_dense_ld_auto_storage_policy_and_explicit_overrides(monkeypatch):
+    import bipred.bivariate as bivariate
+
+    assert bivariate._AUTO_INT8_MAX_BLOCK == 1500
+    monkeypatch.setattr(bivariate, "_AUTO_INT8_MAX_BLOCK", 2)
+    small = np.eye(2, dtype=np.float32)
+    large = np.eye(3, dtype=np.float32)
+
+    auto_small, small_scale = bivariate._prepare_block(small, None)
+    auto_large, large_scale = bivariate._prepare_block(large, None)
+    forced_int8, forced_int8_scale = bivariate._prepare_block(large, True)
+    forced_float, forced_float_scale = bivariate._prepare_block(small, False)
+
+    assert auto_small.dtype == np.int8 and small_scale == 1.0 / 127.0
+    assert auto_large.dtype == np.float32 and large_scale == 1.0
+    assert forced_int8.dtype == np.int8 and forced_int8_scale == 1.0 / 127.0
+    assert forced_float.dtype == np.float32 and forced_float_scale == 1.0
 
 
 def test_mixer_overlap_params():
@@ -442,6 +461,7 @@ def test_bivariate_rejects_lowrank_blocks():
     "overrides, match",
     [
         ({"ld_int8": 1}, "ld_int8.*boolean"),
+        ({"ld_int8": "auto"}, "ld_int8.*boolean"),
         ({"h2_init": 0.0}, "h2"),
         ({"h2_init": np.nan}, "h2"),
         ({"h2_init": (0.1,)}, "h2_init"),

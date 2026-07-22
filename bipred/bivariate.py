@@ -58,6 +58,7 @@ __all__ = ["BivariateResult", "ldpred3_auto_bivariate",
 
 DAMP = 0.2          # damping factor for the variance-component updates
 _INIT_RHO_MAX = 0.999
+_AUTO_INT8_MAX_BLOCK = 1500
 
 
 def _finite_pair(name, value):
@@ -190,15 +191,17 @@ def _prepare_block(R, ld_int8):
 
     Blocks that are already int8 (built by
     ``ldpred3.compute_ld_blocks(quantize=True)``) are kept int8 as-is. Otherwise,
-    when ``ld_int8`` (the default) a float block is quantised to int8
-    (``round(clip(R, -1, 1) * 127)`` -- a quarter of the float32 memory, matching
-    ldpred3's representation); with ``ld_int8=False`` it is kept dense float32.
-    The paired ``scale`` (``1/127`` for int8, ``1.0`` for float32) is what the
-    sampler multiplies each LD entry by to dequantise on the fly."""
+    ``ld_int8=None`` automatically quantises float blocks with at most 1500
+    variants and keeps larger blocks float32. ``True`` quantises every float
+    block; ``False`` keeps every float block float32. The paired ``scale``
+    (``1/127`` for int8, ``1.0`` for float32) is what the sampler multiplies each
+    LD entry by to dequantise on the fly."""
     arr = np.asarray(R)
     if arr.dtype == np.int8:
         return np.ascontiguousarray(arr), 1.0 / _Q8
-    if ld_int8:
+    use_int8 = (ld_int8 is True or
+                (ld_int8 is None and arr.shape[0] <= _AUTO_INT8_MAX_BLOCK))
+    if use_int8:
         q = np.rint(np.clip(np.ascontiguousarray(arr, np.float32), -1.0, 1.0) * _Q8)
         return q.astype(np.int8), 1.0 / _Q8
     return np.ascontiguousarray(arr, dtype=np.float32), 1.0
@@ -619,7 +622,7 @@ class BivariateResult:
 
 
 def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, *,
-                                  ld_int8=True,
+                                  ld_int8=None,
                                   h2_init=0.1, p_init=0.02, rg_init=0.0,
                                   pi_init=None, sigma_prior_scale=None,
                                   cross_corr=0.0, burn_in=200, num_iter=200,
@@ -635,11 +638,11 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     never materialised. The compact ldpred3 ``LowRankLD`` representation is
     not supported; pass dense float or dense int8 blocks.
 
-    By default the LD is stored **int8**-quantised (a quarter of the float32
-    memory; the sampler dequantises on the fly), matching ldpred3's
-    pipeline default representation. int8 blocks from
-    ``ldpred3.compute_ld_blocks(quantize=True)``
-    are consumed as-is; pass ``ld_int8=False`` to keep dense float32.
+    By default, supplied int8 blocks stay int8, float blocks with at most 1500
+    variants are int8-quantised, and larger float blocks stay float32. This
+    avoids quantising the large dense blocks where small entrywise errors can
+    materially alter conditioning. Pass ``ld_int8=True`` to quantise every
+    float block or ``False`` to keep every float block float32.
 
     Parameters
     ----------
@@ -650,12 +653,12 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
         Standardized marginal effects for the two traits (same variant order).
     n_eff1, n_eff2 : float or array_like
         Per-trait GWAS sample sizes.
-    ld_int8 : bool, default True
-        Store the LD int8-quantised (``round(clip(R, -1, 1) * 127)``) -- a quarter
-        of the float32 memory, dequantised in the sampler's inner loop. The
-        quantisation error is negligible (the diagonal stays exactly 1); set
-        ``False`` for an exact dense-float32 fit. Blocks already int8 stay int8
-        regardless of this flag.
+    ld_int8 : bool or None, default None
+        Dense-LD storage policy. ``None`` keeps supplied int8 blocks as-is,
+        quantises float blocks of at most 1500 variants, and keeps larger float
+        blocks float32. ``True`` quantises every float block; ``False`` keeps
+        every float block float32. Supplied int8 blocks stay int8 under all
+        three settings.
     h2_init : float or pair
         Initial per-trait heritability. A scalar applies to both traits.
     p_init : float, default 0.02
@@ -713,8 +716,10 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     if not -1.0 < cross_corr < 1.0:
         raise ValueError("cross_corr must be in (-1, 1)")
     burn_in, num_iter = _validate_iterations(burn_in, num_iter)
+    if ld_int8 is not None:
+        _validate_boolean_controls(ld_int8=ld_int8)
+        ld_int8 = bool(ld_int8)
     _validate_boolean_controls(
-        ld_int8=ld_int8,
         rg_decorrelated=rg_decorrelated,
         noise_inflation=noise_inflation,
     )
@@ -923,7 +928,8 @@ def ldpred3_auto_bivariate(corr, beta_hat1, beta_hat2, n_eff1, n_eff2, **kwargs)
     Convenience wrapper over :func:`ldpred3_auto_bivariate_blocks` for one block
     (or a block-diagonal genome packed into one matrix). See that function and
     :class:`BivariateResult` for the parameters and output. By default the matrix
-    is stored int8-quantised; pass ``ld_int8=False`` for an exact float32 fit.
+    uses size-aware automatic dense storage; pass ``ld_int8=True`` to quantise
+    all float blocks or ``ld_int8=False`` to keep them float32.
     """
     # Derive the logical LD size from the effect vector. The block validator then
     # checks that ``corr`` is exactly square with this shape before quantisation.

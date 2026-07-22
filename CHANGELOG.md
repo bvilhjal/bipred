@@ -25,17 +25,13 @@ follow [Semantic Versioning](https://semver.org/).
   `sigma_prior_scale` can hold the persistent covariance-prior target fixed
   while starts vary. Seeded outputs change because this corrects the actual
   starting covariance rather than merely relabelling it.
-- **int8 is now the default LD representation** for the bivariate sampler,
-  matching ldpred3's pipeline default. LD blocks are stored int8-quantised
-  (`round(clip(R, -1, 1) * 127)`, scale `1/127`) — a quarter of the float32
-  memory — and dequantised on the fly in the inner loop (`corr[i, j] * scale`);
-  the unit diagonal quantises exactly (`127/127 == 1`). The quantisation error is
-  negligible (≈`0.004` per entry). int8 blocks from
-  `ldpred3.compute_ld_blocks(quantize=True)` are consumed as-is. Pass the new
-  **`ld_int8=False`** to keep the exact dense-float32 behaviour. Because the
-  default now quantises, fits shift by the tiny quantisation error versus previous
-  releases; the float32 golden test pins `ld_int8=False`, and a new int8 golden
-  pins the default path.
+- **Size-aware automatic dense-LD storage.** `ld_int8=None` is now the default:
+  supplied int8 blocks stay int8, float blocks with at most 1500 variants are
+  int8-quantised, and larger float blocks remain float32. This keeps D8's
+  fourfold storage saving on small blocks without exposing large dense blocks to
+  conditioning-sensitive quantisation. `ld_int8=True` quantises every float
+  block and `False` keeps every float input float32. Existing small-block int8
+  goldens are unchanged.
 - **Default `p_init` lowered from `0.1` to `0.02`** for the bivariate sampler
   (`ldpred3_auto_bivariate[_blocks]`), matching ldpred3's realistic ~2 %-causal
   starting polygenicity. Besides being a better default, this **fixes the

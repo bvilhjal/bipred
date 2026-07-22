@@ -195,12 +195,11 @@ materialized, but each block must currently be dense. Compact low-rank
 `LowRankLD` blocks are rejected by design until the bivariate kernel supports
 that representation; pass dense float or dense int8 blocks.
 
-By default the LD is stored **int8**-quantised (`round(clip(R, -1, 1) * 127)`,
-scale `1/127`) — a quarter of the float32 memory, matching ldpred3's
-pipeline default
-representation. The sampler dequantises each entry on the fly in the
-bandwidth-bound inner loop (`corr[i, j] * scale`); the unit diagonal quantises
-exactly (`127/127 == 1`), which the residual update `d = beta_hat − R·beta + beta`
-relies on. The quantisation error is negligible (≈`0.5/127 ≈ 0.004` per entry,
-diagonal exact). int8 blocks from `ldpred3.compute_ld_blocks(quantize=True)` are
-consumed as-is; pass `ld_int8=False` for an exact dense-float32 fit.
+With the default `ld_int8=None`, supplied dense int8 blocks are consumed as-is;
+float blocks with at most 1500 variants are stored as
+`round(clip(R, -1, 1) * 127)` int8, while larger float blocks remain float32.
+The small-block D8 payload uses a quarter of the float32 memory and is
+dequantised in the bandwidth-bound inner loop (`corr[i, j] / 127`); its unit
+diagonal remains exact. Keeping large dense blocks float32 avoids magnifying the
+small entrywise rounding error through poor conditioning. `ld_int8=True`
+quantises every float block and `False` keeps every float input float32.

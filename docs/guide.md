@@ -35,11 +35,12 @@ bipred does not build LD or harmonize summary statistics. Use ldpred3 for that
 preparation. The bivariate sampler currently requires dense LD blocks; ldpred3's
 compact low-rank `LowRankLD` representation is rejected.
 
-By default the LD is stored **int8**-quantised (a quarter of the float32 memory;
-the sampler dequantises on the fly), matching ldpred3's pipeline default representation.
-int8 blocks from `ldpred3.compute_ld_blocks(quantize=True)` are consumed as-is;
-pass `ld_int8=False` for an exact dense-float32 fit. The quantisation error is
-negligible and the diagonal stays exactly 1.
+The default `ld_int8=None` policy keeps supplied int8 blocks as-is, quantises
+float blocks with at most 1500 variants, and keeps larger float blocks float32.
+Small D8 blocks use a quarter of float32 storage and are dequantised in the
+sampler; the size cutoff avoids quantising large dense blocks where conditioning
+can be sensitive. Use `ld_int8=True` to quantise every float block or `False` to
+keep float inputs float32.
 
 ## Quickstart
 
@@ -200,7 +201,7 @@ analyses, but it can bias `r_g` upward when samples overlap strongly.
 
 | option | default | use |
 |---|---:|---|
-| `ld_int8` | `True` | store LD int8-quantised (¼ the memory); `False` = exact float32 |
+| `ld_int8` | `None` | auto: D8 for float blocks up to 1500 variants, float32 above; `True`/`False` force either policy |
 | `burn_in`, `num_iter` | `200`, `200` | Gibbs burn-in and sampling sweeps |
 | `h2_init`, `p_init`, `rg_init` | `0.1`, `0.02`, `0.0` | exact genetic-moment starts; `h2_init` may be a pair and `p_init` is union-causal |
 | `pi_init` | `None` | explicit `(pi00, pi10, pi01, pi11)` start for overlap-sensitive work |
@@ -220,7 +221,8 @@ analyses, but it can bias `r_g` upward when samples overlap strongly.
 - Harmonize variant order and allele orientation before fitting.
 - Keep effects on ldpred3's standardized scale.
 - Use dense LD blocks; low-rank blocks are not supported by the bivariate sampler.
-  LD is int8-quantised by default (`ld_int8=False` for exact float32).
+  Automatic storage uses D8 only through 1500 variants per float block; set
+  `ld_int8=False` to keep all float inputs float32.
 - Do not over-interpret absolute overlap counts at low power.
 - Increase `burn_in` and `num_iter` if `h2` or `r_g` is unstable across seeds.
 - At low power, vary `pi_init` as a pre-specified sensitivity analysis: scalar

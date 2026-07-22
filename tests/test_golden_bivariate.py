@@ -43,7 +43,7 @@ _BIVAR_BETA1 = np.array([
 ])
 
 
-# --- int8 goldens: the default LD representation quantises R to int8, so the
+# --- int8 goldens: the automatic policy quantises this small R to int8, so the
 # outputs differ from the exact-float path by the tiny quantisation error
 # (~0.003 here) and get their own frozen values. Captured from the same known-good
 # code and likewise bit-identical between the Numba and pure-Python paths. ---
@@ -71,8 +71,8 @@ def test_golden_bivariate():
 
 
 def test_golden_bivariate_int8():
-    # Default int8-quantised LD path: its own frozen goldens (drift detector for
-    # the quantise + dequantise-in-loop machinery).
+    # Automatic small-block int8 path: its own frozen goldens (drift detector
+    # for the quantise + dequantise-in-loop machinery).
     R, beta_hat, m = _fixtures()
     res = ldpred3_auto_bivariate(R, beta_hat, _beta_hat2(beta_hat, m), 10000,
                                  10000, burn_in=50, num_iter=150, seed=42,
