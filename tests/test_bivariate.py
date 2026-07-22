@@ -442,19 +442,159 @@ def test_borrows_strength_for_low_power_trait():
     assert np.mean(bi) > np.mean(uni) + 0.02, (np.mean(bi), np.mean(uni))
 
 
-def test_bivariate_rejects_lowrank_blocks():
-    # Compact (low-rank) LD blocks must fail loudly, not crash with a cryptic
-    # float() TypeError inside np.ascontiguousarray.
+def _effective_lowrank(R):
+    """Materialise the effective matrix under the installed ldpred3 contract."""
+    from ldpred3.ld_repr import dense_ld
+
+    return dense_ld(R, dtype=np.float64)
+
+
+def test_lowrank_matmul_includes_diagonal_residual_and_zero_factor_row():
+    from types import SimpleNamespace
+
+    rng = np.random.default_rng(11)
+    U = rng.standard_normal((9, 4)).astype(np.float32)
+    U *= np.sqrt(0.6) / np.linalg.norm(U, axis=1)[:, None]
+    U[-1] = 0.0
+    R = SimpleNamespace(U=U, scale=1.0,
+                        residual_diag=np.r_[np.full(8, 0.4), 1.0])
+    payload, scales, residual = bivariate._prepare_lowrank_block(R)
+    fblocks = [(bivariate._LOWRANK, payload, 0, 9, scales, residual,
+                np.zeros(4), np.zeros(4))]
+    V = rng.standard_normal((5, 9)).astype(np.float32)
+
+    observed = bivariate._apply_R_rows(fblocks, V)
+    expected_R = U @ U.T + np.diag(np.r_[np.full(8, 0.4), 1.0])
+    expected = V @ expected_R.astype(np.float32)
+    assert residual[-1] == 1.0
+    np.testing.assert_allclose(observed, expected, rtol=2e-6, atol=2e-6)
+
+
+def test_lowrank_kernel_diagonal_residual_matches_dense_sweep():
+    rng = np.random.default_rng(111)
+    k, rank = 7, 3
+    U = rng.standard_normal((k, rank)).astype(np.float32)
+    U *= np.sqrt(0.6) / np.linalg.norm(U, axis=1)[:, None]
+    row_scales = np.ones(k)
+    residual = 1.0 - np.einsum("ij,ij->i", U, U, dtype=np.float64)
+    dense = (U @ U.T + np.diag(residual)).astype(np.float32)
+    bh1 = rng.standard_normal(k) * 0.01
+    bh2 = rng.standard_normal(k) * 0.01
+    n1 = np.full(k, 20_000.0)
+    n2 = np.full(k, 18_000.0)
+    curr1 = rng.standard_normal(k) * 0.002
+    curr2 = rng.standard_normal(k) * 0.002
+    unif = np.full(k, 1.0 - 1e-12)
+    z1 = rng.standard_normal(k)
+    z2 = rng.standard_normal(k)
+    lpi = np.log(np.array([1e-6, 1e-6, 1e-6, 1.0 - 3e-6]))
+
+    dense_buffers = [curr1.copy(), curr2.copy(), np.zeros(k), np.zeros(k),
+                     np.zeros(k), np.zeros(k)]
+    lowrank_buffers = [a.copy() for a in dense_buffers]
+    dcurr1, dcurr2, drb1, drb2, drbs1, drbs2 = dense_buffers
+    lcurr1, lcurr2, lrb1, lrb2, lrbs1, lrbs2 = lowrank_buffers
+
+    dense_result = bivariate._bivar_one_sweep(
+        dense, bh1, bh2, n1, n2, dcurr1, dcurr2, drb1, drb2, drbs1,
+        drbs2, unif, z1, z2, *lpi, 8e-5, 9e-5, 2e-5, 0.1,
+        1.0, True, True)
+    lowrank_result = bivariate._bivar_one_sweep_lowrank(
+        U, row_scales, residual, bh1, bh2, n1, n2, lcurr1, lcurr2,
+        np.zeros(rank), np.zeros(rank), lrb1, lrb2, lrbs1, lrbs2,
+        unif, z1, z2, *lpi, 8e-5, 9e-5, 2e-5, 0.1,
+        True, True, True)
+
+    np.testing.assert_allclose(lowrank_result, dense_result,
+                               rtol=3e-6, atol=3e-9)
+    for observed, expected in zip(lowrank_buffers, dense_buffers):
+        np.testing.assert_allclose(observed, expected, rtol=3e-6, atol=3e-9)
+
+
+def test_truncated_float_lowrank_matches_its_effective_dense_matrix():
+    from ldpred3 import lowrank_ld
+
+    k = 14
+    corr = 0.45 ** np.abs(np.subtract.outer(np.arange(k), np.arange(k)))
+    R = lowrank_ld(corr, variance=0.7, max_rank=4)
+    if hasattr(R, "residual_diag"):
+        assert np.any(np.asarray(R.residual_diag) > 0.0)
+    dense = _effective_lowrank(R).astype(np.float32)
+    rng = np.random.default_rng(12)
+    bh1 = rng.standard_normal(k) * 0.025
+    bh2 = 0.6 * bh1 + rng.standard_normal(k) * 0.015
+    kwargs = dict(burn_in=12, num_iter=18, seed=9, ld_int8=False)
+
+    expected = ldpred3_auto_bivariate_blocks(
+        [(dense, np.arange(k))], bh1, bh2, 30000, 25000, **kwargs)
+    observed = ldpred3_auto_bivariate_blocks(
+        [(R, np.arange(k))], bh1, bh2, 30000, 25000,
+        **{**kwargs, "ld_int8": True})
+
+    np.testing.assert_allclose(observed.beta1_est, expected.beta1_est,
+                               rtol=3e-5, atol=3e-7)
+    np.testing.assert_allclose(observed.beta2_est, expected.beta2_est,
+                               rtol=3e-5, atol=3e-7)
+    np.testing.assert_allclose(observed.pi_samples, expected.pi_samples,
+                               rtol=3e-5, atol=3e-7)
+    np.testing.assert_allclose(observed.sigma_samples, expected.sigma_samples,
+                               rtol=3e-5, atol=3e-7)
+
+
+def test_lr8_matches_effective_dense_and_ignores_dense_storage_policy():
+    from ldpred3 import lowrank_ld
+
+    k = 18
+    corr = 0.55 ** np.abs(np.subtract.outer(np.arange(k), np.arange(k)))
+    R = lowrank_ld(corr, variance=0.7, max_rank=4, quantize=True)
+    if hasattr(R, "residual_diag"):
+        assert np.any(np.asarray(R.residual_diag) > 0.0)
+    dense = _effective_lowrank(R).astype(np.float32)
+    rng = np.random.default_rng(13)
+    bh1 = rng.standard_normal(k) * 0.02
+    bh2 = 0.5 * bh1 + rng.standard_normal(k) * 0.018
+    kwargs = dict(burn_in=10, num_iter=16, seed=4)
+
+    expected = ldpred3_auto_bivariate_blocks(
+        [(dense, np.arange(k))], bh1, bh2, 20000, 18000,
+        ld_int8=False, **kwargs)
+    observed = ldpred3_auto_bivariate_blocks(
+        [(R, np.arange(k))], bh1, bh2, 20000, 18000,
+        ld_int8=True, **kwargs)
+    automatic = ldpred3_auto_bivariate_blocks(
+        [(R, np.arange(k))], bh1, bh2, 20000, 18000,
+        ld_int8=None, **kwargs)
+
+    np.testing.assert_allclose(observed.beta1_est, expected.beta1_est,
+                               rtol=2e-5, atol=2e-7)
+    np.testing.assert_allclose(observed.beta2_est, expected.beta2_est,
+                               rtol=2e-5, atol=2e-7)
+    np.testing.assert_array_equal(automatic.beta1_est, observed.beta1_est)
+    np.testing.assert_array_equal(automatic.pi_samples, observed.pi_samples)
+
+
+def test_mixed_lowrank_dense_supports_optional_estimators():
     from ldpred3 import LowRankLD
-    rng = np.random.default_rng(0)
-    b1 = rng.standard_normal(40) * 0.02
-    b2 = rng.standard_normal(40) * 0.02
-    blocks = [(LowRankLD(np.ones((40, 1), dtype=np.float32), 40),
-               np.arange(40))]
-    with pytest.raises(NotImplementedError, match="dense LD"):
-        ldpred3_auto_bivariate_blocks(blocks, b1, b2, 10000, 10000,
-                                      burn_in=5, num_iter=5,
-                                      h2_cap=(0.1, 0.1))
+
+    k = 10
+    corr1 = 0.4 ** np.abs(np.subtract.outer(np.arange(k), np.arange(k)))
+    corr2 = 0.3 ** np.abs(np.subtract.outer(np.arange(k), np.arange(k)))
+    lowrank = LowRankLD(np.linalg.cholesky(corr1).astype(np.float32), k)
+    blocks = [(lowrank, np.arange(k)),
+              (corr2.astype(np.float32), np.arange(k, 2 * k))]
+    rng = np.random.default_rng(14)
+    bh1 = rng.standard_normal(2 * k) * 0.02
+    bh2 = 0.4 * bh1 + rng.standard_normal(2 * k) * 0.02
+
+    result = ldpred3_auto_bivariate_blocks(
+        blocks, bh1, bh2, 25000, 15000, burn_in=8, num_iter=12, seed=7,
+        rg_decorrelated=True, sample_every=2, noise_inflation=True)
+
+    assert np.all(np.isfinite(result.beta1_est))
+    assert np.all(np.isfinite(result.beta2_est))
+    assert np.isfinite(result.rg)
+    assert np.all(np.isfinite(result.h2))
+    assert np.all(np.isfinite(result.noise_scale))
 
 
 @pytest.mark.parametrize(

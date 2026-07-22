@@ -59,6 +59,8 @@ __all__ = ["BivariateResult", "ldpred3_auto_bivariate",
 DAMP = 0.2          # damping factor for the variance-component updates
 _INIT_RHO_MAX = 0.999
 _AUTO_INT8_MAX_BLOCK = 1500
+_DENSE = 0
+_LOWRANK = 1
 
 
 def _finite_pair(name, value):
@@ -176,13 +178,20 @@ def _initial_hyperparameters(m, h2_init, p_init, rg_init, pi_init=None):
 
 def _apply_R_rows(fblocks, V):
     """Right-multiply each row of ``V`` (n, m) by the block-diagonal LD ``R``
-    (rows are ``R @ v`` since ``R`` is symmetric), block by block. ``R`` may be
-    int8-quantised, so each block carries a dequantisation ``scale`` (``1/127``
-    for int8, ``1.0`` for float32) applied after the (off-hot-path) matmul."""
+    (rows are ``R @ v`` since ``R`` is symmetric), block by block. Dense int8
+    blocks carry a dequantisation scale. Low-rank blocks use the same factor
+    ``W = diag(row_scales) @ U`` and optional diagonal residual as the Gibbs
+    sweep, so diagnostics never silently evaluate a different effective LD
+    matrix."""
     out = np.zeros_like(V)
-    for R, start, k, scale in fblocks:
+    for kind, data, start, k, aux, residual, _score1, _score2 in fblocks:
         sl = slice(start, start + k)
-        out[:, sl] = (V[:, sl] @ R.astype(V.dtype)) * scale
+        if kind == _LOWRANK:
+            W = data.astype(V.dtype) * aux.astype(V.dtype)[:, None]
+            out[:, sl] = ((V[:, sl] @ W) @ W.T
+                          + V[:, sl] * residual.astype(V.dtype))
+        else:
+            out[:, sl] = (V[:, sl] @ data.astype(V.dtype)) * aux
     return out
 
 
@@ -205,6 +214,51 @@ def _prepare_block(R, ld_int8):
         q = np.rint(np.clip(np.ascontiguousarray(arr, np.float32), -1.0, 1.0) * _Q8)
         return q.astype(np.int8), 1.0 / _Q8
     return np.ascontiguousarray(arr, dtype=np.float32), 1.0
+
+
+def _prepare_lowrank_block(R):
+    """Canonicalise one compact LD factor across ldpred3 contracts.
+
+    Released ldpred3 factors encode a unit diagonal by normalising every row of
+    ``U``; they have no ``residual_diag`` attribute. Newer factors retain their
+    global scale and encode discarded diagonal mass explicitly. Return the
+    effective factor payload, per-row multipliers, and diagonal residual without
+    materialising the dense block.
+    """
+    raw = np.asarray(R.U)
+    if raw.dtype == np.int8:
+        U = np.ascontiguousarray(raw, dtype=np.int8)
+    else:
+        U = np.ascontiguousarray(raw, dtype=np.float32)
+    norm2 = np.einsum("ij,ij->i", U, U, dtype=np.float64)
+    if np.any(~np.isfinite(norm2)):
+        raise ValueError("LowRankLD U must contain only finite values")
+
+    if not hasattr(R, "residual_diag"):
+        # Historical contract: the global LR8 scale cancels, and each row is
+        # normalised after float32 canonicalisation so diag(W W.T) is exactly 1.
+        if np.any(norm2 <= 0.0):
+            raise ValueError("LowRankLD U must not contain zero rows")
+        row_scales = 1.0 / np.sqrt(norm2)
+        residual = np.zeros(U.shape[0], dtype=np.float64)
+    else:
+        # Low-rank-plus-diagonal contract: preserve factor geometry with one
+        # global scale and put all missing diagonal mass in residual_diag.
+        scale = float(R.scale)
+        factor_diag = scale * scale * norm2
+        max_diag = float(factor_diag.max(initial=0.0))
+        if max_diag > 1.0:
+            if max_diag > 1.0 + 2e-5:
+                raise ValueError("LowRankLD factor diagonal exceeds one")
+            # A float64 -> float32 cast can move the largest row microscopically
+            # above one. Contract globally rather than changing relative rows.
+            scale /= np.sqrt(max_diag)
+            factor_diag = scale * scale * norm2
+        row_scales = np.full(U.shape[0], scale, dtype=np.float64)
+        residual = np.maximum(1.0 - factor_diag, 0.0)
+
+    return (U, np.ascontiguousarray(row_scales, dtype=np.float64),
+            np.ascontiguousarray(residual, dtype=np.float64))
 
 
 def _effect_sample_buffers(enabled, num_iter, sample_every, m):
@@ -451,6 +505,166 @@ def _bivar_one_sweep(corr, bh1, bh2, n1, n2, curr1, curr2, rb1, rb2,
 _bivar_one_sweep_jit = _jit(_bivar_one_sweep)
 
 
+def _bivar_one_sweep_lowrank(
+        U, row_scales, residual, bh1, bh2, n1, n2, curr1, curr2, proj1, proj2,
+        rb1, rb2, rbsum1, rbsum2, unif, z1, z2,
+        lpi00, lpi10, lpi01, lpi11, s1, s2, s12, cross_corr,
+        n_const, resync, write_rb):
+    """Sweep over ``R = W W.T + diag(residual)`` without materialising it.
+
+    ``W[j, c] = U[j, c] * row_scales[j]`` and ``proj1/2 = W.T @ beta1/2``.
+    Released row-normalised factors use a zero residual; newer ldpred3 factors
+    preserve a global factor scale and carry the missing unit-diagonal mass in
+    ``residual``. A SNP update costs O(rank). ``rb1/2`` are written only when
+    the caller's noise-inflation update needs the final ``R @ beta`` vectors.
+    """
+    k = bh1.shape[0]
+    rank = U.shape[1]
+    if resync:                                   # rebuild W.T@beta to clear drift
+        for c in range(rank):
+            proj1[c] = 0.0
+            proj2[c] = 0.0
+        for j in range(k):
+            b1 = curr1[j]
+            b2 = curr2[j]
+            if b1 != 0.0 or b2 != 0.0:
+                row_scale = row_scales[j]
+                for c in range(rank):
+                    wjc = U[j, c] * row_scale
+                    proj1[c] += wjc * b1
+                    proj2[c] += wjc * b2
+
+    if n_const:                                  # hoist the per-sweep constants
+        (E11, E22, E12, det0, ldet0, a11, det1, ldet1, a22, det2, ldet2,
+         b11, b22, b12, det3, ldet3, Ei11, Ei22, Ei12, prec1, sv1, prec2, sv2,
+         V11, V22, V12, L11, L21, L22) = _bivar_const(
+             n1[0], n2[0], s1, s2, s12, cross_corr)
+
+    c10 = 0
+    c01 = 0
+    c11 = 0
+    sum1sq = 0.0
+    sum2sq = 0.0
+    sum12 = 0.0
+    for j in range(k):
+        b1 = curr1[j]
+        b2 = curr2[j]
+        row_scale = row_scales[j]
+        rbj1 = 0.0
+        rbj2 = 0.0
+        for c in range(rank):
+            wjc = U[j, c] * row_scale
+            rbj1 += wjc * proj1[c]
+            rbj2 += wjc * proj2[c]
+        rbj1 += residual[j] * b1
+        rbj2 += residual[j] * b2
+        d1 = bh1[j] - rbj1 + b1                 # diag(R) == 1
+        d2 = bh2[j] - rbj2 + b2
+        if not n_const:                           # per-variant N: recompute here
+            (E11, E22, E12, det0, ldet0, a11, det1, ldet1, a22, det2, ldet2,
+             b11, b22, b12, det3, ldet3, Ei11, Ei22, Ei12, prec1, sv1, prec2, sv2,
+             V11, V22, V12, L11, L21, L22) = _bivar_const(
+                 n1[j], n2[j], s1, s2, s12, cross_corr)
+
+        # log N(d; 0, E + Slab_state) for each of the 4 states (drop 2*pi const).
+        q0 = (E22 * d1 * d1 - 2.0 * E12 * d1 * d2 + E11 * d2 * d2) / det0
+        w0 = lpi00 - 0.5 * ldet0 - 0.5 * q0
+        q1 = (E22 * d1 * d1 - 2.0 * E12 * d1 * d2 + a11 * d2 * d2) / det1
+        w1 = lpi10 - 0.5 * ldet1 - 0.5 * q1
+        q2 = (a22 * d1 * d1 - 2.0 * E12 * d1 * d2 + E11 * d2 * d2) / det2
+        w2 = lpi01 - 0.5 * ldet2 - 0.5 * q2
+        q3 = (b22 * d1 * d1 - 2.0 * b12 * d1 * d2 + b11 * d2 * d2) / det3
+        w3 = lpi11 - 0.5 * ldet3 - 0.5 * q3
+
+        wmax = w0
+        if w1 > wmax:
+            wmax = w1
+        if w2 > wmax:
+            wmax = w2
+        if w3 > wmax:
+            wmax = w3
+        e0 = np.exp(w0 - wmax)
+        e1 = np.exp(w1 - wmax)
+        e2 = np.exp(w2 - wmax)
+        e3 = np.exp(w3 - wmax)
+        tot = e0 + e1 + e2 + e3
+        p0 = e0 / tot
+        p1 = e1 / tot
+        p2 = e2 / tot
+        p3 = e3 / tot
+
+        # posterior effect means under each non-null state.
+        m1_1 = (Ei11 * d1 + Ei12 * d2) / prec1
+        m2_2 = (Ei22 * d2 + Ei12 * d1) / prec2
+        g1 = Ei11 * d1 + Ei12 * d2
+        g2 = Ei12 * d1 + Ei22 * d2
+        m1_3 = V11 * g1 + V12 * g2
+        m2_3 = V12 * g1 + V22 * g2
+
+        rbsum1[j] += p1 * m1_1 + p3 * m1_3
+        rbsum2[j] += p2 * m2_2 + p3 * m2_3
+
+        u = unif[j]
+        if u < p0:
+            new1 = 0.0
+            new2 = 0.0
+        elif u < p0 + p1:
+            new1 = m1_1 + sv1 * z1[j]
+            new2 = 0.0
+            c10 += 1
+            sum1sq += new1 * new1
+        elif u < p0 + p1 + p2:
+            new1 = 0.0
+            new2 = m2_2 + sv2 * z2[j]
+            c01 += 1
+            sum2sq += new2 * new2
+        else:
+            new1 = m1_3 + L11 * z1[j]
+            new2 = m2_3 + L21 * z1[j] + L22 * z2[j]
+            c11 += 1
+            sum1sq += new1 * new1
+            sum2sq += new2 * new2
+            sum12 += new1 * new2
+
+        dlt1 = new1 - b1
+        dlt2 = new2 - b2
+        if dlt1 != 0.0 or dlt2 != 0.0:
+            for c in range(rank):
+                wjc = U[j, c] * row_scale
+                proj1[c] += wjc * dlt1
+                proj2[c] += wjc * dlt2
+            curr1[j] = new1
+            curr2[j] = new2
+
+    if write_rb:
+        for j in range(k):
+            row_scale = row_scales[j]
+            r1j = 0.0
+            r2j = 0.0
+            for c in range(rank):
+                wjc = U[j, c] * row_scale
+                r1j += wjc * proj1[c]
+                r2j += wjc * proj2[c]
+            rb1[j] = r1j + residual[j] * curr1[j]
+            rb2[j] = r2j + residual[j] * curr2[j]
+
+    gv11 = 0.0
+    gv12 = 0.0
+    gv22 = 0.0
+    for c in range(rank):
+        gv11 += proj1[c] * proj1[c]
+        gv12 += proj1[c] * proj2[c]
+        gv22 += proj2[c] * proj2[c]
+    for j in range(k):
+        gv11 += residual[j] * curr1[j] * curr1[j]
+        gv12 += residual[j] * curr1[j] * curr2[j]
+        gv22 += residual[j] * curr2[j] * curr2[j]
+    return c10, c01, c11, sum1sq, sum2sq, sum12, gv11, gv12, gv22
+
+
+_bivar_one_sweep_lowrank_jit = _jit(_bivar_one_sweep_lowrank)
+
+
 @dataclass
 class BivariateResult:
     """Output of :func:`ldpred3_auto_bivariate`.
@@ -630,25 +844,30 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
                                   iw_df=10.0, rg_decorrelated=False,
                                   noise_inflation=False, ni_damp=0.1,
                                   pi_prior=1.0, sample_every=5, seed=None):
-    """Genome-wide bivariate LDpred3-auto over dense LD blocks.
+    """Genome-wide bivariate LDpred3-auto over dense or low-rank LD blocks.
 
     ``blocks`` is ``[(R, idx), ...]`` with contiguous ``idx`` arrays partitioning
     ``0..m-1``. The two traits share the same LD. Effects are updated block by
     block while ``pi`` and ``Sigma`` are pooled globally, so the genome-wide LD is
-    never materialised. The compact ldpred3 ``LowRankLD`` representation is
-    not supported; pass dense float or dense int8 blocks.
+    never materialised. Blocks may be dense or ldpred3 ``LowRankLD`` objects;
+    mixed representations are supported. Low-rank blocks retain their compact
+    factor (including LR8 int8 factors) and optional diagonal residual. Both the
+    released row-normalised contract and newer low-rank-plus-diagonal contract
+    are supported.
 
     By default, supplied int8 blocks stay int8, float blocks with at most 1500
     variants are int8-quantised, and larger float blocks stay float32. This
     avoids quantising the large dense blocks where small entrywise errors can
     materially alter conditioning. Pass ``ld_int8=True`` to quantise every
-    float block or ``False`` to keep every float block float32.
+    dense float block or ``False`` to keep every dense float block float32.
+    This option does not alter ``LowRankLD`` factors.
 
     Parameters
     ----------
-    blocks : list of (ndarray, ndarray)
-        Dense per-block LD ``(R, idx)`` partitioning ``0..m-1``. ``R`` may be
-        float32/float64 or int8-quantised (``round(R * 127)``).
+    blocks : list of (ndarray or LowRankLD, ndarray)
+        Per-block LD ``(R, idx)`` partitioning ``0..m-1``. Dense ``R`` may be
+        float or int8-quantised; compact float and LR8 ``LowRankLD`` are also
+        supported.
     beta_hat1, beta_hat2 : array_like (m,)
         Standardized marginal effects for the two traits (same variant order).
     n_eff1, n_eff2 : float or array_like
@@ -658,7 +877,7 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
         quantises float blocks of at most 1500 variants, and keeps larger float
         blocks float32. ``True`` quantises every float block; ``False`` keeps
         every float block float32. Supplied int8 blocks stay int8 under all
-        three settings.
+        three settings. This option does not alter ``LowRankLD`` factors.
     h2_init : float or pair
         Initial per-trait heritability. A scalar applies to both traits.
     p_init : float, default 0.02
@@ -762,15 +981,22 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     n_const = bool(n1.min() == n1.max() and n2.min() == n2.max())
 
     blocks = _validate_blocks(blocks, m, contiguous=True)
+    # Prepared tuple:
+    # (kind, payload, start, size, scale_or_row_scales, diagonal_residual,
+    #  projection1, projection2)
+    # Dense blocks keep the established payload + scalar scale. Low-rank blocks
+    # keep U, an optional diagonal correction, and two rank-size W.T@beta buffers.
     fblocks = []
     for R, idx in sorted(blocks, key=lambda bi: int(bi[1][0])):
         if isinstance(R, LowRankLD):
-            raise NotImplementedError(
-                "bivariate LDpred3 needs dense LD blocks, not a "
-                f"{type(R).__name__}; it does not support the compact "
-                "LD representation")
-        Rq, scale = _prepare_block(R, ld_int8)
-        fblocks.append((Rq, int(idx[0]), int(idx.shape[0]), scale))
+            U, row_scales, residual = _prepare_lowrank_block(R)
+            rank = int(U.shape[1])
+            fblocks.append((_LOWRANK, U, int(idx[0]), int(idx.shape[0]),
+                            row_scales, residual, np.zeros(rank), np.zeros(rank)))
+        else:
+            Rq, scale = _prepare_block(R, ld_int8)
+            fblocks.append((_DENSE, Rq, int(idx[0]), int(idx.shape[0]),
+                            scale, None, None, None))
     pi, s1, s2, s12 = _initial_hyperparameters(
         m, h2_init, p_init, rg_init, pi_init=pi_init,
     )
@@ -828,14 +1054,24 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
         # lambda preserves the constant-N fast path (n_const unchanged).
         n1e = n1 / lam1 if noise_inflation else n1
         n2e = n2 / lam2 if noise_inflation else n2
-        for R, start, k, scale in fblocks:
+        for kind, data, start, k, aux, residual, proj1, proj2 in fblocks:
             sl = slice(start, start + k)
-            a10, a01, a11, s1sq, s2sq, s12s, g11, g12, g22 = _bivar_one_sweep_jit(
-                R, bh1[sl], bh2[sl], n1e[sl], n2e[sl], curr1[sl], curr2[sl],
-                rb1[sl], rb2[sl], rbs1[sl], rbs2[sl], unif[sl], z1[sl], z2[sl],
-                float(lpi[0]), float(lpi[1]), float(lpi[2]), float(lpi[3]),
-                float(s1), float(s2), float(s12), float(cross_corr),
-                float(scale), n_const, resync)
+            if kind == _LOWRANK:
+                result = _bivar_one_sweep_lowrank_jit(
+                    data, aux, residual, bh1[sl], bh2[sl], n1e[sl], n2e[sl],
+                    curr1[sl], curr2[sl], proj1, proj2, rb1[sl], rb2[sl],
+                    rbs1[sl], rbs2[sl], unif[sl], z1[sl], z2[sl],
+                    float(lpi[0]), float(lpi[1]), float(lpi[2]), float(lpi[3]),
+                    float(s1), float(s2), float(s12), float(cross_corr),
+                    n_const, resync, bool(noise_inflation))
+            else:
+                result = _bivar_one_sweep_jit(
+                    data, bh1[sl], bh2[sl], n1e[sl], n2e[sl],
+                    curr1[sl], curr2[sl], rb1[sl], rb2[sl], rbs1[sl], rbs2[sl],
+                    unif[sl], z1[sl], z2[sl], float(lpi[0]), float(lpi[1]),
+                    float(lpi[2]), float(lpi[3]), float(s1), float(s2),
+                    float(s12), float(cross_corr), float(aux), n_const, resync)
+            a10, a01, a11, s1sq, s2sq, s12s, g11, g12, g22 = result
             c10 += a10; c01 += a01; c11 += a11
             S1 += s1sq; S2 += s2sq; S12 += s12s
             gv11 += g11; gv12 += g12; gv22 += g22
@@ -923,13 +1159,14 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
 
 
 def ldpred3_auto_bivariate(corr, beta_hat1, beta_hat2, n_eff1, n_eff2, **kwargs):
-    """Bivariate LDpred3-auto on a single dense LD matrix.
+    """Bivariate LDpred3-auto on a single dense or low-rank LD block.
 
     Convenience wrapper over :func:`ldpred3_auto_bivariate_blocks` for one block
     (or a block-diagonal genome packed into one matrix). See that function and
-    :class:`BivariateResult` for the parameters and output. By default the matrix
-    uses size-aware automatic dense storage; pass ``ld_int8=True`` to quantise
-    all float blocks or ``ld_int8=False`` to keep them float32.
+    :class:`BivariateResult` for the parameters and output. ``corr`` may be a
+    dense matrix or an ldpred3 ``LowRankLD`` object. Dense matrices use
+    size-aware automatic storage by default; pass ``ld_int8=True`` to quantise
+    all dense float blocks or ``ld_int8=False`` to keep them float32.
     """
     # Derive the logical LD size from the effect vector. The block validator then
     # checks that ``corr`` is exactly square with this shape before quantisation.

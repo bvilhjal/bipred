@@ -27,20 +27,21 @@ You need:
 2. `n_eff1`, `n_eff2`: scalar or per-variant effective sample sizes.
 3. LD for those variants:
    - a dense correlation matrix `corr`, or
-   - dense blocks `[(R, idx), ...]` with contiguous `idx` arrays partitioning
-     `0..m-1`.
+   - blocks `[(R, idx), ...]` with contiguous `idx` arrays partitioning
+     `0..m-1`, where each `R` is dense or an ldpred3 `LowRankLD`.
 4. Optional `cross_corr` if the GWAS share samples.
 
 bipred does not build LD or harmonize summary statistics. Use ldpred3 for that
-preparation. The bivariate sampler currently requires dense LD blocks; ldpred3's
-compact low-rank `LowRankLD` representation is rejected.
+preparation. The bivariate sampler consumes dense, compact float `LowRankLD`,
+and LR8 blocks, including mixed block lists.
 
 The default `ld_int8=None` policy keeps supplied int8 blocks as-is, quantises
 float blocks with at most 1500 variants, and keeps larger float blocks float32.
 Small D8 blocks use a quarter of float32 storage and are dequantised in the
 sampler; the size cutoff avoids quantising large dense blocks where conditioning
-can be sensitive. Use `ld_int8=True` to quantise every float block or `False` to
-keep float inputs float32.
+can be sensitive. Use `ld_int8=True` to quantise every dense float block or
+`False` to keep dense float inputs float32. This setting does not alter
+`LowRankLD` factors.
 
 ## Quickstart
 
@@ -53,7 +54,7 @@ res = ldpred3_auto_bivariate(corr, beta_hat1, beta_hat2, n1, n2, seed=0)
 print(res)
 ```
 
-Genome-wide dense blocks:
+Genome-wide blocks:
 
 ```python
 from bipred import ldpred3_auto_bivariate_blocks
@@ -201,7 +202,7 @@ analyses, but it can bias `r_g` upward when samples overlap strongly.
 
 | option | default | use |
 |---|---:|---|
-| `ld_int8` | `None` | auto: D8 for float blocks up to 1500 variants, float32 above; `True`/`False` force either policy |
+| `ld_int8` | `None` | dense only: auto D8 through 1500 variants and float32 above; `True`/`False` force either dense policy |
 | `burn_in`, `num_iter` | `200`, `200` | Gibbs burn-in and sampling sweeps |
 | `h2_init`, `p_init`, `rg_init` | `0.1`, `0.02`, `0.0` | exact genetic-moment starts; `h2_init` may be a pair and `p_init` is union-causal |
 | `pi_init` | `None` | explicit `(pi00, pi10, pi01, pi11)` start for overlap-sensitive work |
@@ -220,9 +221,9 @@ analyses, but it can bias `r_g` upward when samples overlap strongly.
 - Use the same ancestry LD reference for both traits.
 - Harmonize variant order and allele orientation before fitting.
 - Keep effects on ldpred3's standardized scale.
-- Use dense LD blocks; low-rank blocks are not supported by the bivariate sampler.
-  Automatic storage uses D8 only through 1500 variants per float block; set
-  `ld_int8=False` to keep all float inputs float32.
+- Dense, `LowRankLD`, and mixed block lists are supported. A low-rank fit uses
+  the approximation encoded by its retained factor, so choose its rank or
+  retained variance deliberately. `ld_int8` controls dense storage only.
 - Do not over-interpret absolute overlap counts at low power.
 - Increase `burn_in` and `num_iter` if `h2` or `r_g` is unstable across seeds.
 - At low power, vary `pi_init` as a pre-specified sensitivity analysis: scalar

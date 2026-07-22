@@ -187,13 +187,33 @@ borrowing helps most when one trait is weak, the other is strong, and the geneti
 correlation is high. With little shared signal, the model should mostly decouple
 the traits, but prediction gains still need out-of-sample validation.
 
-## Dense-block implementation
+## Block representations
 
-`ldpred3_auto_bivariate_blocks` streams dense LD blocks and pools global
-hyperparameters across them. The full genome-wide LD matrix is never
-materialized, but each block must currently be dense. Compact low-rank
-`LowRankLD` blocks are rejected by design until the bivariate kernel supports
-that representation; pass dense float or dense int8 blocks.
+`ldpred3_auto_bivariate_blocks` streams dense or compact low-rank LD blocks and
+pools global hyperparameters across them. The full genome-wide LD matrix is
+never materialized, and dense and `LowRankLD` blocks may be mixed.
+
+For a low-rank factor with `k` variants and rank `r`, bipred uses ldpred3's
+effective correlation semantics:
+
+**Equation 6. Effective low-rank LD and persistent score.**
+
+```text
+W = diag(row_scales) U
+R_eff = W W' + diag(d)
+s_t = W' beta_t
+R_eff beta_t = W s_t + d * beta_t
+```
+
+The sampler keeps `U` compact and maintains one rank-length score `s_t` per
+trait. Each SNP update is `O(r)`, a block sweep is `O(k*r)`, and storage is
+`O(k*r)` rather than dense `O(k^2)`. In newer ldpred3 representations, `d`
+stores diagonal mass discarded by truncation or quantisation; LR8 retains one
+global factor scale rather than changing individual-row geometry. Released
+row-normalised factors are handled backward-compatibly with `d = 0`. LR8
+factors remain int8 and float factors are canonicalised to float32. The
+effective LD is the approximation encoded by the factor and diagonal residual,
+so its accuracy still depends on the construction rank or retained variance.
 
 With the default `ld_int8=None`, supplied dense int8 blocks are consumed as-is;
 float blocks with at most 1500 variants are stored as
@@ -202,4 +222,5 @@ The small-block D8 payload uses a quarter of the float32 memory and is
 dequantised in the bandwidth-bound inner loop (`corr[i, j] / 127`); its unit
 diagonal remains exact. Keeping large dense blocks float32 avoids magnifying the
 small entrywise rounding error through poor conditioning. `ld_int8=True`
-quantises every float block and `False` keeps every float input float32.
+quantises every dense float block and `False` keeps every dense float input
+float32. It does not change `LowRankLD` factors.

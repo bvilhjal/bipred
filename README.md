@@ -75,7 +75,7 @@ because the covariance uses a damped moment update rather than a conditional
 posterior draw, these are not Bayesian credible intervals.
 `res.mixer_posterior()` remains only as a deprecated compatibility alias.
 
-For genome-wide runs, stream dense LD blocks:
+For genome-wide runs, stream LD blocks:
 
 ```python
 from bipred import ldpred3_auto_bivariate_blocks
@@ -86,16 +86,16 @@ res = ldpred3_auto_bivariate_blocks(
 )
 ```
 
-`blocks` must be `[(R, idx), ...]` with dense LD matrices and contiguous indices
-that partition `0..m-1`. The current bivariate sampler rejects ldpred3's compact
-low-rank `LowRankLD` representation; pass dense float or dense int8 blocks.
+`blocks` must be `[(R, idx), ...]` with contiguous indices that partition
+`0..m-1`. Each `R` may be a dense LD matrix or ldpred3's compact `LowRankLD`
+representation, including LR8; dense and low-rank blocks may be mixed.
 
 The default `ld_int8=None` policy keeps supplied int8 blocks as-is, quantises
 float blocks with at most 1500 variants, and keeps larger float blocks float32.
 This retains D8's fourfold storage saving on small blocks without applying it to
 large dense blocks where quantisation can alter conditioning. Use
-`ld_int8=True` to quantise every float block or `False` to keep float inputs
-float32.
+`ld_int8=True` to quantise every dense float block or `False` to keep dense float
+inputs float32. This setting does not alter compact low-rank factors.
 
 ## Model In Brief
 

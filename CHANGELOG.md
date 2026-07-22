@@ -43,6 +43,13 @@ follow [Semantic Versioning](https://semver.org/).
   unaffected.
 
 ### Added
+- **Compact low-rank LD inference.** The serial bivariate block sampler now
+  consumes ldpred3 float `LowRankLD` and LR8 factors without materialising dense
+  LD, and permits mixed dense/low-rank block lists. It maintains two persistent
+  rank-size score vectors per low-rank block, giving `O(k*r)` sweep work and
+  storage for block size `k` and rank `r`. The adapter supports both released
+  row-normalised factors and ldpred3's newer globally scaled factor plus
+  diagonal-residual contract; `ld_int8` continues to control dense storage only.
 - **Configurable four-state mixture prior (`pi_prior`).** The Dirichlet
   concentration for the per-sweep `π` draw is now a parameter (default `1.0`,
   the historical uniform prior; `0.5` is Jeffreys). Backward compatible. Mirrors

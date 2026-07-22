@@ -9,7 +9,7 @@ polygenic-overlap outputs. For basic usage, start with [guide.md](guide.md).
 
 | estimator | best use | main caveat |
 |---|---|---|
-| `res.rg` from `ldpred3_auto_bivariate[_blocks]` | default estimate; highest precision in benchmarks | needs dense LD blocks |
+| `res.rg` from `ldpred3_auto_bivariate[_blocks]` | default estimate; highest precision in benchmarks | needs matched dense or low-rank LD blocks |
 | `rg_decorrelated=True` | asymmetric-power pairs | less benchmark coverage than the default estimator |
 | `bipred.ldsc_rg` | fast screen and independent cross-check | noisier; can diverge when marginal LDSC `h2` is near zero |
 | two univariate LDpred runs | extra diagnostic | often attenuated, especially under power asymmetry |
