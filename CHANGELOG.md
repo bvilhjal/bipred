@@ -44,6 +44,17 @@ follow [Semantic Versioning](https://semver.org/).
   unaffected.
 
 ### Added
+- **Semantic guards on the ldpred3 private-API seam.** A new
+  `tests/test_ldpred3_seam.py` pins the *behaviour* (not just the importability)
+  of the underscore-prefixed ldpred3 symbols bipred depends on — the int8 scale
+  `_Q8 == 127`, the WLS/weight helpers `_wls` / `_weights`, and the per-variant-N
+  broadcaster `_as_n_vector` — so an ldpred3 revision bump that silently changes
+  any of them fails loudly here instead of quietly perturbing bivariate numerics
+  or LDSC-rg standard errors.
+- **Scalar-N hoisting regression test.** A bit-identity test pins the documented
+  invariant that a shared scalar N and a constant per-variant N vector produce
+  exactly equal results (the `n_const` fast path leaves the per-SNP arithmetic
+  unchanged) — previously asserted only in a docstring.
 - **Deterministic within-chain block parallelism.** `ncores>1` now fuses
   homogeneous dense or homogeneous low-rank blocks into one Numba `prange`
   sweep. Random arrays are generated before launch and the three counts plus six
@@ -165,6 +176,10 @@ follow [Semantic Versioning](https://semver.org/).
   ldpred3 seam (Notes), and the `mixer_overlap.py` /
   `bivariate_demo.py` benchmark-table rows; the noise-inflation numbers above
   now match the committed calibration sweep.
+- **`BivariateResult` optional-field annotations.** The optional result fields
+  (`pi`, `pi_samples`, `sigma_samples`, `noise_scale`, `genetic_samples`,
+  `noise_scale_samples`) were annotated as non-optional but default to `None`;
+  they are now typed `Optional[...]` to match their actual contract.
 
 ### Notes
 - bipred depends on `ldpred3` (`>=` the release that removes the in-tree

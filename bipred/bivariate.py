@@ -25,6 +25,7 @@ independent GWAS samples.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 import warnings
 
 import numpy as np
@@ -768,12 +769,12 @@ class BivariateResult:
     rg: float
     p: float
     sigma: np.ndarray
-    pi: np.ndarray = None
-    pi_samples: np.ndarray = None       # (n_kept, 4) conditional mixture draws
-    sigma_samples: np.ndarray = None    # (n_kept, 3) damped covariance iterates
-    noise_scale: tuple = None           # learned (lambda1, lambda2); (1,1) if off
-    genetic_samples: np.ndarray = None  # (n_kept, 3) raw (gvar1, gcov, gvar2)
-    noise_scale_samples: np.ndarray = None  # (n_kept, 2); ones if inflation off
+    pi: Optional[np.ndarray] = None
+    pi_samples: Optional[np.ndarray] = None       # (n_kept, 4) conditional mixture draws
+    sigma_samples: Optional[np.ndarray] = None    # (n_kept, 3) damped covariance iterates
+    noise_scale: Optional[tuple] = None           # learned (lambda1, lambda2); (1,1) if off
+    genetic_samples: Optional[np.ndarray] = None  # (n_kept, 3) raw (gvar1, gcov, gvar2)
+    noise_scale_samples: Optional[np.ndarray] = None  # (n_kept, 2); ones if inflation off
 
     @property
     def mixer(self):
