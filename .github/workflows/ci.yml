@@ -10,6 +10,13 @@ env:
   # ldpred3 is not published yet and bipred consumes an internal compatibility
   # seam. Keep CI reproducible instead of silently following its moving branch.
   LDPRED3_REV: "db3ebd2385b7e3f347712f8761682c0eb49df3e4"
+  # ldpred3 lives in a private repo, so the runner's default GITHUB_TOKEN (scoped
+  # to this repo only) cannot clone it. Provide a repo/organization secret
+  # LDPRED3_TOKEN — a PAT or fine-grained token with read access to
+  # bvilhjal/ldpred3 — and the "Authenticate to private ldpred3" steps below wire
+  # it into git so `pip install git+https://…` succeeds. Without the secret those
+  # steps no-op and the ldpred3 install fails exactly as before (nothing is worse).
+  LDPRED3_TOKEN: ${{ secrets.LDPRED3_TOKEN }}
 
 jobs:
   lint:
@@ -46,6 +53,17 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      # Rewrite github.com clones to carry the token so pip can reach the private
+      # ldpred3 repo. No-op (and the install fails as before) when the secret is
+      # unset. `git config --global` persists for the rest of the job.
+      - name: Authenticate to private ldpred3
+        if: env.LDPRED3_TOKEN != ''
+        shell: bash
+        run: |
+          git config --global \
+            url."https://x-access-token:${LDPRED3_TOKEN}@github.com/".insteadOf \
+            "https://github.com/"
+
       # bipred depends on ldpred3, which is not on PyPI yet — install it from git
       # so the shared LD / sampler internals are importable.
       - name: Install ldpred3 (dependency, with Numba)
@@ -80,6 +98,14 @@ jobs:
         with:
           python-version: "3.14"
 
+      - name: Authenticate to private ldpred3
+        if: env.LDPRED3_TOKEN != ''
+        shell: bash
+        run: |
+          git config --global \
+            url."https://x-access-token:${LDPRED3_TOKEN}@github.com/".insteadOf \
+            "https://github.com/"
+
       - name: Install ldpred3 and bipred with Numba
         run: |
           python -m pip install "ldpred3[fast] @ git+https://github.com/bvilhjal/ldpred3.git@${{ env.LDPRED3_REV }}"
@@ -99,6 +125,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
+
+      - name: Authenticate to private ldpred3
+        if: env.LDPRED3_TOKEN != ''
+        shell: bash
+        run: |
+          git config --global \
+            url."https://x-access-token:${LDPRED3_TOKEN}@github.com/".insteadOf \
+            "https://github.com/"
 
       - name: Build wheel and sdist
         run: |
