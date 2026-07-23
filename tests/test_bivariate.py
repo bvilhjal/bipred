@@ -966,6 +966,29 @@ def test_rg_decorrelated_recovers_rg_for_asymmetric_power():
     assert abs(np.mean(rgs) - 0.8) < 0.15, np.mean(rgs)
 
 
+def test_scalar_n_matches_constant_vector_n_bit_for_bit():
+    # When N is a shared scalar the residual-independent constants are hoisted out
+    # of the per-SNP loop (the n_const path in _bivar_const / _bivar_one_sweep),
+    # documented as leaving the per-SNP arithmetic unchanged and therefore
+    # bit-identical to the per-variant path. Pin that invariant: a scalar N and a
+    # constant per-variant N vector must agree exactly, not merely approximately.
+    rng = np.random.default_rng(0)
+    m = 300
+    corr = np.eye(m)
+    beta1 = rng.normal(0.0, 0.05, m)
+    beta2 = rng.normal(0.0, 0.05, m)
+    n1, n2 = 50_000.0, 40_000.0
+    scalar = ldpred3_auto_bivariate(corr, beta1, beta2, n1, n2, seed=7,
+                                    burn_in=40, num_iter=40)
+    vector = ldpred3_auto_bivariate(corr, beta1, beta2, np.full(m, n1),
+                                    np.full(m, n2), seed=7, burn_in=40,
+                                    num_iter=40)
+    assert scalar.rg == vector.rg
+    assert scalar.h2 == vector.h2
+    np.testing.assert_array_equal(scalar.beta1_est, vector.beta1_est)
+    np.testing.assert_array_equal(scalar.beta2_est, vector.beta2_est)
+
+
 def test_cross_corr_with_per_variant_n():
     # The per-SNP branch of the noise covariance (E12 != 0 with per-variant N)
     # stays finite and still shrinks correlated sampling noise.
