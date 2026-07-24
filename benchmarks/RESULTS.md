@@ -11,6 +11,14 @@ truth. LD is stored **int8**-quantised (the default representation).
 - **Caveat:** these are *stochastic* benchmarks; every number is one Monte-Carlo
   run, so re-running shifts values. Treat the environmental-overlap section as a
   stress test, not a stable recovery claim.
+- **In-model vs real-genotype:** the rg-accuracy benchmarks (Sections 1–4)
+  simulate summary statistics with exactly the `β̂ ~ N(Rβ, R/n)` noise the
+  bivariate likelihood assumes — LD-reference mismatch is the only model error —
+  which is favourable terrain for a model-based estimator relative to
+  moment-based LDSC. The one out-of-model test on real individual-level
+  genotypes (Section 7) is where the bivariate `cross_corr` correction is *not*
+  reliably recovered. Read "halves LDSC's error" as an in-model result; it does
+  not automatically transfer to raw real-genotype summary statistics.
 
 ## Headline findings
 
@@ -49,6 +57,16 @@ cross-trait LDSC with the bivariate joint fit. Table shows mean absolute error
 LDpred3 wins on every non-infinitesimal architecture and always has the tighter
 SD. LDSC edges it on point accuracy only for the infinitesimal case, where its
 moment assumptions hold exactly — but even there LDpred3's SD is ~2× smaller.
+
+Two things to read carefully in Table 1. First, LDpred3's tighter SD is the
+bias–variance trade of a shrinkage estimator: it **attenuates high true rg**
+downward — at rg = 0.95 the LDpred3 estimate is 0.906 (infinitesimal), 0.922
+(polygenic) and 0.938 (moderate) — a bias that averaging MAE over the six-point
+rg grid partly masks. Second, the LDSC MAE/SD here **exclude** replicates where
+LDSC returns |r̂g| > 1.5 (the `ldsc_fail` column of the CSV; e.g. one dropped
+replicate in `major_locus` at rg = 0.95), while LDpred3 replicates are never
+excluded — so the comparison, if anything, flatters LDSC and the LDpred3 win is
+conservative.
 
 **Figure 1. Genetic-correlation estimates across architectures.**
 

@@ -53,7 +53,7 @@ alibi.
 | Script | What it measures | Needs msprime |
 |--------|------------------|:---:|
 | `rg_architectures.py` | Genetic correlation (bivariate LDSC vs bivariate LDpred3) vs truth across a six-point r_g grid × five architectures, on realistic non-repeating coalescent LD; timing + memory (→ `rg_architectures.{csv,png}`) | ✓ |
-| `rg_polygenicity.py` | Genetic-correlation recovery vs polygenicity (p=0.1…1e-4) at larger m (denser blocks via higher mutation rate); LD simulated once, reused across p (→ `rg_polygenicity.{csv,png}`) | ✓ |
+| `rg_polygenicity.py` | Genetic-correlation recovery vs polygenicity (p=0.1…1e-4); the committed run uses the default m=5,000 (a larger m is available via the `MUT_RATE`/`K` env vars, denser blocks); LD simulated once, reused across p (→ `rg_polygenicity.{csv,png}`) | ✓ |
 | `rg_methods.py` | rg estimators compared — cross-trait LDSC / `uni_gv` / `uni_r2` / the bivariate joint fit: accuracy (symmetric & asymmetric power) + running time + a timing scan across m (→ `rg_methods.{csv,png}`, `rg_methods_timing.csv`) | ✓ |
 | `rg_scaling.py` | Genetic-correlation estimation scaling with m (bivariate LDSC vs LDpred3): per-fit time / peak RSS / accuracy, one subprocess per size (→ `rg_scaling.{csv,png}`) | ✓ |
 | `mixer_overlap.py` | MiXeR-style polygenic-overlap recovery (`res.mixer`): overlap fraction, within-shared ρ_β, the r_g decomposition and relative polygenicity across six sweeps (`overlap`, `rho`, `power`, `ldmatch` — LD-spreading vs reference mismatch, `calibration` — noise-inflation on/off, `unical` — `mixer_calibrated` vs truth) (→ `mixer_overlap.{csv,png}`) | ✓ |

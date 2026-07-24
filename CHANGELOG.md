@@ -180,6 +180,16 @@ follow [Semantic Versioning](https://semver.org/).
   (`pi`, `pi_samples`, `sigma_samples`, `noise_scale`, `genetic_samples`,
   `noise_scale_samples`) were annotated as non-optional but default to `None`;
   they are now typed `Optional[...]` to match their actual contract.
+- **Benchmark documentation accuracy.** `rg_polygenicity.py` and
+  `benchmarks/README.md` no longer describe the committed polygenicity run as
+  being at a "larger m" — the committed `rg_polygenicity.csv` uses the default
+  m = 5,000 (a larger m remains available via the `MUT_RATE`/`K` env vars).
+  `benchmarks/RESULTS.md` gains three caveats near its headline: the rg-accuracy
+  wins (Sections 1–4) are measured in a regime matched to the bivariate
+  likelihood and do not transfer to the real-genotype stress test (Section 7);
+  LDpred3 attenuates high true rg downward; and Section 1's LDSC error excludes
+  `|rg| > 1.5` replicates while bipred's are not, making the comparison
+  conservative. No committed benchmark numbers changed.
 
 ### Notes
 - bipred depends on `ldpred3` (`>=` the release that removes the in-tree

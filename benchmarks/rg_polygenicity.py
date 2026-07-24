@@ -1,11 +1,13 @@
-"""Genetic-correlation recovery across polygenicity, at a larger m.
+"""Genetic-correlation recovery across polygenicity.
 
 Sweeps the causal fraction ``p`` in {0.1, 0.01, 0.001, 0.0001} at a fixed true
 ``rg``, comparing bivariate LDSC (``ldsc_rg``) and bivariate LDpred3
 (``ldpred3_auto_bivariate_blocks``) against the truth. The LD is the realistic
-non-repeating coalescent model of ``rg_architectures.py``, pushed to a **larger
-m** by raising msprime's mutation rate so each segment yields more SNPs (larger
-``K`` per block) rather than by adding many small blocks.
+non-repeating coalescent model of ``rg_architectures.py``. The committed
+``rg_polygenicity.csv`` uses that benchmark's default geometry (m = 5,000);
+raising msprime's mutation rate (with a larger ``K``) makes each segment yield
+more SNPs for an optional larger-m run (see the invocation below), rather than
+adding many small blocks.
 
 The population LD (the "genotypes for LD") is **simulated once** and cached on
 disk by ``rg_architectures`` (keyed by the geometry + mutation rate); every
