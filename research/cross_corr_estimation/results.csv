@@ -1,0 +1,5 @@
+quantity,sampler,truth,mean,sd
+rg,cc_fixed_0,0.600,0.7337,0.0153
+rg,cc_estimated,0.600,0.5888,0.0261
+cross_corr,cc_estimated,0.400,0.3848,0.0278
+cross_corr,control_no_overlap,0.000,-0.0315,0.0725
