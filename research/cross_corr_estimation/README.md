@@ -17,9 +17,17 @@ correlation `r_e`. `cross_corr` reflects the phenotypic correlation among shared
 samples — genetic + environmental combined; summary statistics cannot separate
 the environmental part. See the discussion in the package docs.)
 
-> **The authoritative results are in [`RESULTS.md`](RESULTS.md)**, a four-grid
-> benchmark that also compares against bipred's *existing* practice (deriving
-> `cross_corr` from the cross-trait LDSC intercept). Read that first.
+> **The authoritative results are in [`RESULTS.md`](RESULTS.md)** (genome-wide)
+> and **[`RESULTS_REGIONAL.md`](RESULTS_REGIONAL.md)** (regional r_g). Both
+> compare against bipred's *existing* practice — deriving `cross_corr` from the
+> cross-trait LDSC intercept. Read those first.
+>
+> **Short version of what the benchmarks concluded.** Genome-wide, the in-sampler
+> estimator wins only below m ≈ 50,000 variants; past that the LDSC intercept is
+> equal or better, so at genome scale this feature adds nothing. The case for
+> building it is **regional** r_g, where each region has 10²–10³ variants: there
+> the LDSC intercept is not merely worse but actively harmful, and uncorrected
+> sample overlap manufactures r_g ≈ 0.26 in regions whose true r_g is zero.
 >
 > **Caveat on the numbers in this file.** This prototype draws the causal effects
 > **once** and redraws only the GWAS sampling noise across its 5 replicates, and

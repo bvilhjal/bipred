@@ -107,10 +107,44 @@ smaller.
 | 6,000 | 0.155 | **0.029** | 0.391 (0.141) | **0.395 (0.020)** | 7.2× |
 | 12,000 | 0.140 | **0.044** | 0.391 (0.071) | **0.399 (0.015)** | 4.9× |
 
-**This is the most important table for judging the method's real-world value.**
 The LDSC intercept's SD falls 0.625 → 0.071 as m grows 8× — it is converging,
-roughly as `1/sqrt(m)` — and the advantage ratio narrows from 9.9× to 4.9×. See
-limitation 1.
+roughly as `1/sqrt(m)` — and the advantage ratio narrows from 9.9× to 4.9×.
+§3b extends this to m = 100,000 and finds the crossover.
+
+## 3b. Large m — where the genome-wide advantage ends
+
+[`bench_cross_corr_scale.csv`](bench_cross_corr_scale.csv), r_g = 0.6,
+cross_corr = 0.4, N = 8,000, 4 replicates, **1,500 sweeps** (see the warning
+below).
+
+| m | ldsc `ĉc` (sd) | joint `ĉc` (sd) | sd ratio | oracle r_g bias |
+|---:|---|---|---:|---:|
+| 12,500 | 0.419 (0.076) | **0.385 (0.012)** | **6.3×** | +0.005 |
+| 25,000 | 0.398 (0.025) | **0.392 (0.009)** | **3.0×** | +0.026 |
+| 50,000 | **0.394 (0.004)** | 0.404 (0.007) | 0.5× | +0.008 |
+| 100,000 | **0.398 (0.004)** | 0.411 (0.005) | 0.8× | −0.110 |
+
+**The genome-wide advantage does not survive to large m.** The crossover is near
+**m ≈ 50,000**: beyond it the cross-trait LDSC intercept estimates `cross_corr`
+as well as or better than the in-sampler update, exactly as the `1/sqrt(m)`
+convergence in §3 predicted. For a genome-scale analysis with ~10⁶ variants, the
+existing `estimate_sample_overlap` route is the right tool and this feature adds
+nothing.
+
+That is the honest genome-wide conclusion. The case for building the in-sampler
+estimator is **regional** r_g, where m per region is 10²–10³ — the left-hand end
+of this table, where the advantage is 6–10× — and where the LDSC intercept is not
+merely worse but actively harmful. See
+[`RESULTS_REGIONAL.md`](RESULTS_REGIONAL.md).
+
+> **Warning on the m = 100,000 row.** The oracle — which has no `cross_corr`
+> uncertainty at all — carries a bias of −0.110 there, so *every* arm in that row
+> is affected by something other than `cross_corr`: at m = 100,000 the per-SNP
+> power is `N·h²/m` = 0.04, and the sampler has not fully converged even at 1,500
+> sweeps. Do not read the `joint` value in that row as a property of the
+> estimator. An earlier version of this grid ran 400 sweeps and showed a much
+> larger apparent collapse (oracle bias −0.246 at 400 sweeps versus −0.040 at
+> 1,200 in a direct check) — that was a convergence artifact, not a result.
 
 ## 4. LD-score range (r_g = 0.6, cross_corr = 0.4, N = 8,000, m = 6,000)
 
@@ -132,14 +166,15 @@ of narrow LD-score range", not as a controlled test.
 
 ## 5. Limitations — read these before believing the headline
 
-1. **Scale is the binding limitation.** The largest grid is m = 12,000 variants;
-   a real GWAS has ~10⁶. §3 shows the `ldsc` arm converging as `1/sqrt(m)`, with
-   the SD advantage already narrowing from 9.9× to 4.9× over an 8× increase in m.
-   Naive extrapolation of that trend to m ~ 10⁶ would leave little advantage.
-   **This benchmark cannot settle the real-GWAS-scale regime**, which is the
-   regime bipred users are actually in. The defensible claim is: *at the scales
-   tested, joint estimation is near-oracle and 5–7× lower variance than the LDSC
-   intercept.*
+1. **The genome-wide advantage ends near m ≈ 50,000** (§3b). Beyond that the
+   LDSC intercept matches or beats the in-sampler estimator, so for a
+   genome-scale analysis (~10⁶ variants) the existing `estimate_sample_overlap`
+   route is the right tool and this feature adds nothing. The defensible
+   genome-wide claim is: *below ~50k variants, joint estimation is near-oracle
+   and 3–10× lower variance than the LDSC intercept; above it, the two are
+   comparable and LDSC is cheaper.* The motivating use case is therefore
+   **regional** r_g ([`RESULTS_REGIONAL.md`](RESULTS_REGIONAL.md)), where m per
+   region is 10²–10³ by construction.
 2. **In-model.** The data are simulated with exactly the noise structure the
    sampler assumes. This is favourable terrain for a model-based estimator — the
    same caveat that applies to bipred's own §1–4 benchmarks.

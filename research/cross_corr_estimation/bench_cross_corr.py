@@ -376,6 +376,35 @@ def grid_m(reps=REPS):
     return rows
 
 
+def grid_scale(reps=4, only_nb=None):
+    """Large-m extension of the `m` sweep.
+
+    RESULTS.md shows the LDSC intercept converging roughly as 1/sqrt(m), so the
+    honest question is whether the advantage survives toward realistic variant
+    counts.
+
+    Sweeps are RAISED, not lowered, for this grid. Per-SNP power (N*h2/m) falls
+    as m grows -- 0.04 at m = 100k -- and the sampler needs more sweeps to
+    converge there, not fewer. A first version of this grid used 400 sweeps and
+    produced a large apparent degradation at m >= 50k *in every arm including
+    the oracle*, which is diagnostic of a convergence artifact rather than a
+    cross_corr effect: at m = 100k the oracle's bias is -0.246 at 400 sweeps and
+    -0.040 at 1200. Do not lower these.
+    """
+    rows = []
+    global N_SWEEP, BURN
+    keep = (N_SWEEP, BURN)
+    N_SWEEP, BURN = 1500, 500
+    todo = (only_nb,) if only_nb else (125, 250, 500, 1000)
+    for nb in todo:                             # m = 12.5k .. 100k at K = 100
+        t0 = time.time()
+        cell, real, nf, nc = one_cell(0.6, 0.4, N_DEF, N_DEF, nb, 100, reps)
+        rows += _rows(cell, 0.6, 0.4, N_DEF, nb * 100, reps, real, nf, nc)
+        print(f"  cell m={nb*100} done in {time.time()-t0:.0f}s")
+    N_SWEEP, BURN = keep
+    return rows
+
+
 def grid_ldwide(reps=REPS):
     """Fairness re-test: widen the LD-score range so LDSC's intercept is properly
     identified. The default grids use rho in [0.2, 0.8] (ell about 1-4.5), far
@@ -402,9 +431,12 @@ def grid_ldwide(reps=REPS):
 def main():
     which = sys.argv[1] if len(sys.argv) > 1 else "all"
     reps = int(sys.argv[2]) if len(sys.argv) > 2 else REPS
+    only = int(sys.argv[3]) if len(sys.argv) > 3 else None
     print(f"cross_corr benchmark (numba={HAVE_NUMBA}) grid={which} reps={reps}")
     todo = {"main": [("main", grid_main)], "n": [("n", grid_n)],
             "m": [("m", grid_m)], "ldwide": [("ldwide", grid_ldwide)],
+            "scale": [(f"scale{sys.argv[3]}" if len(sys.argv) > 3 else "scale",
+                       lambda r: grid_scale(r, only))],
             "all": [("main", grid_main), ("n", grid_n), ("m", grid_m),
                     ("ldwide", grid_ldwide)]}[which]
     for name, fn in todo:
