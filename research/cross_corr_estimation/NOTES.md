@@ -322,12 +322,37 @@ What we believe, with measurements behind it:
 
 What remains open:
 
-- How to remove the residual null bias. It is an interaction between the global
-  overlap correction and free regional rho (§10), and **not** a pooling problem:
-  neither Sigma-pooling (§9) nor rho-pooling touches it. The next thing we would
-  try is updating *c* and {rho_r} jointly rather than in sequence, since they are
-  partially confounded — both add cross-trait covariance, and the sampler
-  currently lets one absorb what the other should explain.
+- How to remove the residual null bias. What we know: it is **not** a pooling
+  problem (neither Sigma-pooling in §9 nor rho-pooling in §10 touches it), and it
+  is **not** caused by estimating *c*. We proposed the latter as the next avenue
+  and then refuted it, in two steps worth recording.
+
+  First the algebra: conditional on the sampled effects beta, the whitened
+  residual of §3 does not involve rho_r at all, so *c* and {rho_r} are
+  *conditionally independent* and a "joint update" of the two is a no-op. Any
+  coupling runs through beta.
+
+  Then the measurement, since algebra about a sampler deserves a check. The
+  `rho|fixc` arm runs per-region rho with *c* pinned at the true value:
+
+  | | null bias | *c* used |
+  |---|---:|---:|
+  | `global` | +0.032 | 0.444 (est.) |
+  | `rho` | −0.085 | 0.407 (est.) |
+  | `rho|fixc` | **−0.082** | **0.400 (exact)** |
+
+  A perfectly known *c* changes nothing. The bias is therefore structural to
+  combining an overlap correction with a free per-region correlation: in a region
+  whose true rho is zero, the `E^{-1}` correction and rho_r are two ways of
+  explaining the same cross-trait covariance, and the region has no genuine
+  covariance for either to explain. Where to go next is genuinely open; what is
+  now excluded is pooling, and anything that works by improving the estimate of
+  *c*.
+
+> **Lesson 7.** A mechanism that sounds right deserves the same refutation
+> attempt as a result. We wrote "update *c* and {rho_r} jointly" into these notes
+> as the recommended next step; it was wrong on the algebra and wrong in the
+> measurement, and it would have cost the next reader a week.
 - Whether any of this survives bipred's four-state mixture, its int8 and low-rank
   LD representations — the whitening of §3 needs a per-block L^{-1}, which those
   representations do not carry — and realistic LD.
