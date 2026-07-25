@@ -21,6 +21,11 @@ Public API::
 a :class:`~bipred.bivariate.BivariateResult`. The multi-chain driver runs
 dispersed chains sequentially and pools every finite, equal-length chain.
 
+Per-locus structure comes from :func:`~bipred.regional.regional_rg`, which turns
+a fit into a **regional** genetic correlation. Read its docstring first: it
+documents two biases it does not correct (uncorrected sample overlap inflates
+every region, and regional estimates are shrunk toward the genome-wide value).
+
 For a fast, moment-based genetic-correlation estimate (the cross-check on the
 joint fit), :func:`~bipred.ldsc_rg.ldsc_rg` implements cross-trait LD Score
 regression, with :func:`~bipred.ldsc_rg.estimate_sample_overlap` for shared
@@ -44,6 +49,7 @@ _EXPORTS = {
                    "MultiChainBivariateResult", "BivariateChainSummary",
                    "BivariateBasicSplitRHat"],
     "ldsc_rg": ["ldsc_rg", "LDSCRgResult", "estimate_sample_overlap"],
+    "regional": ["regional_rg", "RegionalRgResult"],
 }
 
 # name -> module, for the lazy loader
