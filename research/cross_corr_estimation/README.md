@@ -17,6 +17,18 @@ correlation `r_e`. `cross_corr` reflects the phenotypic correlation among shared
 samples — genetic + environmental combined; summary statistics cannot separate
 the environmental part. See the discussion in the package docs.)
 
+> **The authoritative results are in [`RESULTS.md`](RESULTS.md)**, a four-grid
+> benchmark that also compares against bipred's *existing* practice (deriving
+> `cross_corr` from the cross-trait LDSC intercept). Read that first.
+>
+> **Caveat on the numbers in this file.** This prototype draws the causal effects
+> **once** and redraws only the GWAS sampling noise across its 5 replicates, and
+> reports `np.std` with `ddof=0`. Its ± figures therefore understate the true
+> replicate-to-replicate variability, and any single-draw quantity should not be
+> read as an estimate of a method's behaviour. The direction of its conclusion is
+> confirmed by the properly-replicated benchmark in `RESULTS.md`; the dispersions
+> here are not. It is retained as the readable derivation of the method.
+
 ## Answer: yes, and estimating it de-biases `r_g`
 
 `estimate_cross_corr_prototype.py` simulates two traits with a known genetic
