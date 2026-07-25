@@ -44,6 +44,29 @@ follow [Semantic Versioning](https://semver.org/).
   unaffected.
 
 ### Added
+- **Regional (per-locus) genetic correlation** — `regional_rg` and
+  `RegionalRgResult`. Turns a fitted bivariate model into a per-region genetic
+  correlation by restricting the LD-aware quadratics to each region's variants,
+  using the posterior-mean effects. Regions are given as a per-variant label
+  array, may be non-contiguous, and may span blocks (LD is block-diagonal, so
+  the within-block contributions sum exactly). All three LD representations are
+  supported without densifying: float32, int8 (dequantised on the fly) and
+  `LowRankLD` factors, for which the region quadratic is
+  `(W_sub' a)·(W_sub' b) + sum residual_i a_i b_i`. The result also exposes the
+  three raw quadratics so regions can be pooled or `rg` re-derived without
+  refitting.
+
+  Two known biases are documented rather than corrected, and callers should read
+  them before interpreting output. Uncorrected **sample overlap inflates every
+  region identically** — regions whose true `rg` is zero read about 0.26 in
+  simulation — so `cross_corr` should be supplied to the fit whenever the cohorts
+  may overlap; the contamination cannot be estimated within a region and does not
+  average out across them. Separately, regional estimates are **shrunk toward the
+  genome-wide correlation** because the sampler carries a single genome-wide
+  effect covariance; this is unaffected by `cross_corr` and does not diminish
+  with larger regions. The estimates are therefore better suited to ranking and
+  comparing regions than as calibrated absolute values. Quantified in
+  `research/cross_corr_estimation/RESULTS_REGIONAL.md`.
 - **Semantic guards on the ldpred3 private-API seam.** A new
   `tests/test_ldpred3_seam.py` pins the *behaviour* (not just the importability)
   of the underscore-prefixed ldpred3 symbols bipred depends on — the int8 scale
