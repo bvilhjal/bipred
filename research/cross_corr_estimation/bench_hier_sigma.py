@@ -159,7 +159,7 @@ def run_hier(R, Linv, bh1, bh2, n1, n2, model, seed,
 
         # ---- per-region Sigma_r | beta_r, nu, Psi -------------------------- #
         prior_scale = (nu - 3.0) * Psi
-        if model == "rho" or model.startswith("rhoz"):
+        if model.split("|")[0] == "rho" or model.startswith("rhoz"):
             tau = float(model.split(":")[1]) if model.startswith("rhoz") else None
             # Per-region CORRELATION only: the per-trait scale is held at the
             # global estimate and just rho_r varies by region. Letting the whole
@@ -216,6 +216,16 @@ def run_hier(R, Linv, bh1, bh2, n1, n2, model, seed,
                     nu = float(rng.choice(NU_GRID, p=w / w.sum()))
 
         # ---- global cross_corr (whitened marginal residuals) --------------- #
+        if model.endswith("|fixc"):
+            cc = CC_TRUE          # diagnostic: is the null bias about ESTIMATING c?
+            if sweep >= burn:
+                q11 += np.einsum("ik,ik->i", b1, rb1)
+                q22 += np.einsum("ik,ik->i", b2, rb2)
+                q12 += np.einsum("ik,ik->i", b1, rb2)
+                acc_b1 += b1; acc_b2 += b2
+                acc_rb1 += rb1; acc_rb2 += rb2
+                nu_keep.append(nu); cc_keep.append(cc); kept += 1
+            continue
         w1 = np.einsum("ikl,il->ik", Linv, bh1 - rb1) * np.sqrt(n1)
         w2 = np.einsum("ikl,il->ik", Linv, bh2 - rb2) * np.sqrt(n2)
         S11 = float((w1 * w1).sum()); S22 = float((w2 * w2).sum())
@@ -356,6 +366,25 @@ def grid_rhotau(reps=6):
     return rows
 
 
+def grid_fixc(reps=6):
+    """Is the residual null-region bias caused by ESTIMATING cross_corr?
+
+    The `rho|fixc` arm runs per-region rho with cross_corr pinned at the true
+    simulated value. If the null bias were an artefact of estimating c, this arm
+    would be clean. It is not (see RESULTS_REGIONAL / NOTES): the bias survives a
+    perfectly known c, so the interaction is with the overlap *correction*, not
+    with its estimation. Recorded because it refutes a plausible hypothesis."""
+    global MODELS
+    keep = MODELS
+    MODELS = ("global", "rho", "rho|fixc")
+    t0 = time.time()
+    out, real, rgb = one_cell(NB_DEF, K_DEF, N_DEF, N_DEF, reps)
+    rows = summarise(out, real, rgb, K_DEF, N_DEF, reps)
+    print(f"  fixed-c diagnostic done in {time.time()-t0:.0f}s")
+    MODELS = keep
+    return rows
+
+
 def grid_size(reps=REPS):
     rows = []
     for nb, k in ((30, 200), (60, 100), (120, 50)):
@@ -372,7 +401,8 @@ def main():
     print(f"hierarchical-Sigma regional benchmark grid={which} reps={reps}")
     todo = {"main": [("main", grid_main)], "size": [("size", grid_size)],
             "nusweep": [("nusweep", grid_nusweep)],
-            "rhotau": [("rhotau", grid_rhotau)]}[which]
+            "rhotau": [("rhotau", grid_rhotau)],
+            "fixc": [("fixc", grid_fixc)]}[which]
     for name, fn in todo:
         print(f"\n=== grid: {name} ===")
         rows = fn(reps)
