@@ -58,6 +58,20 @@ from ldpred3.ldpred3 import (
 # locked to the blocks ``ldpred3.compute_ld_blocks(quantize=True)`` produces.
 from ldpred3._kernels import _Q8
 
+# nogil variant of the JIT shim. ldpred3 defines an equivalent internally but
+# does not re-export it on the seam bipred consumes, and reaching past that seam
+# would tie bipred to an unreleased ldpred3, so the two-line definition lives
+# here instead. Releasing the GIL is what lets several chains sweep at once:
+# without it, threading the chain driver is slower than running it serially,
+# because every chain contends for the interpreter lock.
+if HAVE_NUMBA:                                   # pragma: no branch
+    from numba import njit as _njit
+
+    def _jit_nogil(func):
+        return _njit(cache=True, nogil=True)(func)
+else:
+    _jit_nogil = _jit
+
 __all__ = ["BivariateResult", "ldpred3_auto_bivariate",
            "ldpred3_auto_bivariate_blocks"]
 
@@ -596,7 +610,7 @@ def _bivar_one_sweep(corr, bh1, bh2, n1, n2, curr1, curr2, rb1, rb2,
     return c10, c01, c11, sum1sq, sum2sq, sum12, gv11, gv12, gv22
 
 
-_bivar_one_sweep_jit = _jit(_bivar_one_sweep)
+_bivar_one_sweep_jit = _jit_nogil(_bivar_one_sweep)
 
 
 def _bivar_one_sweep_lowrank(
@@ -756,7 +770,7 @@ def _bivar_one_sweep_lowrank(
     return c10, c01, c11, sum1sq, sum2sq, sum12, gv11, gv12, gv22
 
 
-_bivar_one_sweep_lowrank_jit = _jit(_bivar_one_sweep_lowrank)
+_bivar_one_sweep_lowrank_jit = _jit_nogil(_bivar_one_sweep_lowrank)
 
 
 def _bivar_dense_sweep_all(

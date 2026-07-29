@@ -69,6 +69,42 @@ class MultiChainBivariateResult:
     retained_per_chain: int
 
 
+def _accumulate_chains(chain_args, chain_results, m, retained, beta1_sum,
+                       beta2_sum, pi_traces, sigma_traces, genetic_traces,
+                       noise_traces, summaries):
+    """Validate and pool chain results in chain order.
+
+    ``chain_results`` is consumed lazily. In the serial path that means a chain
+    is only fitted when this loop asks for it, so a chain that fails validation
+    aborts the fit without paying for the chains after it.
+    """
+    for (index, (chain_seed, p_start, pi_start)), chain_result in zip(
+        chain_args, chain_results
+    ):
+        trace = _validated_chain_traces(
+            chain_result, m, retained, index, int(chain_seed)
+        )
+        beta1_sum += trace["beta1_est"]
+        beta2_sum += trace["beta2_est"]
+        pi_traces.append(trace["pi_samples"])
+        sigma_traces.append(trace["sigma_samples"])
+        genetic_traces.append(trace["genetic_samples"])
+        noise_traces.append(trace["noise_scale_samples"])
+        summaries.append(
+            BivariateChainSummary(
+                seed=int(chain_seed),
+                p_init=float(p_start),
+                pi_init=pi_start.copy(),
+                h2=tuple(float(x) for x in chain_result.h2),
+                rg=float(chain_result.rg),
+                p=float(chain_result.p),
+                pi=trace["pi"].copy(),
+                sigma=trace["sigma"].copy(),
+                noise_scale=tuple(float(x) for x in chain_result.noise_scale),
+            )
+        )
+
+
 def _deterministic_chain_seeds(seed, n_chains):
     """Spawn reproducible uint32 seeds and deterministically repair collisions."""
     sequence = np.random.SeedSequence(seed)
@@ -227,6 +263,7 @@ def ldpred3_auto_bivariate_chains(
     prior_p_init=0.02,
     sigma_prior_scale=None,
     seed=0,
+    chain_ncores=1,
     **bivariate_kwargs,
 ):
     """Run deterministic bivariate chains sequentially and pool every chain.
@@ -238,7 +275,20 @@ def ldpred3_auto_bivariate_chains(
 
     num_iter must be even and at least four.  Basic split-Rhat is diagnostic
     metadata only: high values never remove a chain or change the posterior.
+
+    chain_ncores > 1 runs that many chains concurrently in threads. The per-block
+    sweep kernels release the GIL, so this scales; without that it would be
+    slower than running the chains one at a time. Chains share the LD blocks
+    read-only and touch no other common mutable state, and each keeps its own
+    deterministic seed, so a threaded run is bit-identical to a serial one.
+
+    chain_ncores > 1 cannot be combined with the per-chain block threading of
+    ncores > 1: nesting them would oversubscribe the machine, and each chain
+    would race the others setting Numba's process-wide thread count. Pick one
+    axis. For n_chains >= the core count, chain_ncores is usually the better one,
+    since it has no per-sweep synchronisation at all.
     """
+    chain_ncores = _integer_at_least("chain_ncores", chain_ncores, 1)
     n_chains = _integer_at_least("n_chains", n_chains, 2)
     if n_chains > int(np.iinfo(np.uint32).max) + 1:
         raise ValueError("n_chains exceeds the number of distinct uint32 seeds")
@@ -249,6 +299,14 @@ def ldpred3_auto_bivariate_chains(
         )
 
     bivariate_kwargs = dict(bivariate_kwargs)
+    if chain_ncores > 1 and int(bivariate_kwargs.get("ncores", 1) or 1) > 1:
+        raise ValueError(
+            "chain_ncores > 1 cannot be combined with ncores > 1: the two "
+            "would oversubscribe the machine and every chain would race the "
+            "others setting Numba's process-wide thread count. Choose either "
+            "chain-level threading (chain_ncores) or within-chain block "
+            "threading (ncores)."
+        )
     for reserved in ("p_init", "pi_init", "seed", "sigma_prior_scale"):
         if reserved in bivariate_kwargs:
             raise ValueError(f"{reserved} is reserved for the chain driver")
@@ -354,11 +412,10 @@ def ldpred3_auto_bivariate_chains(
     noise_traces = []
     summaries = []
 
-    for index, (chain_seed, p_start, pi_start) in enumerate(
-        zip(chain_seeds, p_starts, start_pi)
-    ):
+    def _run_one(index, chain_seed, p_start, pi_start):
+        """Fit one chain. Reads the shared blocks, owns everything it writes."""
         try:
-            chain_result = ldpred3_auto_bivariate_blocks(
+            return ldpred3_auto_bivariate_blocks(
                 blocks,
                 beta_hat1,
                 beta_hat2,
@@ -375,28 +432,35 @@ def ldpred3_auto_bivariate_chains(
             raise RuntimeError(
                 f"chain {index} (seed {int(chain_seed)}) failed: {error}"
             ) from error
-        trace = _validated_chain_traces(
-            chain_result, m, retained, index, int(chain_seed)
-        )
-        beta1_sum += trace["beta1_est"]
-        beta2_sum += trace["beta2_est"]
-        pi_traces.append(trace["pi_samples"])
-        sigma_traces.append(trace["sigma_samples"])
-        genetic_traces.append(trace["genetic_samples"])
-        noise_traces.append(trace["noise_scale_samples"])
-        summaries.append(
-            BivariateChainSummary(
-                seed=int(chain_seed),
-                p_init=float(p_start),
-                pi_init=pi_start.copy(),
-                h2=tuple(float(x) for x in chain_result.h2),
-                rg=float(chain_result.rg),
-                p=float(chain_result.p),
-                pi=trace["pi"].copy(),
-                sigma=trace["sigma"].copy(),
-                noise_scale=tuple(float(x) for x in chain_result.noise_scale),
-            )
-        )
+
+    chain_args = list(enumerate(zip(chain_seeds, p_starts, start_pi)))
+    pool = None
+    if chain_ncores > 1 and n_chains > 1:
+        # Threads, not processes: the sweep kernels release the GIL and the LD
+        # blocks are read shared rather than pickled per worker. Every chain is
+        # submitted up front, and results are consumed in chain order, so
+        # pooling and the split-Rhat diagnostic see exactly the sequence a
+        # serial run produces.
+        from concurrent.futures import ThreadPoolExecutor
+
+        pool = ThreadPoolExecutor(max_workers=min(chain_ncores, n_chains))
+        futures = [pool.submit(_run_one, index, *rest)
+                   for index, rest in chain_args]
+        chain_results = (future.result() for future in futures)
+    else:
+        # Lazy on purpose: a chain is only fitted when the loop below asks for
+        # it, so a chain that fails validation aborts the fit without paying for
+        # the chains after it. Materialising these eagerly would silently drop
+        # that fail-fast behaviour.
+        chain_results = (_run_one(index, *rest) for index, rest in chain_args)
+
+    try:
+        _accumulate_chains(
+            chain_args, chain_results, m, retained, beta1_sum, beta2_sum,
+            pi_traces, sigma_traces, genetic_traces, noise_traces, summaries)
+    finally:
+        if pool is not None:
+            pool.shutdown(wait=True)
 
     pi_by_chain = np.stack(pi_traces)
     sigma_by_chain = np.stack(sigma_traces)
