@@ -6,6 +6,39 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Performance
+- **`ncores > 1` now parallelises mixed LD panels.** The fused block-parallel sweep
+  previously required *every* prepared block to share kind, dtype and dequantisation
+  scale, and silently fell back to a fully serial sweep otherwise — which is exactly
+  what the default `ld_int8=None` policy produces (int8 at or below 1500 variants,
+  float32 above), so a genome-wide fit could ignore `ncores` entirely without
+  reporting it. Blocks are now bucketed by representation and each bucket is swept
+  by its own fused parallel call. Measured 1.87x on 2 cores and 2.13x on 4 for a
+  14-block mixed panel (m=20400, 80 sweeps) that previously ran serial at any
+  `ncores`. Results remain bit-identical to `ncores=1`.
+- **Per-sweep working buffers are allocated once.** The sampler drew
+  `rng.random(m)`, two `rng.standard_normal(m)` and two `np.zeros(m)` afresh every
+  sweep; these are now preallocated and refilled in place (`out=` for the RNG, so
+  the stream is unchanged). Removes five length-m float64 allocations per sweep —
+  ~40 MB/sweep at m=1e6, ~400 MB/sweep at m=1e7. The `noise_inflation` effective-N
+  deflation and residual chi-square likewise reuse buffers, preserving the original
+  multiplication order.
+- **`regional_rg` no longer loops over variants in Python.** First-appearance region
+  order comes from `np.unique(..., return_index=True)` instead of an interpreted
+  pass over all `m` labels; each block's effects are gathered once rather than once
+  per region within the block; and the int8 dequantisation scale is applied in place,
+  removing a second `len(sub)^2` float64 temporary per region.
+- **Cross-trait LDSC jackknife uses contiguous index slices.** Delete-a-block
+  replicates built a fresh length-m boolean mask per block and re-gathered several
+  columns per fit; `np.array_split` already yields contiguous ranges, so the
+  complement is now two slices and each column is gathered once per replicate.
+- **Lower peak memory for `rg_decorrelated=True`.** `_decorrelated_cov` forms the two
+  `R @ samples` products one at a time instead of holding both alongside the retained
+  effect samples — three `(n_saved, m)` arrays live instead of four.
+
+All of the above are bit-exact: the golden bivariate and LDSC tests, and the
+serial/parallel equivalence tests, pass unchanged.
+
 ### Changed
 - **LDpred3 0.2.13 compatibility.** The tested dependency revision is now
   `db3ebd2385b7e3f347712f8761682c0eb49df3e4`, including the corrected

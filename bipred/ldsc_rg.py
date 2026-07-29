@@ -201,25 +201,30 @@ def ldsc_rg(beta_hat1, beta_hat2, ld_scores, n_eff1, n_eff2, *, m_snps=None,
     ell_w = np.maximum(ell, 1.0)
 
     def fit(sel):
-        h1, i1 = _fit_slope(chi1[sel], x1[sel], ell_w[sel], n_iter, None)
-        h2, i2 = _fit_slope(chi2[sel], x2[sel], ell_w[sel], n_iter, None)
-        _require_slope_information(xc[sel], constrain_intercept)
-        pred1 = np.maximum(i1 + h1 * x1[sel], 1.0)
-        pred2 = np.maximum(i2 + h2 * x2[sel], 1.0)
+        # Gather each selected column exactly once. The jackknife calls this nb
+        # times, so repeating ``x1[sel]`` / ``ell_w[sel]`` inline would allocate
+        # and copy several extra length-m arrays per delete-a-block replicate.
+        ell_s = ell_w[sel]
+        x1s, x2s, xcs, cross_s = x1[sel], x2[sel], xc[sel], cross[sel]
+        h1, i1 = _fit_slope(chi1[sel], x1s, ell_s, n_iter, None)
+        h2, i2 = _fit_slope(chi2[sel], x2s, ell_s, n_iter, None)
+        _require_slope_information(xcs, constrain_intercept)
+        pred1 = np.maximum(i1 + h1 * x1s, 1.0)
+        pred2 = np.maximum(i2 + h2 * x2s, 1.0)
         # For approximately bivariate-normal z scores,
         # Var(z1*z2) = E[z1^2] E[z2^2] + E[z1*z2]^2. This is the
         # Gencov.weights formula in the reference LDSC implementation; ell_w
         # supplies its LD-overcounting factor.
         pred_cross = np.full_like(
-            cross[sel], 0.0 if constrain_intercept is None else constrain_intercept)
+            cross_s, 0.0 if constrain_intercept is None else constrain_intercept)
         for _ in range(n_iter + 1):
             variance = pred1 * pred2 + pred_cross * pred_cross
-            w = 1.0 / (ell_w[sel] * np.maximum(variance, 1e-6))
-            gcov, ic = _wls(xc[sel], cross[sel], w, constrain_intercept)
-            pred_cross = ic + gcov * xc[sel]
+            w = 1.0 / (ell_s * np.maximum(variance, 1e-6))
+            gcov, ic = _wls(xcs, cross_s, w, constrain_intercept)
+            pred_cross = ic + gcov * xcs
         return h1, h2, gcov, ic
 
-    full = np.ones(m, dtype=bool)
+    full = np.arange(m)
     try:
         h1, h2, gcov, ic = fit(full)
     except np.linalg.LinAlgError as exc:
@@ -238,10 +243,14 @@ def ldsc_rg(beta_hat1, beta_hat2, ld_scores, n_eff1, n_eff2, *, m_snps=None,
     rg_jk = []
     jackknife_valid = nb >= 2
     if nb >= 2:
-        splits = np.array_split(np.arange(m), nb)
+        # ``array_split`` yields contiguous ranges, so delete-a-block is two
+        # contiguous slices of the index vector rather than a length-m boolean
+        # mask rebuilt (and re-scanned by every gather) for each of nb blocks.
+        splits = np.array_split(full, nb)
         for split in splits:
-            keep = full.copy()
-            keep[split] = False
+            start = int(split[0])
+            stop = int(split[-1]) + 1
+            keep = np.concatenate((full[:start], full[stop:]))
             try:
                 hb1, hb2, gb, _ = fit(keep)
             except np.linalg.LinAlgError:
