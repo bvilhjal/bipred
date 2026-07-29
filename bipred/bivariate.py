@@ -64,6 +64,11 @@ __all__ = ["BivariateResult", "ldpred3_auto_bivariate",
 DAMP = 0.2          # damping factor for the variance-component updates
 _INIT_RHO_MAX = 0.999
 _AUTO_INT8_MAX_BLOCK = 1500
+# Thresholds for the implausible-fit diagnostic. A genome-wide fit has m in the
+# tens of thousands upward and a causal fraction well below a half; below that
+# many variants the heuristic carries no information, so it stays quiet.
+_DIAGNOSTIC_MIN_VARIANTS = 1000
+_DIAGNOSTIC_MAX_CAUSAL_FRACTION = 0.5
 _DENSE = 0
 _LOWRANK = 1
 
@@ -278,6 +283,71 @@ def _prepare_lowrank_block(R, *, allow_legacy=False):
 
     return (U, np.ascontiguousarray(row_scales, dtype=np.float64),
             np.ascontiguousarray(residual, dtype=np.float64))
+
+
+def _bivar_converged(avg1, avg2, prev1, prev2, count, rg, prev_rg, tol):
+    """Adaptive-stopping test on the running bivariate posterior.
+
+    Mirrors ldpred3's univariate ``_rms_converged`` -- relative RMS change of the
+    running posterior mean -- but requires *both* traits to pass, and adds the
+    running ``rg``. rg is included because it is a headline output of a bivariate
+    fit and converges on its own timescale: the two effect vectors can settle
+    while the genetic covariance is still drifting, so a betas-only test would
+    stop too early and quietly degrade the quantity most callers came for.
+
+    ``prev1`` / ``prev2`` hold the previous snapshot and are updated in place.
+    Returns ``(converged, rg)``.
+    """
+    ok = True
+    for avg, prev in ((avg1, prev1), (avg2, prev2)):
+        mean = avg / count
+        delta = mean - prev
+        num = float(delta @ delta)
+        den = float(mean @ mean)
+        prev[:] = mean
+        if num > tol * tol * den:
+            ok = False
+    if prev_rg is not None and abs(rg - prev_rg) > tol:
+        ok = False
+    return ok, rg
+
+
+def _warn_if_implausible_fit(h2, p, h2_bounds, m):
+    """Flag a fit that is simultaneously statistically suspect and slow.
+
+    A poorly conditioned LD reference inflates h2, which inflates the fitted
+    causal fraction, which makes the guarded per-variant LD row update fire for
+    nearly every variant instead of a small minority. That is a real slowdown on
+    top of a wrong answer -- measured at 2.2x between a reference with
+    n_ref/block_size ~ 1.6 and one at ~20 -- so it is worth saying out loud
+    rather than leaving the caller to wonder why a run was both slow and
+    implausible.
+    """
+    # Only meaningful at scale. On a handful of variants a large causal fraction
+    # or an h2 at its bound is ordinary -- there is not enough data for either to
+    # be evidence of anything -- and warning there would be pure noise for the
+    # small synthetic panels used in tests and demos.
+    if m < _DIAGNOSTIC_MIN_VARIANTS:
+        return
+    lo, hi = h2_bounds
+    reasons = []
+    if any(v >= hi * (1.0 - 1e-6) for v in h2):
+        reasons.append("h2 reached its upper bound %g" % hi)
+    if p > _DIAGNOSTIC_MAX_CAUSAL_FRACTION:
+        reasons.append("the fitted causal fraction is %.2f" % p)
+    if reasons:
+        warnings.warn(
+            "Implausible bivariate fit: " + " and ".join(reasons) + ". This "
+            "usually means the LD reference is too small or too weakly "
+            "regularised for its block size, which inflates h2 and the causal "
+            "fraction. Besides being statistically suspect, it makes the "
+            "sampler markedly slower, because the per-variant LD row update "
+            "then fires for almost every variant. Consider a larger LD "
+            "reference panel, smaller blocks, or shrinking the LD blocks "
+            "(ldpred3.shrink_ld_blocks).",
+            RuntimeWarning,
+            stacklevel=3,
+        )
 
 
 def _effect_sample_buffers(enabled, num_iter, sample_every, m):
@@ -780,6 +850,8 @@ class BivariateResult:
     noise_scale: Optional[tuple] = None           # learned (lambda1, lambda2); (1,1) if off
     genetic_samples: Optional[np.ndarray] = None  # (n_kept, 3) raw (gvar1, gcov, gvar2)
     noise_scale_samples: Optional[np.ndarray] = None  # (n_kept, 2); ones if inflation off
+    retained_iterations: Optional[int] = None     # post-burn-in sweeps actually kept
+    stopped_early: bool = False                   # True when adaptive stopping fired
 
     @property
     def mixer(self):
@@ -935,7 +1007,7 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
                                   iw_df=10.0, rg_decorrelated=False,
                                   noise_inflation=False, ni_damp=0.1,
                                   pi_prior=1.0, sample_every=5, ncores=1,
-                                  seed=None):
+                                  tol=0.0, check_every=50, seed=None):
     """Genome-wide bivariate LDpred3-auto over dense or low-rank LD blocks.
 
     ``blocks`` is ``[(R, idx), ...]`` with contiguous ``idx`` arrays partitioning
@@ -1063,6 +1135,8 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     if pi_prior <= 0.0:
         raise ValueError("pi_prior must be positive (an improper <=0 "
                          "concentration can collapse the mixture)")
+    tol = _finite_control("tol", tol, lower=0.0)
+    check_every = _integer_at_least("check_every", check_every, 1)
     sample_every = _integer_at_least("sample_every", sample_every, 1)
     ncores = _integer_at_least("ncores", ncores, 1)
     seed = _validate_seed(seed)
@@ -1211,6 +1285,13 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     avg1 = np.zeros(m); avg2 = np.zeros(m)
     count = 0
     gv_acc = np.zeros(3)
+    # Adaptive stopping keeps a snapshot of the previous posterior mean. Only
+    # allocate it when the feature is on, so the default path's memory is
+    # unchanged.
+    prev1 = prev2 = None
+    prev_rg = None
+    if tol > 0.0:
+        prev1 = np.zeros(m); prev2 = np.zeros(m)
     # Retained post-burn-in hyperparameter iterates. pi is a conditional
     # Dirichlet draw; Sigma is a damped moment update driven by stochastic effect
     # and state draws, not a conditional posterior draw.
@@ -1365,8 +1446,35 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
                 n_saved += 1
             count += 1
 
+            # Adaptive stopping. Only after two snapshots exist, so the first
+            # check compares like with like rather than against zeros. Effect
+            # samples for the decorrelated-rg estimator are thinned, so stopping
+            # early there would shrink the pair count that estimator needs;
+            # leave it to run the full schedule.
+            if (tol > 0.0 and not rg_decorrelated
+                    and count % check_every == 0 and count > check_every):
+                g11c, g12c, g22c = gv_acc / count
+                h1c = min(max(g11c, lo), hi)
+                h2c = min(max(g22c, lo), hi)
+                rg_now = (0.0 if h1c <= 0.0 or h2c <= 0.0 else
+                          float(min(max(g12c / np.sqrt(h1c * h2c), -1.0), 1.0)))
+                done, prev_rg = _bivar_converged(avg1, avg2, prev1, prev2,
+                                                 count, rg_now, prev_rg, tol)
+                if done:
+                    break
+            elif tol > 0.0 and count % check_every == 0:
+                # Prime the snapshot without testing against it.
+                g11c, g12c, g22c = gv_acc / count
+                h1c = min(max(g11c, lo), hi)
+                h2c = min(max(g22c, lo), hi)
+                prev_rg = (0.0 if h1c <= 0.0 or h2c <= 0.0 else
+                           float(min(max(g12c / np.sqrt(h1c * h2c), -1.0), 1.0)))
+                prev1[:] = avg1 / count
+                prev2[:] = avg2 / count
+
     # num_iter >= 1 is validated at the public boundary, so count cannot be 0.
-    if count != num_iter:                         # defensive internal invariant
+    # With tol > 0 the loop may stop early, so count <= num_iter is the invariant.
+    if not 0 < count <= num_iter:                 # defensive internal invariant
         raise RuntimeError("internal error: retained-iteration count mismatch")
     g11, g12, g22 = gv_acc / count
     h2_1 = min(max(g11, lo), hi)
@@ -1390,9 +1498,12 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
         # which would slam rg to +/-1 through the floor.
         rg = float(min(max(g12 / np.sqrt(h2_1 * h2_2), -1.0), 1.0))
     # Summarise both hyperparameters over exactly the same retained iterates.
-    pi_mean = pi_samples.mean(axis=0)
-    s1_mean, s2_mean, s12_mean = sig_samples.mean(axis=0)
-    noise_mean = noise_scale_samples.mean(axis=0)
+    pi_mean = pi_samples[:count].mean(axis=0)
+    s1_mean, s2_mean, s12_mean = sig_samples[:count].mean(axis=0)
+    noise_mean = noise_scale_samples[:count].mean(axis=0)
+    _warn_if_implausible_fit((float(h2_1), float(h2_2)),
+                             float(pi_mean[1] + pi_mean[2] + pi_mean[3]),
+                             (lo, hi), m)
     return BivariateResult(beta1_est=avg1 / count, beta2_est=avg2 / count,
                            h2=(float(h2_1), float(h2_2)), rg=rg,
                            p=float(pi_mean[1] + pi_mean[2] + pi_mean[3]),
@@ -1404,7 +1515,9 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
                            noise_scale=(float(noise_mean[0]),
                                         float(noise_mean[1])),
                            genetic_samples=genetic_samples[:count].copy(),
-                           noise_scale_samples=noise_scale_samples[:count].copy())
+                           noise_scale_samples=noise_scale_samples[:count].copy(),
+                           retained_iterations=int(count),
+                           stopped_early=bool(count < num_iter))
 
 
 def ldpred3_auto_bivariate(corr, beta_hat1, beta_hat2, n_eff1, n_eff2, **kwargs):
