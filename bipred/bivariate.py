@@ -308,11 +308,16 @@ def _decorrelated_cov(fblocks, samp1, samp2):
     RS = _apply_R_rows(fblocks, np.vstack([S1, S2]))
     RS1, RS2 = RS[0], RS[1]
     all11 = float(S1[0] @ RS1); all12 = float(S1[0] @ RS2); all22 = float(S2[0] @ RS2)
+    # Take the two ``R @ samples`` products one at a time: each is (n_saved, m),
+    # so holding both alongside samp1/samp2 puts four such arrays in memory at
+    # once. The einsums are unchanged, so the quadratics are bit-identical.
     Rs1 = _apply_R_rows(fblocks, samp1)
-    Rs2 = _apply_R_rows(fblocks, samp2)
     d11 = float(np.einsum("ij,ij->", samp1, Rs1))
+    del Rs1
+    Rs2 = _apply_R_rows(fblocks, samp2)
     d12 = float(np.einsum("ij,ij->", samp1, Rs2))
     d22 = float(np.einsum("ij,ij->", samp2, Rs2))
+    del Rs2
     npairs = n * (n - 1)
     return (all12 - d12) / npairs, (all11 - d11) / npairs, (all22 - d22) / npairs
 
@@ -1014,13 +1019,18 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     pi_prior : float, default 1.0
         Symmetric Dirichlet concentration for the four-state mixture prior.
     ncores : int, default 1
-        Threads used for a fused block-parallel sweep when all prepared blocks
-        are homogeneous dense or homogeneous ``LowRankLD`` factors and Numba is
-        available. SNP updates remain sequential within each block. Mixed
-        representations or dtypes use the deterministic serial fallback. These
-        are persistent threads, not subprocesses, but each sweep waits for every
-        block before updating global parameters; imbalanced blocks can therefore
-        limit speed-up.
+        Threads used for fused block-parallel sweeps when Numba is available.
+        Prepared blocks are bucketed by representation -- ``(dense/low-rank,
+        dtype, dequantisation scale)`` -- and each bucket is swept by one fused
+        parallel call, so a mixed panel (which the default ``ld_int8=None``
+        policy produces, int8 at or below 1500 variants and float32 above) is
+        still parallelised rather than falling back to a serial sweep. SNP
+        updates remain sequential within each block, and the result is
+        bit-identical to ``ncores=1``. These are persistent threads, not
+        subprocesses, but each sweep waits for every block before updating
+        global parameters; imbalanced blocks can therefore limit speed-up, and
+        a panel split across many small buckets parallelises less well than one
+        homogeneous panel.
     seed : int or None
 
     Returns
@@ -1102,68 +1112,77 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
             fblocks.append((_DENSE, Rq, int(idx[0]), int(idx.shape[0]),
                             scale, None, None, None))
 
-    # One fused native call is worthwhile only for ncores > 1. Homogeneous
-    # readonly views give variable-size heap/mmap payloads one typed.List element
-    # type without copying or changing the caller's writeability flags.
-    parallel_kind = 0                 # 0=serial, 1=dense, 2=low-rank
-    parallel_payloads = None
-    parallel_aux = parallel_residuals = None
-    parallel_proj1s = parallel_proj2s = None
-    parallel_starts = parallel_sizes = None
+    # One fused native call is worthwhile only for ncores > 1. A typed.List needs
+    # one element type, so blocks are bucketed by representation -- (kind, dtype,
+    # dequantisation scale) -- and each bucket gets its own fused parallel call.
+    # The previous all-or-nothing test silently fell back to the serial path for
+    # any mixed panel, which is exactly what the default ``ld_int8=None`` policy
+    # produces (int8 below the 1500-variant cutoff, float32 above it), so a
+    # genome-wide fit with ncores > 1 could run fully serial without saying so.
+    # Bucketing keeps each block's arithmetic and the global reduction order
+    # unchanged, so results stay bit-identical to the serial path.
+    parallel_groups = []
     parallel_counts = parallel_stats = None
-    parallel_scale = 1.0
     if HAVE_NUMBA and ncores > 1 and fblocks:
-        kinds = [kind for kind, *_rest in fblocks]
-        if all(kind == _DENSE for kind in kinds):
-            first_dtype = np.asarray(fblocks[0][1]).dtype
-            first_scale = float(fblocks[0][4])
-            if all(np.asarray(data).dtype == first_dtype
-                   and np.asarray(data).flags.c_contiguous
-                   and float(aux) == first_scale
-                   for _kind, data, _start, _k, aux, _res, _p1, _p2
-                   in fblocks):
-                parallel_kind = 1
-                parallel_scale = first_scale
-        elif all(kind == _LOWRANK for kind in kinds):
-            first_dtype = np.asarray(fblocks[0][1]).dtype
-            if all(np.asarray(data).dtype == first_dtype
-                   and np.asarray(data).flags.c_contiguous
-                   for _kind, data, _start, _k, _aux, _res, _p1, _p2
-                   in fblocks):
-                parallel_kind = 2
+        if all(np.asarray(data).flags.c_contiguous
+               for _kind, data, _start, _k, _aux, _res, _p1, _p2 in fblocks):
+            buckets = {}
+            for pos, (kind, data, _start, _k, aux, _res, _p1, _p2) in enumerate(
+                    fblocks):
+                key = (kind, np.asarray(data).dtype.str,
+                       float(aux) if kind == _DENSE else 0.0)
+                buckets.setdefault(key, []).append(pos)
 
-    if parallel_kind:
-        from numba.typed import List as NumbaList
+            from numba.typed import List as NumbaList
 
-        parallel_payloads = NumbaList()
-        parallel_starts = np.asarray(
-            [start for _kind, _data, start, _k, _aux, _res, _p1, _p2
-             in fblocks], dtype=np.int64)
-        parallel_sizes = np.asarray(
-            [k for _kind, _data, _start, k, _aux, _res, _p1, _p2
-             in fblocks], dtype=np.int64)
-        parallel_counts = np.empty((len(fblocks), 3), dtype=np.int64)
-        parallel_stats = np.empty((len(fblocks), 6), dtype=np.float64)
-        for _kind, data, _start, _k, _aux, _res, _p1, _p2 in fblocks:
-            payload_view = np.asarray(data).view()
-            payload_view.setflags(write=False)
-            parallel_payloads.append(payload_view)
-        if parallel_kind == 2:
-            parallel_aux = NumbaList()
-            parallel_residuals = NumbaList()
-            parallel_proj1s = NumbaList()
-            parallel_proj2s = NumbaList()
-            for (_kind, _data, _start, _k, aux, residual, proj1, proj2
-                 ) in fblocks:
-                aux_view = np.asarray(aux).view()
-                residual_view = np.asarray(residual).view()
-                aux_view.setflags(write=False)
-                residual_view.setflags(write=False)
-                parallel_aux.append(aux_view)
-                parallel_residuals.append(residual_view)
-                parallel_proj1s.append(proj1)
-                parallel_proj2s.append(proj2)
-        _set_threads(ncores)
+            parallel_counts = np.empty((len(fblocks), 3), dtype=np.int64)
+            parallel_stats = np.empty((len(fblocks), 6), dtype=np.float64)
+            for (kind, _dtype, scale), positions in buckets.items():
+                payloads = NumbaList()
+                for pos in positions:
+                    payload_view = np.asarray(fblocks[pos][1]).view()
+                    payload_view.setflags(write=False)
+                    payloads.append(payload_view)
+                group = {
+                    "kind": kind,
+                    "scale": scale,
+                    "payloads": payloads,
+                    "index": np.asarray(positions, dtype=np.int64),
+                    "starts": np.asarray([fblocks[p][2] for p in positions],
+                                         dtype=np.int64),
+                    "sizes": np.asarray([fblocks[p][3] for p in positions],
+                                        dtype=np.int64),
+                    "counts": np.empty((len(positions), 3), dtype=np.int64),
+                    "stats": np.empty((len(positions), 6), dtype=np.float64),
+                }
+                if kind == _LOWRANK:
+                    aux_list = NumbaList()
+                    residual_list = NumbaList()
+                    proj1_list = NumbaList()
+                    proj2_list = NumbaList()
+                    for pos in positions:
+                        _k2, _d, _s, _n, aux, residual, proj1, proj2 = fblocks[pos]
+                        aux_view = np.asarray(aux).view()
+                        residual_view = np.asarray(residual).view()
+                        aux_view.setflags(write=False)
+                        residual_view.setflags(write=False)
+                        aux_list.append(aux_view)
+                        residual_list.append(residual_view)
+                        proj1_list.append(proj1)
+                        proj2_list.append(proj2)
+                    group["aux"] = aux_list
+                    group["residuals"] = residual_list
+                    group["proj1s"] = proj1_list
+                    group["proj2s"] = proj2_list
+                parallel_groups.append(group)
+            _set_threads(ncores)
+        else:
+            warnings.warn(
+                "ncores > 1 requested but some prepared LD blocks are not "
+                "C-contiguous; falling back to the serial sweep",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
     pi, s1, s2, s12 = _initial_hyperparameters(
         m, h2_init, p_init, rg_init, pi_init=pi_init,
@@ -1210,39 +1229,57 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     # Per-trait noise-inflation factors (LDSC-intercept analog); 1 = off.
     lam1 = lam2 = 1.0
 
+    # Per-sweep working buffers are allocated once and refilled in place. The
+    # RNG is drawn with ``out=``, so the stream (count and order of draws) is
+    # exactly what fresh ``rng.random(m)`` / ``rng.standard_normal(m)`` calls
+    # produced -- the results stay bit-identical, without churning five
+    # length-m float64 arrays every sweep.
+    unif = np.empty(m); z1 = np.empty(m); z2 = np.empty(m)
+    rbs1 = np.zeros(m); rbs2 = np.zeros(m)
+    if noise_inflation:
+        n1e = np.empty(m); n2e = np.empty(m)
+    else:                                     # no deflation: read n1/n2 directly
+        n1e, n2e = n1, n2
+
     for it in range(burn_in + num_iter):
         resync = (it % 100 == 0)
-        unif = rng.random(m)
-        z1 = rng.standard_normal(m)
-        z2 = rng.standard_normal(m)
-        rbs1 = np.zeros(m); rbs2 = np.zeros(m)
+        rng.random(out=unif)
+        rng.standard_normal(out=z1)
+        rng.standard_normal(out=z2)
+        rbs1.fill(0.0); rbs2.fill(0.0)
         lpi = np.log(np.maximum(pi, 1e-300))
         c10 = c01 = c11 = 0
         S1 = S2 = S12 = 0.0
         gv11 = gv12 = gv22 = 0.0
         # Effective per-variant N deflated by the learned noise inflation. A scalar
         # lambda preserves the constant-N fast path (n_const unchanged).
-        n1e = n1 / lam1 if noise_inflation else n1
-        n2e = n2 / lam2 if noise_inflation else n2
-        if parallel_kind == 1:
-            _bivar_dense_sweep_all_par_jit(
-                parallel_payloads, parallel_starts, parallel_sizes,
-                bh1, bh2, n1e, n2e, curr1, curr2, rb1, rb2, rbs1, rbs2,
-                unif, z1, z2, float(lpi[0]), float(lpi[1]), float(lpi[2]),
-                float(lpi[3]), float(s1), float(s2), float(s12),
-                float(cross_corr), float(parallel_scale), n_const, resync,
-                parallel_counts, parallel_stats)
-        elif parallel_kind == 2:
-            _bivar_lowrank_sweep_all_par_jit(
-                parallel_payloads, parallel_aux, parallel_residuals,
-                parallel_proj1s, parallel_proj2s, parallel_starts,
-                parallel_sizes, bh1, bh2, n1e, n2e, curr1, curr2, rb1,
-                rb2, rbs1, rbs2, unif, z1, z2, float(lpi[0]),
-                float(lpi[1]), float(lpi[2]), float(lpi[3]), float(s1),
-                float(s2), float(s12), float(cross_corr), n_const, resync,
-                bool(noise_inflation), parallel_counts, parallel_stats)
+        if noise_inflation:
+            np.divide(n1, lam1, out=n1e)
+            np.divide(n2, lam2, out=n2e)
+        for group in parallel_groups:
+            if group["kind"] == _DENSE:
+                _bivar_dense_sweep_all_par_jit(
+                    group["payloads"], group["starts"], group["sizes"],
+                    bh1, bh2, n1e, n2e, curr1, curr2, rb1, rb2, rbs1, rbs2,
+                    unif, z1, z2, float(lpi[0]), float(lpi[1]), float(lpi[2]),
+                    float(lpi[3]), float(s1), float(s2), float(s12),
+                    float(cross_corr), float(group["scale"]), n_const, resync,
+                    group["counts"], group["stats"])
+            else:
+                _bivar_lowrank_sweep_all_par_jit(
+                    group["payloads"], group["aux"], group["residuals"],
+                    group["proj1s"], group["proj2s"], group["starts"],
+                    group["sizes"], bh1, bh2, n1e, n2e, curr1, curr2, rb1,
+                    rb2, rbs1, rbs2, unif, z1, z2, float(lpi[0]),
+                    float(lpi[1]), float(lpi[2]), float(lpi[3]), float(s1),
+                    float(s2), float(s12), float(cross_corr), n_const, resync,
+                    bool(noise_inflation), group["counts"], group["stats"])
+            # Scatter back to genome-block order so the reduction below is
+            # unchanged whether one bucket or several were used.
+            parallel_counts[group["index"]] = group["counts"]
+            parallel_stats[group["index"]] = group["stats"]
 
-        if parallel_kind:
+        if parallel_groups:
             # Match the serial driver's exact block and floating reduction order.
             for b in range(len(fblocks)):
                 c10 += int(parallel_counts[b, 0])
@@ -1281,9 +1318,14 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
             # Update lambda_t from the residual mean-chi2. rb1/rb2 hold R@beta
             # after the sweep, so b_hat - R@beta is the residual; under matched LD
             # it is pure sampling noise (mean n*resid^2 ~ 1) and inflated otherwise.
+            # r1/r2 are fresh temporaries, so the (n * r) * r product is formed
+            # in place -- same association order as ``n1 * r1 * r1``, one fewer
+            # length-m allocation each.
             r1 = bh1 - rb1; r2 = bh2 - rb2
-            lh1 = max(float(np.mean(n1 * r1 * r1)), 1.0)
-            lh2 = max(float(np.mean(n2 * r2 * r2)), 1.0)
+            t1 = n1 * r1; t1 *= r1
+            t2 = n2 * r2; t2 *= r2
+            lh1 = max(float(np.mean(t1)), 1.0)
+            lh2 = max(float(np.mean(t2)), 1.0)
             lam1 = (1.0 - ni_damp) * lam1 + ni_damp * lh1
             lam2 = (1.0 - ni_damp) * lam2 + ni_damp * lh2
 

@@ -711,7 +711,7 @@ def test_ncores_two_matches_one_for_variable_rank_lowrank_blocks(quantize):
     assert all(not block.U.flags.writeable for block, _idx in blocks)
 
 
-def test_ncores_mixed_blocks_use_serial_fallback(monkeypatch):
+def test_ncores_mixed_blocks_bucket_into_parallel_calls(monkeypatch):
     from ldpred3 import lowrank_ld
 
     k = 6
@@ -732,16 +732,33 @@ def test_ncores_mixed_blocks_use_serial_fallback(monkeypatch):
     serial = ldpred3_auto_bivariate_blocks(
         blocks, bh1, bh2, 16_000, 14_000, ncores=1, **kwargs)
 
-    def fail_parallel(*_args, **_kwargs):
-        pytest.fail("mixed block collections must use the serial fallback")
+    # A mixed panel cannot share one typed.List element type, but it is bucketed
+    # by (kind, dtype, scale) and each bucket gets its own fused parallel call --
+    # int8 dense, float32 dense and LR8 low-rank here, so three buckets. Blocks
+    # partition the variants, and the reduction still reads per-block statistics
+    # in genome order, so the result stays bit-identical to the serial sweep.
+    calls = {"dense": 0, "lowrank": 0}
+    dense_jit = bivariate._bivar_dense_sweep_all_par_jit
+    lowrank_jit = bivariate._bivar_lowrank_sweep_all_par_jit
+
+    def counting_dense(*args, **kw):
+        calls["dense"] += 1
+        return dense_jit(*args, **kw)
+
+    def counting_lowrank(*args, **kw):
+        calls["lowrank"] += 1
+        return lowrank_jit(*args, **kw)
 
     monkeypatch.setattr(bivariate, "_bivar_dense_sweep_all_par_jit",
-                        fail_parallel)
+                        counting_dense)
     monkeypatch.setattr(bivariate, "_bivar_lowrank_sweep_all_par_jit",
-                        fail_parallel)
+                        counting_lowrank)
     requested = ldpred3_auto_bivariate_blocks(
         blocks, bh1, bh2, 16_000, 14_000, ncores=2, **kwargs)
 
+    sweeps = kwargs["burn_in"] + kwargs["num_iter"]
+    assert calls["dense"] == 2 * sweeps        # int8 and float32 buckets
+    assert calls["lowrank"] == sweeps          # the LR8 bucket
     _assert_bivariate_result_array_equal(requested, serial)
 
 

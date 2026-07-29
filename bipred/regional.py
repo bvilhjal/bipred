@@ -83,9 +83,11 @@ class RegionalRgResult:
 def _dense_quadratics(block, scale, sub, b1, b2):
     """Three quadratic forms on one dense sub-block, dequantising if int8."""
     sl = block[np.ix_(sub, sub)]
+    # ``np.ix_`` always copies, so the dequantisation scale can be applied in
+    # place instead of allocating a second len(sub)^2 float64 temporary.
     R = np.asarray(sl, dtype=np.float64)
     if scale != 1.0:
-        R = R * scale
+        R *= scale
     x, y = b1[sub], b2[sub]
     Rx, Ry = R @ x, R @ y
     return float(x @ Rx), float(x @ Ry), float(y @ Ry)
@@ -162,12 +164,11 @@ def regional_rg(beta1, beta2, blocks, regions, *, min_variants=1,
             f"regions must have one label per variant; got {labels.size} for "
             f"{m} variants")
 
-    uniq, inverse = np.unique(labels, return_inverse=True)
-    # report in first-appearance order rather than sorted label order
-    first = np.full(uniq.size, m, dtype=np.int64)
-    for pos, code in enumerate(inverse):
-        if first[code] == m:
-            first[code] = pos
+    # ``return_index`` already gives each unique label's first occurrence, so the
+    # first-appearance order is one stable argsort -- no per-variant Python loop.
+    uniq, first, inverse = np.unique(labels, return_index=True,
+                                     return_inverse=True)
+    inverse = inverse.ravel()
     order = np.argsort(first, kind="stable")
     remap = np.empty(uniq.size, dtype=np.int64)
     remap[order] = np.arange(uniq.size)
@@ -194,14 +195,16 @@ def regional_rg(beta1, beta2, blocks, regions, *, min_variants=1,
             W = residual = None
 
         blk_codes = code[idx]
+        # Gather the block's effects once, not once per region within the block.
+        b1_blk, b2_blk = b1[idx], b2[idx]
         for c in np.unique(blk_codes):
             sub = np.flatnonzero(blk_codes == c)
             if dense is not None:
                 q11, q12, q22 = _dense_quadratics(dense[0], dense[1], sub,
-                                                  b1[idx], b2[idx])
+                                                  b1_blk, b2_blk)
             else:
                 q11, q12, q22 = _lowrank_quadratics(W, residual, sub,
-                                                    b1[idx], b2[idx])
+                                                    b1_blk, b2_blk)
             gvar1[c] += q11
             gcov[c] += q12
             gvar2[c] += q22
