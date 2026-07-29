@@ -757,8 +757,13 @@ def test_ncores_mixed_blocks_bucket_into_parallel_calls(monkeypatch):
         blocks, bh1, bh2, 16_000, 14_000, ncores=2, **kwargs)
 
     sweeps = kwargs["burn_in"] + kwargs["num_iter"]
-    assert calls["dense"] == 2 * sweeps        # int8 and float32 buckets
-    assert calls["lowrank"] == sweeps          # the LR8 bucket
+    if bivariate.HAVE_NUMBA:
+        assert calls["dense"] == 2 * sweeps     # int8 and float32 buckets
+        assert calls["lowrank"] == sweeps       # the LR8 bucket
+    else:
+        # Without Numba there is no fused kernel to call; every block is swept
+        # by the serial driver, which is what ncores > 1 falls back to.
+        assert calls == {"dense": 0, "lowrank": 0}
     _assert_bivariate_result_array_equal(requested, serial)
 
 
