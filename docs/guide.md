@@ -88,7 +88,9 @@ All finite, equal-length chains contribute equally. Any non-finite or
 wrong-length chain aborts instead of being discarded. `fit.basic_split_rhat`
 contains classical basic split-Rhat values plus explicit degeneracy flags; it
 does not filter chains or claim convergence. The driver does not support
-`rg_decorrelated=True`. Chains remain sequential; `ncores` controls block
+`rg_decorrelated=True`. Chains are sequential by default; `chain_ncores>1`
+fits them concurrently (2.5x on four cores with eight chains, bit-identical),
+and `ncores` controls block
 parallelism within each chain only, including its per-sweep synchronization
 barrier.
 
@@ -233,6 +235,7 @@ analyses, but it can bias `r_g` upward when samples overlap strongly.
 |---|---:|---|
 | `ld_int8` | `None` | dense only: auto D8 through 1500 variants and float32 above; `True`/`False` force either dense policy |
 | `burn_in`, `num_iter` | `200`, `200` | Gibbs burn-in and sampling sweeps |
+| `tol`, `check_every` | `0.0`, `50` | adaptive stopping. `tol=0` (default) always runs the full `num_iter`. With `tol>0` the chain stops once the relative RMS change of *both* posterior means and the change in `r_g` fall below `tol`, checked every `check_every` retained sweeps. Ignored when `rg_decorrelated=True`, whose thinned effect samples need the full schedule |
 | `h2_init`, `p_init`, `rg_init` | `0.1`, `0.02`, `0.0` | exact genetic-moment starts; `h2_init` may be a pair and `p_init` is union-causal |
 | `pi_init` | `None` | explicit `(pi00, pi10, pi01, pi11)` start for overlap-sensitive work |
 | `sigma_prior_scale` | `None` | fixed per-trait slab-variance shrinkage target; decouples starts from the prior |
@@ -244,6 +247,7 @@ analyses, but it can bias `r_g` upward when samples overlap strongly.
 | `iw_df` | `10.0` | shrinkage strength for the moment update of `sigma` |
 | `sample_every` | `5` | thinning for retained effect samples (only with `rg_decorrelated=True`) |
 | `ncores` | `1` | deterministic within-chain block threads for homogeneous dense or low-rank inputs; mixed inputs fall back serially |
+| `chain_ncores` | `1` | *(multi-chain only)* chains fitted concurrently in threads. The sweep kernels release the GIL, so this scales; results stay bit-identical to a serial run because chains share the LD read-only and each keeps its own deterministic seed. Cannot be combined with `ncores>1` — nesting them oversubscribes the machine and races on Numba's process-wide thread count |
 | `seed` | `None` | RNG seed |
 
 ## Pitfalls
@@ -256,5 +260,20 @@ analyses, but it can bias `r_g` upward when samples overlap strongly.
   retained variance deliberately. `ld_int8` controls dense storage only.
 - Do not over-interpret absolute overlap counts at low power.
 - Increase `burn_in` and `num_iter` if `h2` or `r_g` is unstable across seeds.
+- If you would rather over-provision `num_iter` than tune it, set `tol=1e-3`
+  and let the chain stop when it has converged. `result.retained_iterations`
+  and `result.stopped_early` report what actually ran. On a well-conditioned
+  panel with `num_iter=600` this cut a fit from 1.59 s to 0.17 s (9.2x) while
+  matching `r_g` to four decimals and the posterior means to a correlation of
+  0.999999.
+- A `RuntimeWarning` about an *implausible fit* means the fitted causal
+  fraction exceeded 0.5, or `h2` hit its bound, on a panel of at least 1000
+  variants. That normally indicates the LD reference is too small or too
+  weakly regularised for its block size. It is worth acting on for two
+  reasons: the estimates are suspect, **and** the sampler is much slower,
+  because the per-variant LD row update then fires for nearly every variant
+  instead of a small minority. Measured 2.2x between a reference at
+  `n_ref/block_size` of 1.6 and one at 20. Use a larger reference, smaller
+  blocks, or `ldpred3.shrink_ld_blocks`.
 - At low power, vary `pi_init` as a pre-specified sensitivity analysis: scalar
   `p_init` cannot determine marginal polygenicity and causal overlap separately.
