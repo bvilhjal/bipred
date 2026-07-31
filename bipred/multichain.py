@@ -20,6 +20,7 @@ from .bivariate import (
     _integer_at_least,
     _ldpred3_auto_bivariate_prepared,
     _prepare_bivariate_inputs,
+    _rg_from_quadratics,
     _validate_seed,
     _validate_sigma_prior_scale,
 )
@@ -476,7 +477,7 @@ def ldpred3_auto_bivariate_chains(
     noise_mean = pooled_noise.mean(axis=0)
     h21 = float(np.clip(genetic_mean[0], *h2_bounds))
     h22 = float(np.clip(genetic_mean[2], *h2_bounds))
-    rg = float(np.clip(genetic_mean[1] / np.sqrt(h21 * h22), -1.0, 1.0))
+    rg = _rg_from_quadratics(genetic_mean[1], h21, h22)
 
     posterior = BivariateResult(
         beta1_est=beta1_sum / n_chains,

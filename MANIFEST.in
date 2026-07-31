@@ -2,13 +2,4 @@ include CHANGELOG.md
 include LICENSE
 recursive-include docs *.md
 recursive-include examples *.py
-recursive-include benchmarks *.md *.png *.py *.yaml
-include benchmarks/mixer_overlap.csv
-include benchmarks/overlap_estimation.csv
-include benchmarks/rg_architectures.csv
-include benchmarks/rg_env_overlap.csv
-include benchmarks/rg_methods.csv
-include benchmarks/rg_methods_timing.csv
-include benchmarks/rg_polygenicity.csv
-include benchmarks/rg_scaling.csv
 global-exclude __pycache__ *.py[cod]

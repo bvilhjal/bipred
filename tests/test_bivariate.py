@@ -331,9 +331,6 @@ def test_mixer_iterate_intervals_and_point_summaries():
     lo, hi = post["frac_shared"]["interval"]
     assert 0.0 <= lo <= hi <= 1.0
 
-    with pytest.deprecated_call(match="mixer_posterior"):
-        legacy = res.mixer_posterior(level=0.95)
-    assert legacy["n_shared"]["ci"] == post["n_shared"]["interval"]
     with pytest.raises(ValueError, match="level"):
         res.mixer_iterate_summary(level=1.0)
 

@@ -25,6 +25,8 @@ import numpy as np
 
 # Shared univariate-LDSC internals (also used by ldpred3's own ``ldsc_h2``).
 from ldpred3.ldsc import _wls, _weights
+# Shared scalar/vector validators from the ldpred3 compatibility seam.
+from ldpred3.ldpred3 import _as_n_vector, _finite_control, _integer_at_least
 
 __all__ = ["ldsc_rg", "LDSCRgResult", "estimate_sample_overlap"]
 
@@ -69,32 +71,24 @@ def _as_finite_vector(value, name):
 
 
 def _as_sample_size(value, name, m):
-    """Return a positive finite scalar sample size expanded to length m, or a vector."""
-    if isinstance(value, (bool, np.bool_, str, bytes)):
-        raise ValueError(f"{name} must be a positive finite scalar or length-m vector")
-    try:
-        raw = np.asarray(value, dtype=object)
-    except (TypeError, ValueError):
-        raise ValueError(f"{name} must be a positive finite scalar or length-m vector") \
-            from None
+    """Strict ``n_eff``: reject strings/booleans outright, then the seam's check.
+
+    ldpred3's ``_as_n_vector`` coerces numeric strings and booleans; bipred
+    rejects them at the boundary, so the strict pre-check stays here and the
+    scalar-or-length-m mechanics are delegated to the seam.
+    """
+    raw = np.asarray(value, dtype=object)
     if any(isinstance(x, (bool, np.bool_, str, bytes)) for x in raw.flat):
         raise ValueError(f"{name} must be a positive finite scalar or length-m vector")
-    try:
-        value = raw.astype(float)
-    except (TypeError, ValueError):
-        raise ValueError(f"{name} must be a positive finite scalar or length-m vector") \
-            from None
-    if value.ndim == 0:
-        value = np.full(m, float(value))
-    elif value.shape != (m,):
-        raise ValueError(f"{name} must be a scalar or length-m vector")
-    if not np.all(np.isfinite(value)) or np.any(value <= 0.0):
-        raise ValueError(f"{name} must contain only positive finite values")
-    return value
+    return _as_n_vector(value, m)
 
 
 def _as_finite_scalar(value, name, *, positive=False):
-    """Validate and return a finite scalar."""
+    """Validate and return a finite scalar.
+
+    Used where strict positivity is required; bounds-free checks use
+    ldpred3's ``_finite_control`` directly.
+    """
     if isinstance(value, (bool, np.bool_)):
         raise ValueError(f"{name} must be a finite scalar")
     try:
@@ -109,14 +103,6 @@ def _as_finite_scalar(value, name, *, positive=False):
     return value
 
 
-def _as_int(value, name, minimum):
-    """Validate an integer control parameter without accepting booleans."""
-    if (isinstance(value, (bool, np.bool_))
-            or not isinstance(value, (int, np.integer)) or int(value) < minimum):
-        raise ValueError(f"{name} must be an integer >= {minimum}")
-    return int(value)
-
-
 @dataclass
 class LDSCRgResult:
     """Output of :func:`ldsc_rg`."""
@@ -126,10 +112,6 @@ class LDSCRgResult:
     gcov: float                 # genetic covariance (cross-trait slope)
     gcov_intercept: float       # sample overlap and/or correlated confounding
     h2: tuple                   # (h2_1, h2_2) marginal heritabilities
-
-    @property
-    def rg_ci(self):
-        return (self.rg - 1.96 * self.rg_se, self.rg + 1.96 * self.rg_se)
 
     def __repr__(self):
         return (f"LDSCRgResult(rg={self.rg:+.3f} ± {self.rg_se:.3f}, "
@@ -187,11 +169,11 @@ def ldsc_rg(beta_hat1, beta_hat2, ld_scores, n_eff1, n_eff2, *, m_snps=None,
     N2 = _as_sample_size(n_eff2, "n_eff2", m)
     M = float(m) if m_snps is None else _as_finite_scalar(
         m_snps, "m_snps", positive=True)
-    n_blocks = _as_int(n_blocks, "n_blocks", 1)
-    n_iter = _as_int(n_iter, "n_iter", 0)
+    n_blocks = _integer_at_least("n_blocks", n_blocks, 1)
+    n_iter = _integer_at_least("n_iter", n_iter, 0)
     if constrain_intercept is not None:
-        constrain_intercept = _as_finite_scalar(
-            constrain_intercept, "constrain_intercept")
+        constrain_intercept = _finite_control(
+            "constrain_intercept", constrain_intercept)
 
     chi1 = N1 * b1 * b1
     chi2 = N2 * b2 * b2
@@ -323,15 +305,15 @@ def estimate_sample_overlap(rg_result, n_eff1, n_eff2, pheno_corr=1.0):
     """
     n1 = _as_finite_scalar(n_eff1, "n_eff1", positive=True)
     n2 = _as_finite_scalar(n_eff2, "n_eff2", positive=True)
-    rho = _as_finite_scalar(pheno_corr, "pheno_corr")
+    rho = _finite_control("pheno_corr", pheno_corr)
     if rho < -1.0 or rho > 1.0:
         raise ValueError("pheno_corr must lie in [-1, 1]")
     if rho == 0.0:
         raise ValueError("pheno_corr must be non-zero to solve for N_shared")
     if not isinstance(rg_result, LDSCRgResult):
         raise ValueError("rg_result must be an LDSCRgResult returned by ldsc_rg")
-    overlap_corr = _as_finite_scalar(
-        rg_result.gcov_intercept, "rg_result.gcov_intercept")
+    overlap_corr = _finite_control(
+        "rg_result.gcov_intercept", rg_result.gcov_intercept)
     effective_overlap = overlap_corr * float(np.sqrt(n1) * np.sqrt(n2))
     n_shared_raw = effective_overlap / rho
     n_shared = max(0.0, n_shared_raw)

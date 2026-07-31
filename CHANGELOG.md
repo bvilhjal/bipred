@@ -42,6 +42,15 @@ User-visible changes to **bipred** are recorded here. The project is currently
 - The tested ldpred3 dependency revision is
   `db3ebd2385b7e3f347712f8761682c0eb49df3e4` (`ldpred3>=0.2.13,<0.3`).
 
+### Removed
+
+- `BivariateResult.mixer_posterior` (deprecated alias of
+  `mixer_iterate_summary`) and the unreferenced `LDSCRgResult.rg_ci` property.
+- `ldsc_rg`'s local scalar/sample-size validators in favour of the ldpred3
+  compatibility seam (`_as_n_vector`, `_finite_control`, `_integer_at_least`).
+- Benchmark scripts and result CSVs are no longer shipped in the sdist; they
+  remain in the repository with their README.
+
 ### Fixed
 
 - Multi-chain fitting rejects adaptive stopping instead of failing later on

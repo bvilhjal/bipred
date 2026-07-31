@@ -47,12 +47,14 @@ from ldpred3.ldpred3 import (
     _validate_blocks,
     _validate_boolean_controls,
 )
+# int8 LD quantisation step, locked to ldpred3's encoding (as in .bivariate).
+from ldpred3._kernels import _Q8
 
 from .bivariate import _prepare_lowrank_block
 
 __all__ = ["RegionalRgResult", "regional_rg"]
 
-_Q8_SCALE = 1.0 / 127.0
+_Q8_SCALE = 1.0 / _Q8
 
 
 @dataclass

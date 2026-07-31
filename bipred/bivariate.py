@@ -1104,6 +1104,19 @@ def _bivar_lowrank_sweep_all(
 _bivar_lowrank_sweep_all_par_jit = _jit_parallel(_bivar_lowrank_sweep_all)
 
 
+def _rg_from_quadratics(g12, g1, g2):
+    """Clipped genetic correlation from LD-aware quadratic forms.
+
+    Returns 0.0 when either variance is non-positive (possible on non-PD
+    int8-quantised blocks) rather than slamming ``rg`` to +/-1 through the
+    floor. The single source for the sampled-quadratic ``rg`` ratio used by
+    the driver and the multi-chain pooling.
+    """
+    if g1 <= 0.0 or g2 <= 0.0:
+        return 0.0
+    return float(min(max(g12 / np.sqrt(g1 * g2), -1.0), 1.0))
+
+
 @dataclass
 class BivariateResult:
     """Output of :func:`ldpred3_auto_bivariate`.
@@ -1240,21 +1253,6 @@ class BivariateResult:
         It also does not represent LD-reference-mismatch uncertainty.
         """
         return self._mixer_iterate_summary(level, "interval")
-
-    def mixer_posterior(self, level=0.95):
-        """Deprecated alias for :meth:`mixer_iterate_summary`.
-
-        The historical ``ci`` fields are retained for compatibility, but they
-        contain empirical central iterate intervals, not credible intervals.
-        """
-        warnings.warn(
-            "mixer_posterior() is deprecated because Sigma is not sampled from "
-            "a conditional posterior; use mixer_iterate_summary() for empirical "
-            "hyperparameter-iterate intervals",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self._mixer_iterate_summary(level, "ci")
 
     def mixer_calibrated(self, infer1, infer2):
         """:attr:`mixer` with counts anchored on two univariate fits.
@@ -1707,8 +1705,7 @@ def _ldpred3_auto_bivariate_prepared(prepared, options, start):
                 g11c, g12c, g22c = gv_acc / count
                 h1c = min(max(g11c, lo), hi)
                 h2c = min(max(g22c, lo), hi)
-                rg_now = (0.0 if h1c <= 0.0 or h2c <= 0.0 else
-                          float(min(max(g12c / np.sqrt(h1c * h2c), -1.0), 1.0)))
+                rg_now = _rg_from_quadratics(g12c, h1c, h2c)
                 done, prev_rg = _bivar_converged(avg1, avg2, prev1, prev2,
                                                  count, rg_now, prev_rg, tol)
                 if done:
@@ -1718,8 +1715,7 @@ def _ldpred3_auto_bivariate_prepared(prepared, options, start):
                 g11c, g12c, g22c = gv_acc / count
                 h1c = min(max(g11c, lo), hi)
                 h2c = min(max(g22c, lo), hi)
-                prev_rg = (0.0 if h1c <= 0.0 or h2c <= 0.0 else
-                           float(min(max(g12c / np.sqrt(h1c * h2c), -1.0), 1.0)))
+                prev_rg = _rg_from_quadratics(g12c, h1c, h2c)
                 prev1[:] = avg1 / count
                 prev2[:] = avg2 / count
 
@@ -1742,12 +1738,12 @@ def _ldpred3_auto_bivariate_prepared(prepared, options, start):
         if cov is not None:
             num, v1, v2 = cov
             if v1 > 0.0 and v2 > 0.0:
-                rg = float(min(max(num / np.sqrt(v1 * v2), -1.0), 1.0))
+                rg = _rg_from_quadratics(num, v1, v2)
     if rg is None:
         # Use the reported (clamped) h2 scale for the denominator: raw sampled
         # quadratics can go non-positive on non-PD (int8-quantised) blocks,
         # which would slam rg to +/-1 through the floor.
-        rg = float(min(max(g12 / np.sqrt(h2_1 * h2_2), -1.0), 1.0))
+        rg = _rg_from_quadratics(g12, h2_1, h2_2)
     # Summarise both hyperparameters over exactly the same retained iterates.
     pi_mean = pi_samples[:count].mean(axis=0)
     s1_mean, s2_mean, s12_mean = sig_samples[:count].mean(axis=0)
