@@ -49,10 +49,10 @@ guide. Summary statistics must already be ancestry-matched and harmonized.
 - [`docs/algorithm.md`](docs/algorithm.md): model and estimator theory.
 - [`docs/rg.md`](docs/rg.md): genome-wide and regional genetic correlation,
   sample overlap, and polygenic overlap.
-- [`benchmarks/README.md`](benchmarks/README.md): benchmark scripts and
-  reproducibility.
-- [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md): dated historical benchmark
-  snapshot; rerun before making current performance claims.
+- [Benchmark guide](https://github.com/bvilhjal/bipred/blob/main/benchmarks/README.md):
+  scripts and reproducibility.
+- [Benchmark results](https://github.com/bvilhjal/bipred/blob/main/benchmarks/RESULTS.md):
+  dated historical snapshot; rerun before making current performance claims.
 
 ## License
 

@@ -159,10 +159,6 @@ jobs:
               "docs/guide.md",
               "docs/rg.md",
               "examples/minimal.py",
-              "benchmarks/README.md",
-              "benchmarks/RESULTS.md",
-              "benchmarks/_benchmark_utils.py",
-              "benchmarks/rg_env_overlap.csv",
           }
           archive, = glob.glob("dist/*.tar.gz")
           with tarfile.open(archive) as tf:
@@ -170,16 +166,9 @@ jobs:
           missing = required - names
           if missing:
               raise SystemExit(f"sdist is missing: {sorted(missing)}")
-          forbidden_prefixes = (
-              "benchmarks/figdata_",
-              "benchmarks/_calib_",
-              "benchmarks/_smoke_",
-          )
-          unexpected = sorted(
-              name for name in names if name.startswith(forbidden_prefixes)
-          )
+          unexpected = sorted(name for name in names if name.startswith("benchmarks/"))
           if unexpected:
-              raise SystemExit(f"sdist contains local benchmark scratch files: {unexpected}")
+              raise SystemExit(f"sdist contains repository-only benchmark files: {unexpected}")
           PY
 
       - name: Build a wheel from the sdist

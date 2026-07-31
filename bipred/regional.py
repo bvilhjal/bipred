@@ -14,6 +14,11 @@ and `LowRankLD` factors, for which
 
     (a' R b)_sub = (W_sub' a)·(W_sub' b) + sum_i residual_i a_i b_i .
 
+The calculation uses the LD representation supplied to :func:`regional_rg`; it
+does not recover the fit's internally prepared blocks or replay its ``ld_int8``
+policy. In particular, passing an original float block here evaluates that float
+block even if the fit auto-quantised its private copy.
+
 Posterior-mean effects are used deliberately rather than the sampled-quadratic
 ratio that the genome-wide `rg` uses. The sampled ratio inflates its denominator
 with posterior noise, which matters more per region than genome-wide because a
@@ -64,9 +69,9 @@ class RegionalRgResult:
     ``region`` holds the region labels in first-appearance order; every other
     array is aligned to it. ``gvar1``/``gvar2`` are the regions' LD-aware genetic
     variances and ``gcov`` their genetic covariance, so a caller may re-derive
-    ``rg`` or aggregate regions without refitting. ``rg`` is NaN where a region's
-    variance is non-positive (possible with int8-quantised LD, which is not
-    guaranteed positive definite) or where the region has no variants.
+    ``rg`` or aggregate regions without refitting. ``rg`` is NaN where either
+    evaluated variance is non-positive or the region has fewer than
+    ``min_variants`` variants.
     """
 
     region: np.ndarray
@@ -115,8 +120,13 @@ def regional_rg(beta1, beta2, blocks, regions, *, min_variants=1,
         length ``m``. These are :attr:`BivariateResult.beta1_est` /
         ``beta2_est``.
     blocks : sequence
-        The same LD blocks passed to the fit: ``(R, idx)`` pairs where ``R`` is a
-        dense float/int8 matrix or a :class:`LowRankLD` factor.
+        ``(R, idx)`` pairs where ``R`` is a dense float/int8 matrix or a
+        :class:`LowRankLD` factor, normally the same logical blocks passed to the
+        fit. This function evaluates the representation supplied here and does
+        not apply the fit's ``ld_int8`` policy. Thus an original float block may
+        differ from the fit's auto- or forcibly quantised private copy. To keep
+        the representations aligned, pass pre-quantised blocks to both calls, or
+        fit with ``ld_int8=False`` and pass the same float32 blocks here.
     regions : array_like
         One-dimensional length-``m`` region label per variant. Labels may be
         integers or strings; variants sharing a label form one region, and
@@ -128,9 +138,13 @@ def regional_rg(beta1, beta2, blocks, regions, *, min_variants=1,
     allow_legacy_lowrank : bool, default False
         Forwarded to the low-rank adapter, matching the fit's own flag.
     clip : bool, default True
-        Clip ``rg`` into ``[-1, 1]``. Values outside it are possible only through
-        non-positive-definite LD (int8 quantisation); clipping hides the symptom,
-        so set ``False`` when diagnosing.
+        Clip each finite raw ratio into ``[-1, 1]``. A raw ``|rg| > 1`` violates
+        Cauchy--Schwarz for the evaluated quadratic form and usually indicates a
+        non-positive-semidefinite regional LD submatrix, for example after int8
+        quantisation, malformed input, or numerical error. Clipping does not
+        repair the underlying ``gvar1``, ``gvar2``, or ``gcov``; set ``False`` and
+        inspect them when diagnosing. Non-positive variances remain NaN either
+        way.
 
     Returns
     -------
@@ -222,9 +236,9 @@ def regional_rg(beta1, beta2, blocks, regions, *, min_variants=1,
             gcov[c] += q12
             gvar2[c] += q22
 
-    with np.errstate(invalid="ignore", divide="ignore"):
-        denom = np.sqrt(gvar1 * gvar2)
-        rg = np.where(denom > 0.0, gcov / denom, np.nan)
+    valid = (gvar1 > 0.0) & (gvar2 > 0.0)
+    rg = np.full(n_reg, np.nan)
+    rg[valid] = gcov[valid] / np.sqrt(gvar1[valid] * gvar2[valid])
     rg[counts < min_variants] = np.nan
     if bool(clip):
         rg = np.clip(rg, -1.0, 1.0)

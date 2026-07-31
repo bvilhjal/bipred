@@ -1,7 +1,7 @@
 # Changelog
 
 User-visible changes to **bipred** are recorded here. The project is currently
-`0.1.0.dev0`; all entries remain unreleased.
+`0.1.0.dev1`; all entries remain unreleased.
 
 ## [Unreleased]
 
@@ -53,6 +53,15 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 ### Fixed
 
+- The sdist check now matches the repository-only benchmark policy, and shipped
+  documentation links to benchmark material through repository URLs.
+- `rg_decorrelated=True` no longer silently substitutes the default estimator
+  when its cross-sweep estimate is unavailable.
+- Sample-overlap documentation now distinguishes scalar cohort counts from
+  effective/sample-varying `N` and states the `noise_inflation` interaction.
+- Cross-trait LDSC documents the genome-order requirement for block-jackknife
+  standard errors, and `regional_rg` states exactly which supplied LD it
+  evaluates and reports undefined ratios for non-positive regional variances.
 - Multi-chain fitting rejects adaptive stopping instead of failing later on
   unequal trace lengths; `rg_decorrelated=True` remains unsupported there.
 - Input validation now rejects invalid booleans, non-finite controls, malformed

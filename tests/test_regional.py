@@ -149,6 +149,18 @@ def test_degenerate_region_gives_nan_not_an_exception():
     assert np.isfinite(res.rg[0]) and np.isnan(res.rg[1])
 
 
+def test_nonpositive_regional_variances_give_nan():
+    # An indefinite supplied LD matrix can make both quadratic variances
+    # negative. Their positive product must not manufacture a finite rg.
+    R = np.array([[1.0, 0.9, 0.9],
+                  [0.9, 1.0, -0.9],
+                  [0.9, -0.9, 1.0]], dtype=np.float32)
+    beta = np.array([-1.0, 1.0, 1.0])
+    res = regional_rg(beta, beta, [(R, np.arange(3))], [0, 0, 0])
+    assert res.gvar1[0] < 0.0 and res.gvar2[0] < 0.0
+    assert np.isnan(res.rg[0])
+
+
 @pytest.mark.parametrize("kwargs,match", [
     (dict(regions=[0, 0, 1]), "one label per variant"),
     (dict(regions=np.array([[0, 0], [1, 1]])), "one-dimensional"),
@@ -183,10 +195,12 @@ def test_rejects_mismatched_or_nonfinite_effects():
 def test_clip_flag_exposes_out_of_range_values():
     # With clip=False a non-PD sub-block may push |rg| past 1; the flag exists so
     # that symptom is visible rather than silently hidden.
-    R = np.array([[1.0, 0.99], [0.99, 1.0]], dtype=np.float32)
-    b1 = np.array([1.0, -1.0])
-    b2 = np.array([1.0, -1.0])
-    clipped = regional_rg(b1, b2, [(R, np.arange(2))], [0, 0], clip=True)
-    raw = regional_rg(b1, b2, [(R, np.arange(2))], [0, 0], clip=False)
+    R = np.array([[1.0, 0.9, 0.9],
+                  [0.9, 1.0, -0.9],
+                  [0.9, -0.9, 1.0]], dtype=np.float32)
+    b1 = np.array([-2.0, 0.0, 2.0])
+    b2 = np.array([-2.0, 2.0, 0.0])
+    clipped = regional_rg(b1, b2, [(R, np.arange(3))], [0, 0, 0], clip=True)
+    raw = regional_rg(b1, b2, [(R, np.arange(3))], [0, 0, 0], clip=False)
     assert -1.0 <= clipped.rg[0] <= 1.0
-    assert raw.rg[0] == pytest.approx(1.0, abs=1e-6)
+    assert abs(raw.rg[0]) > 1.0

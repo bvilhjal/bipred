@@ -24,9 +24,10 @@ E_j = [[1 / N_1j,                         cross_corr / sqrt(N_1j N_2j)],
        [cross_corr / sqrt(N_1j N_2j),     1 / N_2j]]
 ```
 
-`cross_corr=0` assumes independent GWAS samples. The SNPwise conditional update
-uses this two-trait covariance but otherwise makes LDpred's diagonal
-sampling-noise approximation across variants.
+`cross_corr=0` assumes uncorrelated cross-trait sampling errors. Non-overlapping
+GWAS samples are sufficient, but not necessary, for that condition. The SNPwise
+conditional update uses this two-trait covariance but otherwise makes LDpred's
+diagonal sampling-noise approximation across variants.
 
 ## Four-state effect prior
 
@@ -123,9 +124,10 @@ r_g = beta1' R beta2 /
 The default estimator averages sampled LD-aware quadratic forms. Its denominator
 shares some posterior-noise inflation with the numerator, which is useful for
 ordinary pairs but can attenuate a weak trait under strongly asymmetric power.
-`rg_decorrelated=True` instead combines effects sampled at different sweeps to
-remove same-sweep noise coupling and uses posterior-mean information for the weak
-trait.
+`rg_decorrelated=True` instead averages cross-sweep quadratics, excluding
+same-sweep pairs. Thinning reduces, but does not prove the absence of, dependence
+between retained MCMC states. Treat this as a sensitivity estimator for
+asymmetric-power pairs; its direct benchmark coverage is limited.
 
 `res.h2` reports the mean sampled quadratic `beta_t' R beta_t`, clamped to
 `h2_bounds`. Because sampled rather than Rao–Blackwellized effects are used, it

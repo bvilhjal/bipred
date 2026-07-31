@@ -18,8 +18,8 @@ Provide:
 2. `n_eff1`, `n_eff2`: positive scalar or per-variant effective sample sizes.
 3. Either one dense LD correlation matrix or blocks `[(R, idx), ...]` whose
    contiguous indices partition `0..m-1`.
-4. `cross_corr` when the GWAS sampling errors are correlated through shared
-   samples.
+4. A scalar `cross_corr` when the two GWAS have correlated sampling errors;
+   shared samples are one possible cause.
 
 bipred does not harmonize summary statistics or build LD. Blocks may be dense
 float/int8 matrices or ldpred3 `LowRankLD` objects, including LR8, and
@@ -120,9 +120,11 @@ For count-sensitive work, consider `noise_inflation=True` and
 
 ## Genetic correlation
 
-Use `res.rg` by default and `rg_decorrelated=True` for strongly asymmetric-power
-pairs. `ldsc_rg` is a fast independent screen. Interpretation, sample overlap,
-and overlap-interval semantics are covered in [`rg.md`](rg.md).
+Use `res.rg` by default. For strongly asymmetric-power pairs,
+`rg_decorrelated=True` is an optional sensitivity estimator with limited direct
+benchmark coverage; compare it with the default rather than replacing the
+default automatically. `ldsc_rg` is a fast independent screen. Interpretation,
+sample overlap, and overlap-interval semantics are covered in [`rg.md`](rg.md).
 
 For per-region exploratory estimates:
 
@@ -152,7 +154,7 @@ shrinks local estimates toward the genome-wide correlation.
 | `pi_init` | `None` | explicit four-state overlap start |
 | `sigma_prior_scale` | `None` | fixed covariance shrinkage target across starts |
 | `cross_corr` | `0` | correlation of cross-trait sampling noise |
-| `rg_decorrelated` | `False` | alternative `r_g` for asymmetric power |
+| `rg_decorrelated` | `False` | cross-sweep sensitivity estimator for asymmetric power |
 | `noise_inflation`, `ni_damp` | `False`, `0.1` | learn and damp residual-noise inflation |
 | `pi_prior` | `1` | symmetric Dirichlet mixture concentration |
 | `h2_bounds`, `h2_cap` | `(1e-4, 1)`, `None` | ordinary bounds and optional expert ceiling |
@@ -174,7 +176,8 @@ by multi-chain inference; use dispersed full-length chains for diagnostics.
 
 - Match ancestry and harmonize variant order, alleles, and effect scale before
   fitting.
-- Supply `cross_corr` when samples overlap; an LDSC intercept can also contain
+- Supply a defensible `cross_corr` when cross-trait sampling errors are
+  correlated. Sample overlap is one cause; an LDSC intercept can also contain
   confounding and does not identify overlap by itself.
 - Treat low-power absolute causal counts and regional absolute `r_g` values as
   exploratory.

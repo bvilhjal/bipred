@@ -18,9 +18,9 @@ borrow strength through the ``both`` component; disjoint traits can drive
 
 Both GWAS are assumed to use the **same** LD reference (same ancestry). Sample
 overlap can be passed via ``cross_corr`` (the cross-trait correlation of the
-sampling errors); the default 0 assumes independent GWAS samples. A cross-trait
-LDSC intercept can reflect overlap but also correlated confounding, so it is not
-automatically interchangeable with this correlation.
+sampling errors); the default 0 assumes uncorrelated cross-trait sampling errors.
+A cross-trait LDSC intercept can reflect overlap but also correlated confounding,
+so it is not automatically interchangeable with this correlation.
 """
 
 from __future__ import annotations
@@ -387,6 +387,11 @@ def _validate_bivariate_options(*, ld_int8, allow_legacy_lowrank, h2_init,
     tol = _finite_control("tol", tol, lower=0.0)
     check_every = _integer_at_least("check_every", check_every, 1)
     sample_every = _integer_at_least("sample_every", sample_every, 1)
+    if rg_decorrelated and num_iter <= sample_every:
+        raise ValueError(
+            "rg_decorrelated=True requires at least two retained effect samples; "
+            "num_iter must be greater than sample_every"
+        )
     ncores = _integer_at_least("ncores", ncores, 1)
 
     lo, hi = _finite_pair("h2_bounds", h2_bounds)
@@ -642,13 +647,13 @@ def _effect_sample_buffers(enabled, num_iter, sample_every, m):
 
 
 def _decorrelated_cov(fblocks, samp1, samp2):
-    """Genetic (co)variances from effect samples with **independent** noise.
+    """Genetic (co)variances from cross-sweep effect samples.
 
     Uses effect vectors from *different* post-burn-in sweeps (thinned, so their
-    sampling noise is ~independent) -- the LDpred2-auto out-of-sample trick
-    applied to two traits -- so the same-sweep cross-noise that inflates the
-    genetic covariance is removed and the covariance of an under-powered trait is
-    recovered from its posterior mean rather than its thresholded samples. For
+    sampling noise is approximately independent) -- the LDpred2-auto
+    out-of-sample trick applied to two traits -- so same-sweep cross-noise is
+    excluded and the covariance of an under-powered trait is estimated from its
+    posterior mean rather than its thresholded samples. For
     each of ``b1' R b2`` / ``b1' R b1`` / ``b2' R b2`` returns the mean over
     ordered pairs ``a != b`` (all-pairs sum minus the ``a == b`` diagonal):
     ``(gcov, var1, var2)``. Returns ``None`` when there are too few samples."""
@@ -1347,8 +1352,8 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
         coherently calibrated initial slab variances; set it explicitly when
         varying starts across chains so the chains retain the same prior.
     cross_corr : float, default 0.0
-        Cross-trait correlation of the sampling noise (sample overlap); must lie
-        in ``(-1, 1)``. 0 assumes independent GWAS samples.
+        Cross-trait correlation of the sampling errors; sample overlap is one
+        possible cause. Must lie in ``(-1, 1)``; 0 assumes uncorrelated errors.
     burn_in, num_iter : int
         Burn-in and sampling sweeps.
     h2_bounds : (float, float)
@@ -1359,8 +1364,11 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
         Shrinkage strength on the effect covariance ``Sigma``. Larger values pull
         more strongly toward independent traits.
     rg_decorrelated : bool, default False
-        Estimate ``rg`` from effects sampled at different sweeps. Prefer for
-        asymmetric-power pairs.
+        Sensitivity estimator based on effects sampled at different sweeps.
+        Consider for strongly asymmetric-power pairs; direct benchmark coverage
+        is limited. Requires ``num_iter > sample_every`` and raises rather than
+        substituting the default estimator if its cross-sweep quadratics are
+        non-finite or have non-positive variances.
     noise_inflation : bool, default False
         Learn per-trait residual noise factors ``lambda_t >= 1`` and fit with
         effective sample size ``N_t / lambda_t``. Useful for finite reference-panel
@@ -1726,20 +1734,32 @@ def _ldpred3_auto_bivariate_prepared(prepared, options, start):
     g11, g12, g22 = gv_acc / count
     h2_1 = min(max(g11, lo), hi)
     h2_2 = min(max(g22, lo), hi)
-    # rg from effect samples with independent noise (drawn at different sweeps):
+    # rg from effect samples with approximately independent noise (drawn at
+    # different sweeps):
     # the decorrelated genetic covariance over the decorrelated predictor
     # variances. This avoids the same-sweep cross-noise that inflates the genetic
-    # covariance and recovers a weak trait's covariance from its posterior mean
-    # (which the sampled-quadratic ratio attenuates). Falls back to the
-    # sampled-quadratic ratio when disabled or too few samples were retained.
-    rg = None
+    # covariance and estimates a weak trait's covariance from its posterior mean
+    # (which the sampled-quadratic ratio attenuates).
     if rg_decorrelated:
         cov = _decorrelated_cov(fblocks, samp1[:n_saved], samp2[:n_saved])
-        if cov is not None:
-            num, v1, v2 = cov
-            if v1 > 0.0 and v2 > 0.0:
-                rg = _rg_from_quadratics(num, v1, v2)
-    if rg is None:
+        if cov is None:  # defensive: the public validator guarantees >=2 samples
+            raise RuntimeError(
+                "internal error: decorrelated rg retained fewer than two effect "
+                "samples"
+            )
+        num, v1, v2 = cov
+        if not np.all(np.isfinite((num, v1, v2))):
+            raise ValueError(
+                "rg_decorrelated=True produced non-finite cross-sweep quadratic "
+                "forms"
+            )
+        if v1 <= 0.0 or v2 <= 0.0:
+            raise ValueError(
+                "rg_decorrelated=True produced non-positive cross-sweep genetic "
+                "variance"
+            )
+        rg = _rg_from_quadratics(num, v1, v2)
+    else:
         # Use the reported (clamped) h2 scale for the denominator: raw sampled
         # quadratics can go non-positive on non-PD (int8-quantised) blocks,
         # which would slam rg to +/-1 through the floor.

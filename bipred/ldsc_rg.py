@@ -129,10 +129,16 @@ def ldsc_rg(beta_hat1, beta_hat2, ld_scores, n_eff1, n_eff2, *, m_snps=None,
     ``r_g = rho_g / sqrt(h2_1 h2_2)`` with the marginal heritabilities from
     univariate LD Score regression. Standard errors are by block jackknife.
 
+    All per-variant inputs must be aligned to the same variants in genomic
+    order. This function receives no genomic coordinates, so it cannot verify
+    or restore that order. A common row permutation leaves the point estimates
+    unchanged but can change ``rg_se`` because jackknife blocks are contiguous
+    rows.
+
     Parameters
     ----------
     beta_hat1, beta_hat2 : array_like (m,)
-        Standardized marginal effects for the two traits (same variant order).
+        Standardized marginal effects for the two traits.
     ld_scores : array_like (m,)
         Strictly positive LD scores from ``ldpred3.ld_scores``.
     n_eff1, n_eff2 : float or array_like
@@ -145,7 +151,7 @@ def ldsc_rg(beta_hat1, beta_hat2, ld_scores, n_eff1, n_eff2, *, m_snps=None,
     constrain_intercept : float, optional
         Fix the cross-trait intercept (e.g. ``0.0`` for non-overlapping samples).
     n_blocks : int, default 200
-        Number of contiguous delete-a-block jackknife blocks.
+        Number of contiguous delete-a-block jackknife blocks in genomic order.
     n_iter : int, default 2
         Number of regression-weight update iterations.
 
@@ -271,6 +277,9 @@ def estimate_sample_overlap(rg_result, n_eff1, n_eff2, pheno_corr=1.0):
     where ``ρ_pheno`` is the phenotypic correlation among the shared individuals.
     Correlated population stratification or other confounding can also contribute
     to the intercept, so the intercept does not identify overlap by itself.
+    This scalar-effective-N inversion is an approximation, not a literal
+    shared-person identity for case-control effective sizes, meta-analyses, or
+    SNP-varying sample sizes.
 
     The returned ``effective_overlap`` is the signed quantity
     ``N_shared * ρ_pheno`` under the overlap-only assumption. If the correlation
@@ -283,7 +292,7 @@ def estimate_sample_overlap(rg_result, n_eff1, n_eff2, pheno_corr=1.0):
     rg_result : LDSCRgResult
         Output of :func:`ldsc_rg` (fit with a *free* intercept, the default).
     n_eff1, n_eff2 : float
-        Per-trait effective GWAS sample sizes.
+        Scalar per-trait effective GWAS sample sizes used for the approximation.
     pheno_corr : float, default 1.0
         Phenotypic correlation among the shared samples (genetic + environmental).
 

@@ -10,7 +10,7 @@ polygenic-overlap interpretation. See [`guide.md`](guide.md) for fitting.
 | Estimator | Use | Main caveat |
 |---|---|---|
 | `res.rg` | default joint LD estimate | needs well-matched LD |
-| `rg_decorrelated=True` | strongly asymmetric power | requires a full single-chain schedule |
+| `rg_decorrelated=True` | asymmetric-power sensitivity check | limited direct benchmarks; requires a full single-chain schedule |
 | `bipred.ldsc_rg` | fast screen or independent check | unstable when marginal LDSC `h2` is near zero |
 | two univariate LDpred fits | additional diagnostic | often attenuated under power asymmetry |
 
@@ -28,13 +28,19 @@ captures correlated sampling noise and cross-trait confounding. `M` is the
 variant count defining the heritability and covariance; pass the full count as
 `m_snps` when summary statistics are a subset of that map.
 
+For `rg_se`, order rows by chromosome and position. The block jackknife deletes
+contiguous ranges of the supplied row order; arbitrary order does not preserve
+local LD dependence.
+
 Use the joint fit by default and inspect LDSC as a cheap sensitivity check. The
 committed benchmark results are a dated snapshot, not current performance
-evidence; see [`benchmarks/RESULTS.md`](../benchmarks/RESULTS.md).
+evidence; see the
+[benchmark results](https://github.com/bvilhjal/bipred/blob/main/benchmarks/RESULTS.md).
 
-## Asymmetric power
+## Asymmetric-power sensitivity
 
-When one trait is much better powered:
+When one trait is much better powered, compare this optional estimator with the
+default:
 
 ```python
 res = ldpred3_auto_bivariate_blocks(
@@ -44,23 +50,34 @@ res = ldpred3_auto_bivariate_blocks(
 ```
 
 The default sampled-quadratic ratio can attenuate the weak trait through its
-posterior-noise-inflated variance. The decorrelated estimator removes
-same-sweep noise coupling and recovers covariance using posterior-mean
-information. It needs a full retained schedule, so adaptive stopping is disabled.
+posterior-noise-inflated variance. The alternative averages cross-sweep
+quadratics while excluding same-sweep pairs. Thinning reduces, but does not
+eliminate, dependence between retained MCMC states. Direct benchmark coverage is
+limited, so treat the result as a sensitivity analysis rather than an automatic
+replacement for `res.rg`. It needs at least two retained effect samples and a
+full schedule; adaptive stopping is disabled. Undefined cross-sweep quadratics
+raise an error rather than silently returning the default estimator.
 
 ## Sample overlap
 
-Shared GWAS samples correlate the two traits' sampling errors. When overlap is
-known:
+Shared GWAS samples can correlate the two traits' sampling errors. With scalar
+cohort sizes under a homogeneous standardized quantitative-trait sampling model,
+the usual mapping is:
 
-**Equation 2. Sampling-noise correlation from shared samples.**
+**Equation 2. Scalar-N overlap approximation.**
 
 ```text
 cross_corr = N_shared rho_pheno / sqrt(N1 N2)
 ```
 
-For fully shared samples this is the phenotypic correlation among the shared
-individuals. Pass it to the fit:
+Here `N1` and `N2` are analyzed cohort sizes, and `rho_pheno` is the phenotypic
+correlation among the shared analyzed individuals. With complete overlap and
+equal cohort sizes, `cross_corr = rho_pheno`.
+
+When the fitting inputs are effective sample sizes—for example, case-control
+GWAS, meta-analyses, or SNP-varying `N`—Equation 2 is an approximation, not a
+literal shared-person identity. One scalar `cross_corr` then represents an
+assumed sampling-error correlation. Pass that value to the fit:
 
 ```python
 res = ldpred3_auto_bivariate_blocks(
@@ -69,13 +86,16 @@ res = ldpred3_auto_bivariate_blocks(
 )
 ```
 
-When overlap is unknown, the LDSC intercept can provide a sensitivity value:
+When overlap is unknown and scalar effective sample sizes are defensible, the
+LDSC intercept can provide a sensitivity value:
 
 ```python
 from bipred import estimate_sample_overlap, ldsc_rg
 
-rgr = ldsc_rg(beta_hat1, beta_hat2, ld_scores, n_eff1, n_eff2)
-estimate_sample_overlap(rgr, n_eff1, n_eff2, pheno_corr=0.4)
+n1_scalar = 50_000.0
+n2_scalar = 40_000.0
+rgr = ldsc_rg(beta_hat1, beta_hat2, ld_scores, n1_scalar, n2_scalar)
+estimate_sample_overlap(rgr, n1_scalar, n2_scalar, pheno_corr=0.4)
 ```
 
 This inversion requires a non-zero assumed phenotypic correlation. The intercept
@@ -87,6 +107,13 @@ shared-sample count compatible with `0 < rho_pheno <= 1`, not an upper bound.
 Environmental correlation among shared samples belongs in `cross_corr`, not in
 genetic covariance. Small-panel intercepts are noisy; use them as diagnostics,
 not precise overlap detectors.
+
+With `noise_inflation=True`, bipred replaces each `N_t` by `N_t / lambda_t` in
+both the diagonal variances and off-diagonal covariance while holding
+`cross_corr` fixed. This assumes the added residual variance has the same
+cross-trait correlation. If inflation represents trait-specific noise or
+reference mismatch, use the combination as a sensitivity analysis rather than a
+literal overlap correction.
 
 ## Regional genetic correlation
 
@@ -109,6 +136,13 @@ Labels may be strings or integers, need not be contiguous, and appear in
 first-observed order. Regions may span LD blocks; within-block contributions are
 summed under the block-diagonal LD assumption.
 
+`regional_rg` evaluates the representation encoded by the LD objects passed to
+it. A default fit can internally Q8-quantize float blocks of at most 1,500
+variants without mutating the originals. Passing those originals therefore
+evaluates float LD, not the fit's internal Q8 representation. To use the same
+matrix, pass matching int8 blocks to both calls, or use the same float32 blocks
+and set `ld_int8=False` during fitting.
+
 **Table 2. `RegionalRgResult` fields.**
 
 | Field | Meaning |
@@ -129,8 +163,9 @@ Two limitations dominate:
 Use regional estimates primarily for ranking and comparison, not calibrated
 absolute effects or formal testing. Quantization can also make a dense LD block
 non-positive-definite; inspect the raw variances and use `clip=False` to expose
-out-of-range diagnostic values. The research evidence and its limitations are in
-the repository's
+out-of-range diagnostic values for the blocks passed to `regional_rg`. This does
+not diagnose a different representation used internally by the fit. The research
+evidence and its limitations are in the repository's
 [`RESULTS_REGIONAL.md`](https://github.com/bvilhjal/bipred/blob/main/research/cross_corr_estimation/RESULTS_REGIONAL.md).
 
 ## Polygenic overlap

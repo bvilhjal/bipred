@@ -622,8 +622,8 @@ def test_mixed_lowrank_dense_supports_optional_estimators():
     blocks = [(lowrank, np.arange(k)),
               (corr2.astype(np.float32), np.arange(k, 2 * k))]
     rng = np.random.default_rng(14)
-    bh1 = rng.standard_normal(2 * k) * 0.02
-    bh2 = 0.4 * bh1 + rng.standard_normal(2 * k) * 0.02
+    bh1 = rng.standard_normal(2 * k) * 0.04
+    bh2 = 0.8 * bh1 + rng.standard_normal(2 * k) * 0.002
 
     result = ldpred3_auto_bivariate_blocks(
         blocks, bh1, bh2, 25000, 15000, burn_in=8, num_iter=12, seed=7,
@@ -948,6 +948,46 @@ def test_decorrelated_rg_buffers_are_opt_in_and_path_is_used(monkeypatch):
     )
     assert calls == [((2, 4), (2, 4))]
     assert res.rg == 0.25
+
+
+@pytest.mark.parametrize(
+    "num_iter,sample_every",
+    [(1, 1), (5, 5), (5, 10)],
+)
+def test_decorrelated_rg_requires_two_retained_effect_samples(
+        num_iter, sample_every):
+    beta_hat = np.full(4, 0.02)
+    with pytest.raises(
+        ValueError,
+        match="at least two retained effect samples.*num_iter.*sample_every",
+    ):
+        ldpred3_auto_bivariate(
+            np.eye(4), beta_hat, beta_hat, 1000, 1000,
+            ld_int8=False, h2_init=0.1, p_init=0.5, burn_in=0,
+            num_iter=num_iter, sample_every=sample_every,
+            h2_cap=(0.2, 0.2), rg_decorrelated=True, seed=1,
+        )
+
+
+@pytest.mark.parametrize(
+    "cov,match",
+    [
+        ((0.25, 0.0, 1.0), "non-positive cross-sweep genetic variance"),
+        ((0.25, 1.0, -0.1), "non-positive cross-sweep genetic variance"),
+        ((np.nan, 1.0, 1.0), "non-finite cross-sweep quadratic forms"),
+    ],
+)
+def test_decorrelated_rg_rejects_invalid_cross_sweep_quadratics(
+        monkeypatch, cov, match):
+    monkeypatch.setattr(bivariate, "_decorrelated_cov", lambda *_args: cov)
+    beta_hat = np.full(4, 0.02)
+    with pytest.raises(ValueError, match=match):
+        ldpred3_auto_bivariate(
+            np.eye(4), beta_hat, beta_hat, 1000, 1000,
+            ld_int8=False, h2_init=0.1, p_init=0.5, burn_in=0,
+            num_iter=3, sample_every=2, h2_cap=(0.2, 0.2),
+            rg_decorrelated=True, seed=1,
+        )
 
 
 def test_cross_corr_explains_correlated_sampling_signal():

@@ -164,6 +164,29 @@ def test_ldsc_rg_accepts_per_variant_sample_sizes_and_one_block():
     assert np.isnan(res.rg_se)
 
 
+def test_ldsc_rg_common_permutation_changes_only_jackknife_grouping():
+    # ldsc_rg has no genomic coordinates to sort or validate. A common
+    # permutation therefore preserves the regressions but changes which
+    # variants form each contiguous delete-a-block jackknife group.
+    rng = np.random.default_rng(0)
+    m, n = 40, 1000.0
+    ell = np.linspace(1.0, 10.0, m)
+    chi1 = 1.0 + 0.30 * ell + rng.normal(0.0, 0.10, m)
+    chi2 = 1.0 + 0.25 * ell + rng.normal(0.0, 0.15, m)
+    beta1 = np.sqrt(chi1 / n)
+    beta2 = np.sqrt(chi2 / n) * rng.choice([-1.0, 1.0], m, p=[0.08, 0.92])
+
+    ordered = ldsc_rg(beta1, beta2, ell, n, n, n_blocks=4, n_iter=0)
+    perm = np.random.default_rng(5).permutation(m)
+    shuffled = ldsc_rg(
+        beta1[perm], beta2[perm], ell[perm], n, n, n_blocks=4, n_iter=0)
+
+    assert shuffled.rg == pytest.approx(ordered.rg)
+    assert shuffled.gcov == pytest.approx(ordered.gcov)
+    assert shuffled.h2 == pytest.approx(ordered.h2)
+    assert shuffled.rg_se != pytest.approx(ordered.rg_se)
+
+
 def test_ldsc_rg_rejects_unidentified_full_fit():
     beta = np.array([0.01, 0.02, 0.03, 0.04])
     with pytest.raises(ValueError, match="singular.*LD scores must vary"):
