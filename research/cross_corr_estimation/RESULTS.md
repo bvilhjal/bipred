@@ -1,7 +1,9 @@
 # Benchmark: estimating `cross_corr` in the bivariate Gibbs sampler
 
-**Status: research benchmark.** Not a shipped feature. See [`README.md`](README.md)
-for the method and [`bench_cross_corr.py`](bench_cross_corr.py) for the code.
+**Status: research benchmark.** The joint `cross_corr` estimator is not shipped.
+The later regional quadratic readout is public as exploratory `regional_rg`.
+See [`README.md`](README.md) for the distinction and
+[`bench_cross_corr.py`](bench_cross_corr.py) for this prototype.
 
 ## What is being compared
 
@@ -13,6 +15,8 @@ practice**, deriving it from the cross-trait LDSC intercept?
 
 All four arms run the **same** sampler on the **same** simulated data and differ
 in exactly one thing, the `cross_corr` value:
+
+**Table 1. Genome-wide correction arms.**
 
 | arm | `cross_corr` | represents |
 |---|---|---|
@@ -48,6 +52,8 @@ standard errors.
 
 [`bench_cross_corr_main.csv`](bench_cross_corr_main.csv)
 
+**Table 2. Main joint-estimation grid.**
+
 | true r_g | true cc | naive bias | ldsc RMSE | **joint RMSE** | oracle RMSE | ldsc `ĉc` (sd) | joint `ĉc` (sd) |
 |---:|---:|---:|---:|---:|---:|---|---|
 | 0.0 | 0.0 | −0.002 | 0.139 | 0.036 | 0.022 | 0.001 (0.102) | **0.001 (0.019)** |
@@ -81,6 +87,8 @@ Findings:
 
 [`bench_cross_corr_n.csv`](bench_cross_corr_n.csv)
 
+**Table 3. Results by sample size.**
+
 | N | naive bias | ldsc RMSE | **joint RMSE** | oracle RMSE | ldsc `ĉc` (sd) | joint `ĉc` (sd) |
 |---:|---:|---:|---:|---:|---|---|
 | 4,000 | +0.381 | 0.192 | **0.041** | 0.023 | 0.395 (0.101) | **0.396 (0.016)** |
@@ -100,6 +108,8 @@ smaller.
 
 [`bench_cross_corr_m.csv`](bench_cross_corr_m.csv)
 
+**Table 4. Results by variant count.**
+
 | m | ldsc RMSE | **joint RMSE** | ldsc `ĉc` (sd) | joint `ĉc` (sd) | sd ratio |
 |---:|---:|---:|---|---|---:|
 | 1,500 | 0.244 | **0.034** | 0.379 (0.625) | **0.374 (0.063)** | 9.9× |
@@ -116,6 +126,8 @@ roughly as `1/sqrt(m)` — and the advantage ratio narrows from 9.9× to 4.9×.
 [`bench_cross_corr_scale.csv`](bench_cross_corr_scale.csv), r_g = 0.6,
 cross_corr = 0.4, N = 8,000, 4 replicates, **1,500 sweeps** (see the warning
 below).
+
+**Table 5. Large-variant-count crossover.**
 
 | m | ldsc `ĉc` (sd) | joint `ĉc` (sd) | sd ratio | oracle r_g bias |
 |---:|---|---|---:|---:|
@@ -151,6 +163,8 @@ merely worse but actively harmful. See
 [`bench_cross_corr_ldwide.csv`](bench_cross_corr_ldwide.csv). The cross-trait
 LDSC intercept is identified only by variation in LD score, so a narrow range
 would disadvantage the `ldsc` arm and make the `joint` win an artifact.
+
+**Table 6. LD-score-range sensitivity.**
 
 | ell range | span | ldsc RMSE | **joint RMSE** | oracle RMSE | ldsc `ĉc` (sd) | joint `ĉc` (sd) |
 |---|---:|---:|---:|---:|---|---|

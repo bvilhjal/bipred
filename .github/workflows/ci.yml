@@ -31,7 +31,7 @@ jobs:
       - name: Install ruff
         run: pip install "ruff>=0.5"
       - name: Lint (pyflakes-only; see [tool.ruff] in pyproject)
-        run: ruff check bipred tests benchmarks
+        run: ruff check .
 
   test:
     runs-on: ubuntu-latest
@@ -72,7 +72,9 @@ jobs:
 
       - name: Install ldpred3 (dependency, pure NumPy)
         if: matrix.numba == 'no-numba'
-        run: pip install "ldpred3 @ git+https://github.com/bvilhjal/ldpred3.git@${{ env.LDPRED3_REV }}"
+        run: |
+          pip uninstall -y numba llvmlite
+          pip install "ldpred3 @ git+https://github.com/bvilhjal/ldpred3.git@${{ env.LDPRED3_REV }}"
 
       - name: Install bipred (with Numba)
         if: matrix.numba == 'with-numba'
@@ -81,6 +83,10 @@ jobs:
       - name: Install bipred (pure NumPy, no Numba)
         if: matrix.numba == 'no-numba'
         run: pip install -e ".[test]"
+
+      - name: Verify pure-NumPy fallback
+        if: matrix.numba == 'no-numba'
+        run: python -c "from ldpred3.ldpred3 import HAVE_NUMBA; assert not HAVE_NUMBA, 'Numba unexpectedly available in no-numba job'"
 
       - name: Run tests
         run: pytest -q
@@ -152,6 +158,7 @@ jobs:
               "docs/algorithm.md",
               "docs/guide.md",
               "docs/rg.md",
+              "examples/minimal.py",
               "benchmarks/README.md",
               "benchmarks/RESULTS.md",
               "benchmarks/_benchmark_utils.py",
@@ -163,6 +170,16 @@ jobs:
           missing = required - names
           if missing:
               raise SystemExit(f"sdist is missing: {sorted(missing)}")
+          forbidden_prefixes = (
+              "benchmarks/figdata_",
+              "benchmarks/_calib_",
+              "benchmarks/_smoke_",
+          )
+          unexpected = sorted(
+              name for name in names if name.startswith(forbidden_prefixes)
+          )
+          if unexpected:
+              raise SystemExit(f"sdist contains local benchmark scratch files: {unexpected}")
           PY
 
       - name: Build a wheel from the sdist
@@ -173,4 +190,4 @@ jobs:
           pip install "ldpred3 @ git+https://github.com/bvilhjal/ldpred3.git@${{ env.LDPRED3_REV }}"
           pip install dist/*.whl
           cd "${RUNNER_TEMP}"
-          python -c "import bipred; print(bipred.__version__)"
+          python -c "import bipred; [getattr(bipred, name) for name in bipred.__all__]; print(bipred.__version__)"

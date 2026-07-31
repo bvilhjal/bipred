@@ -1,194 +1,59 @@
 # bipred
 
-**bipred** is bivariate LDpred for two GWAS traits that share one LD reference.
-It jointly estimates:
+**bipred** jointly fits two GWAS traits against one LD reference. It estimates
+SNP heritability, genetic correlation (`r_g`), posterior-mean effects for
+prediction, and a MiXeR-style polygenic-overlap summary.
 
-- SNP heritability for each trait,
-- genetic correlation `r_g`,
-- posterior-mean effects for prediction, and
-- a MiXeR-style polygenic-overlap summary.
-
-The package contains the bivariate pieces split out from
-[ldpred3](https://github.com/bvilhjal/ldpred3). It still depends on ldpred3 for
-shared LD utilities and sampler internals.
+The package contains the bivariate methods split out of
+[ldpred3](https://github.com/bvilhjal/ldpred3) and still uses ldpred3 for shared
+LD representations and sampler utilities.
 
 ## Installation
 
-Python 3.9-3.14 is supported. Numba is strongly recommended; Python 3.14 uses
-Numba 0.66 or newer. Until ldpred3 is published, install the exact revision
-tested by bipred, then install bipred:
+Python 3.9–3.14 is supported. Numba is strongly recommended. Until ldpred3 is
+published, install bipred with the exact ldpred3 revision tested here:
 
 ```bash
 python -m pip install "ldpred3[fast] @ git+https://github.com/bvilhjal/ldpred3.git@db3ebd2385b7e3f347712f8761682c0eb49df3e4"
 python -m pip install "bipred[fast] @ git+https://github.com/bvilhjal/bipred.git"
 ```
 
-The package metadata requires ldpred3 0.2.13 or newer within the 0.2 series,
-while the source install pins the exact tested commit because bipred currently
-shares private sampler and LDSC helpers with ldpred3. That pin should be updated
-deliberately when the seam changes. Blindly following a moving branch would be
-exciting in all the wrong ways.
-
-For a Conda environment on Linux, macOS, or Windows:
-
-```bash
-conda create -n bipred -c conda-forge python-gil=3.14 numpy numba pip
-conda activate bipred
-python -m pip install "ldpred3 @ git+https://github.com/bvilhjal/ldpred3.git@db3ebd2385b7e3f347712f8761682c0eb49df3e4"
-python -m pip install "bipred @ git+https://github.com/bvilhjal/bipred.git"
-```
-
-`python-gil` deliberately selects standard CPython. Conda may otherwise choose
-the separate free-threaded `cp314t` build, which is not the CI compatibility
-target.
-
-For local development with sibling checkouts:
+For development with sibling checkouts:
 
 ```bash
 python -m pip install -e "../ldpred3[fast]"
 python -m pip install -e ".[fast,test]"
 ```
 
-`[sim]` installs only the `msprime` simulator. `[bench]` adds `msprime` and
-Matplotlib for the self-contained benchmark scripts. The HAPNEST and cached-LD
-benchmarks still need their documented external data.
+The `[sim]` extra adds msprime. `[bench]` adds msprime and Matplotlib; benchmarks
+that use HAPNEST or cached LD require their separately documented inputs.
 
-## Quickstart
+## Runnable example
 
-```python
-from bipred import ldpred3_auto_bivariate
+From a checkout:
 
-# corr: dense LD correlation matrix, shape (m, m)
-# beta_hat1/2: standardized marginal effects in the same variant order
-# n1/n2: scalar or per-variant effective sample sizes
-res = ldpred3_auto_bivariate(corr, beta_hat1, beta_hat2, n1, n2)
-
-res.h2                       # (h2_trait1, h2_trait2)
-res.rg                       # genetic correlation
-res.beta1_est, res.beta2_est # posterior-mean effects for PRS scoring
-res.mixer                    # polygenic-overlap summary
+```bash
+python -m examples.minimal
 ```
 
-`res.sigma` is the mean of retained covariance iterates.
-`res.mixer_iterate_summary()` returns empirical retained-chain intervals;
-because the covariance uses a damped moment update rather than a conditional
-posterior draw, these are not Bayesian credible intervals.
-`res.mixer_posterior()` remains only as a deprecated compatibility alias.
+The example creates a small synthetic two-trait problem, fits one dense LD
+matrix, and prints the main estimates. Its complete source is
+[`examples/minimal.py`](examples/minimal.py).
 
-For genome-wide runs, stream LD blocks:
-
-```python
-from bipred import ldpred3_auto_bivariate_blocks
-
-res = ldpred3_auto_bivariate_blocks(
-    blocks, beta_hat1, beta_hat2, n1, n2,
-    burn_in=200, num_iter=200, seed=0,
-)
-```
-
-`blocks` must be `[(R, idx), ...]` with contiguous indices that partition
-`0..m-1`. Each `R` may be a dense LD matrix or ldpred3's compact `LowRankLD`
-representation, including LR8; dense and low-rank blocks may be mixed.
-
-The revision pinned above includes ldpred3's corrected low-rank-plus-diagonal
-contract introduced in `382fb90`. BiPred rejects older row-normalised factors by
-default because they can greatly exaggerate LD for weak factor rows. Set
-`allow_legacy_lowrank=True` only to reproduce that legacy effective matrix.
-
-The default `ld_int8=None` policy keeps supplied int8 blocks as-is, quantises
-float blocks with at most 1500 variants, and keeps larger float blocks float32.
-This retains D8's fourfold storage saving on small blocks without applying it to
-large dense blocks where quantisation can alter conditioning. The 1500-variant
-cutoff is a storage heuristic, not a bivariate real-data accuracy guarantee. Use
-`ld_int8=True` to quantise every dense float block or `False` to keep dense float
-inputs float32. This setting does not alter compact low-rank factors.
-
-With Numba, set `ncores>1` to sweep homogeneous dense blocks or homogeneous
-low-rank factors concurrently. Random draws are generated before the fused
-sweep and block statistics are reduced in genome order, so seeded results
-match `ncores=1` exactly. Mixed representations or dtypes fall back to the
-serial sweep. This uses one persistent Numba thread team, not per-sweep
-subprocesses. There is nevertheless a synchronization barrier after every
-sweep: global parameter updates wait for all blocks, so the slowest block can
-limit scaling and gains depend on having enough reasonably balanced blocks.
-
-## Multiple Chains
-
-```python
-from bipred import ldpred3_auto_bivariate_chains
-
-fit = ldpred3_auto_bivariate_chains(
-    blocks, beta_hat1, beta_hat2, n1, n2, seed=0,
-)
-res = fit.posterior
-fit.basic_split_rhat.rhat
-```
-
-The default four chains run sequentially, with union-causal starts log-spaced
-from `1e-4` to `0.2` and one covariance-prior scale shared across chains.
-`ncores` parallelises independent LD blocks within each chain; it does not run
-multiple chains concurrently, and each within-chain sweep still has the barrier
-described above.
-Every finite, equal-length chain is pooled with equal weight. A non-finite or
-wrong-length chain aborts the fit; chains are never filtered by their estimates
-or diagnostics. The returned classical basic split-Rhat values are diagnostics,
-not a convergence claim, and there is deliberately no `converged` flag. They
-cover scalar genetic and hyperparameter traces, not variant-level effects.
-`rg_decorrelated=True` is not supported by the multi-chain driver.
-
-## Model In Brief
-
-Each variant has one of four states:
-
-- neither trait causal,
-- trait 1 only,
-- trait 2 only,
-- both traits causal.
-
-The sampler learns the state probabilities `pi` and the two-trait effect
-covariance `Sigma`. The shared state drives cross-trait borrowing: a well-powered
-trait can improve estimates for a correlated weaker trait. If the data do not
-support shared causal variants, the model can drive the shared component down,
-but prediction should still be validated out of sample.
-
-Sample overlap is supplied with `cross_corr`, the cross-trait sampling-noise
-correlation. The default `0` assumes independent GWAS samples.
-
-## Genetic Correlation
-
-`res.rg` is the recommended genetic-correlation estimate from the joint fit.
-For a fast moment-based cross-check, use cross-trait LD Score regression:
-
-```python
-from bipred import ldsc_rg
-from ldpred3 import ld_scores
-
-ell = ld_scores(blocks)
-rgr = ldsc_rg(beta_hat1, beta_hat2, ell, n1, n2)
-rgr.rg, rgr.rg_se, rgr.gcov_intercept
-```
-
-Use `rg_decorrelated=True` for strongly asymmetric-power pairs, where one trait
-is much better powered than the other.
-
-## Polygenic Overlap
-
-`res.mixer` reports per-trait polygenicity, shared causal count, shared fraction,
-within-shared effect correlation, and the overlap decomposition of `r_g`.
-
-Read the overlap ratios (`frac_shared`, `rho_beta`, `rg_from_overlap`) as the
-most stable outputs. Absolute causal counts are approximate because LD can spread
-posterior inclusion mass to nearby correlated variants. For count-sensitive work,
-consider `noise_inflation=True` and/or `res.mixer_calibrated(infer1, infer2)`
-using two univariate ldpred3 runs.
+For real data, start with the input contract and blockwise call in the user
+guide. Summary statistics must already be ancestry-matched and harmonized.
 
 ## Documentation
 
-- [docs/guide.md](docs/guide.md): practical inputs, outputs, options, and pitfalls.
-- [docs/algorithm.md](docs/algorithm.md): model and sampler reference.
-- [docs/rg.md](docs/rg.md): genetic-correlation and overlap guidance.
-- [benchmarks/README.md](benchmarks/README.md): reproducible benchmark scripts.
+- [`docs/guide.md`](docs/guide.md): inputs, calls, options, outputs, and pitfalls.
+- [`docs/algorithm.md`](docs/algorithm.md): model and estimator theory.
+- [`docs/rg.md`](docs/rg.md): genome-wide and regional genetic correlation,
+  sample overlap, and polygenic overlap.
+- [`benchmarks/README.md`](benchmarks/README.md): benchmark scripts and
+  reproducibility.
+- [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md): dated historical benchmark
+  snapshot; rerun before making current performance claims.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [`LICENSE`](LICENSE).

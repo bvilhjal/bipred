@@ -4,8 +4,9 @@
 
 These notes are the connected story; [`RESULTS.md`](RESULTS.md) and
 [`RESULTS_REGIONAL.md`](RESULTS_REGIONAL.md) hold the numbers, and
-[`README.md`](README.md) is the index of files. Nothing here is shipped: this is
-a record of what was tried, what was measured, and what may be concluded.
+[`README.md`](README.md) is the index of files. The regional quadratic readout
+has since shipped as exploratory `bipred.regional_rg`; the joint `cross_corr`
+estimator and per-region covariance models remain unshipped research.
 
 The reader who wants only the conclusion may skip to §11. The reader who wants to
 avoid repeating our mistakes should read §6 and §9, which are the two places we
@@ -17,6 +18,8 @@ were wrong.
 
 Two GWAS that share individuals have *correlated sampling noise*. Write the
 residualised marginal effect for variant *j* as
+
+**Equation 1. Residual and sampling-noise covariance.**
 
     d_j = beta_j + e_j ,        e_j ~ N(0, E)
 
@@ -63,11 +66,15 @@ independent samples of the same 2×2 distribution is simply the wrong likelihood
 
 Since Cov(e) = R/N with R = L Lᵀ, the cure is to whiten by the LD Cholesky:
 
+**Equation 2. LD-whitened residual.**
+
     z_t = sqrt(N_t) · L^{-1} ( bhat_t − R beta_t ) ,     t = 1, 2 .
 
 Now z is i.i.d. bivariate normal with **unit variances** and correlation exactly
 *c*. Because the diagonals are *known*, the conditional for *c* is one-dimensional
 and we may evaluate it exactly on a grid:
+
+**Equation 3. Conditional log density for the noise correlation.**
 
     log p(c | z) = −(k/2) log(1 − c²) − ( S11 − 2 c S12 + S22 ) / (2(1 − c²))
 
@@ -89,6 +96,8 @@ namely the LDSC intercept.
 
 We therefore run four arms which differ in *exactly one thing*, the value of *c*:
 
+**Table 1. Benchmark arms for `cross_corr`.**
+
 | arm | *c* | what it represents |
 |---|---|---|
 | `naive` | 0 | bipred's default when unspecified |
@@ -109,6 +118,8 @@ r_g inflation, and tracks the oracle. Both estimators are essentially *unbiased*
 the whole difference is variance.
 
 But the LDSC intercept converges as 1/sqrt(m), and it does not stop:
+
+**Table 2. Sampling SD by variant count.**
 
 | m | ldsc SD | joint SD | ratio |
 |---:|---:|---:|---:|
@@ -165,12 +176,16 @@ of the table in §5, where the intercept's SD is 0.6 and the in-sampler estimate
 is 0.06. So "just use the LDSC intercept per region" is not on the menu.
 
 And overlap cannot be estimated *within* a region either — so regional r_g needs
-a **genome-wide** *c*, which is precisely what the sampler now supplies. Worse,
-overlap adds the *same* spurious covariance to *every* region, so it does not
-cancel when regions are compared: it inflates them all together and confounds the
-regional heterogeneity that is the entire object of the exercise.
+a defensible **genome-wide** *c*. The research sampler estimates it jointly;
+the shipped exploratory API instead requires the user to supply `cross_corr` to
+the genome-wide fit. Worse, overlap adds the *same* spurious covariance to
+*every* region, so it does not cancel when regions are compared: it inflates
+them all together and confounds the regional heterogeneity that is the entire
+object of the exercise.
 
 The measurement is stark. With true regional r_g = 0 and c = 0.4:
+
+**Table 3. Regional null contamination by correction arm.**
 
 | arm | null regions read | separation *d* |
 |---|---:|---:|
@@ -183,14 +198,16 @@ Ignoring overlap manufactures r_g ≈ 0.26 at *every null locus*. Feeding in a
 noisy per-dataset intercept is worse than doing nothing, because the same wrong
 value is applied to every region and therefore never averages away.
 
-> **Conclusion 2.** For regional r_g, the in-sampler estimator is not an
-> optimisation; it is a prerequisite.
+> **Conclusion 2.** Regional r_g requires a defensible genome-wide overlap
+> correction. Joint estimation is one research route, not a shipped requirement.
 
 ## 8. But the model shrinks the regions together
 
 Correcting overlap exposes a second, independent problem. bipred's sampler
 carries **one** effect covariance Σ for the whole genome, so every per-SNP
 posterior,
+
+**Equation 4. Per-SNP posterior under a global covariance.**
 
     V = (Σ^{-1} + E^{-1})^{-1} ,      mean = V E^{-1} d_j ,
 
@@ -217,6 +234,8 @@ regions.
 The textbook remedy is partial pooling — give each region its own Σ_r with a
 hierarchical prior centred on a genome-wide Ψ,
 
+**Equation 5. Experimental hierarchical regional covariance.**
+
     Σ_r ~ InverseWishart(nu, (nu − 3) Ψ) ,
 
 and estimate the pooling strength *nu*. We implemented this, estimating *nu* each
@@ -228,6 +247,8 @@ observed dispersion of the Σ_r, which contains estimation noise as well as
 genuine heterogeneity, and so is driven toward too little pooling. A reasonable
 theory. We tested it by fixing *nu* on a grid, which removes the estimator from
 the question entirely:
+
+**Table 4. Fixed pooling-strength sweep.**
 
 | nu | 4 | 20 | 50 | 100 | 300 | 1000 | ∞ (global) |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -248,6 +269,8 @@ posterior, which drives its scatter — and no prior strength closes it.
 The heterogeneity we care about is in the *correlation*, not the scale. So hold
 the per-trait variances at their global estimates and let only rho_r vary:
 
+**Equation 6. Experimental correlation-only regional covariance.**
+
     Σ_r = D C_r D ,   D = diag(sigma_1, sigma_2) global,
                       C_r = [[1, rho_r], [rho_r, 1]] .
 
@@ -262,6 +285,8 @@ null regions remains (≈ −0.083).
 
 That residual led to the most interesting measurement of the whole exercise.
 Running with **no overlap at all**:
+
+**Table 5. Regional null bias with and without overlap.**
 
 | | null bias at c = 0.4 | null bias at c = 0 |
 |---|---:|---:|
@@ -281,6 +306,8 @@ four times worse. A comparison made at a single operating point had flattered it
 Having been wrong once about pooling (§9) we were careful to test, rather than
 assume, the natural next move: partial pooling on rho *alone*, via a Fisher-z
 prior of width tau centred on the genome-wide correlation. It does not help.
+
+**Table 6. Correlation-only pooling sweep.**
 
 | tau | 0.15 | 0.3 | 0.6 | flat | (global) |
 |---|---:|---:|---:|---:|---:|
@@ -312,8 +339,9 @@ What we believe, with measurements behind it:
 1. *c* is identifiable inside the sampler, and the whitened residual is the
    statistic that identifies it (§3).
 2. Genome-wide, this does not earn its keep past m ≈ 50,000 (§5).
-3. Regionally it is a prerequisite, because uncorrected overlap fabricates
-   correlation at every null locus and the per-region intercept is unusable (§7).
+3. Regional estimates require defensible genome-wide overlap correction because
+   uncorrected overlap fabricates correlation at every null locus and a
+   per-region intercept is unusable (§7).
 4. Regional inference has a *second*, independent problem — shrinkage toward the
    genome-wide correlation — which correcting *c* does not touch (§8).
 5. Pooling the full Σ_r does not fix it and cannot be made to (§9); constraining
@@ -334,6 +362,8 @@ What remains open:
 
   Then the measurement, since algebra about a sampler deserves a check. The
   `rho|fixc` arm runs per-region rho with *c* pinned at the true value:
+
+  **Table 7. Null bias with estimated and fixed overlap correction.**
 
   | | null bias | *c* used |
   |---|---:|---:|
@@ -360,5 +390,7 @@ What remains open:
   cross-trait noise. Population stratification would produce similar covariance
   and is untested.
 
-We would not build the production feature on the strength of §5. We would build
-it on §7, and we would not ship regional r_g without resolving §8.
+The shipped `regional_rg` readout exposes the global-model result with the §8
+shrinkage limitation documented. The joint *c* estimator and per-region
+covariance models remain unshipped; these experiments do not justify presenting
+either as calibrated inference.

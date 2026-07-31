@@ -375,8 +375,10 @@ def test_noise_inflation_calibrates_counts_under_mismatch():
     matched = [(pop[i].astype(np.float32), idx[i]) for i in range(nb)]
     r_match = ldpred3_auto_bivariate_blocks(matched, bh1, bh2, N, N, burn_in=120,
                                             num_iter=180, noise_inflation=True, seed=1)
-    off = ldpred3_auto_bivariate_blocks(ref, bh1, bh2, N, N, burn_in=120,
-                                        num_iter=180, seed=1)
+    with pytest.warns(RuntimeWarning, match="Implausible bivariate fit"):
+        off = ldpred3_auto_bivariate_blocks(
+            ref, bh1, bh2, N, N, burn_in=120, num_iter=180, seed=1
+        )
     on = ldpred3_auto_bivariate_blocks(ref, bh1, bh2, N, N, burn_in=120,
                                        num_iter=180, noise_inflation=True, seed=1)
     # matched LD -> lambda ~ 1 (near no-op)
@@ -470,6 +472,27 @@ def test_lowrank_matmul_includes_diagonal_residual_and_zero_factor_row():
     assert residual[-1] == 1.0
     np.testing.assert_array_equal(residual, supplied_residual)
     np.testing.assert_allclose(observed, expected, rtol=2e-6, atol=2e-6)
+
+
+def test_prepared_lowrank_payload_is_shared_but_chain_scratch_is_not():
+    from types import SimpleNamespace
+
+    data = np.ones((5, 2), dtype=np.float32)
+    scales = np.ones(5)
+    residual = np.zeros(5)
+    prepared = SimpleNamespace(
+        blocks=((bivariate._LOWRANK, data, 0, 5, scales, residual),)
+    )
+
+    first = bivariate._instantiate_chain_blocks(prepared)[0]
+    second = bivariate._instantiate_chain_blocks(prepared)[0]
+    assert first[1] is second[1]
+    assert first[4] is second[4]
+    assert first[5] is second[5]
+    assert first[6] is not second[6]
+    assert first[7] is not second[7]
+    first[6][0] = 1.0
+    assert second[6][0] == 0.0
 
 
 def test_legacy_lowrank_requires_explicit_opt_in():

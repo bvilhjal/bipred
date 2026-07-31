@@ -1,34 +1,37 @@
-# bipred benchmark results
+# Historical benchmark snapshot
 
-Summary of the **bivariate-LDpred (bipred)** benchmark suite. Unless noted, each
-genome is a realistic **non-repeating coalescent** simulation (`msprime`), so the
-LD is real (long-range structure, recombination hotspots) with known ground
-truth. LD is stored **int8**-quantised (the default representation).
+> **Dated evidence, not current performance.** The numeric artifacts summarized
+> here were generated on 2026-07-06 and committed with `f409ec7`; the original
+> summary followed in `ecc886b8`. They predate the reviewed base revision
+> `5b69184`, including later low-rank, regional, mixed-panel parallel, and
+> adaptive-stopping work. No numbers were refreshed for the documentation
+> cleanup.
 
-- **Regenerated:** 2026-07-06, on numpy 2.2.6 / numba 0.66 / msprime 1.4.
-- **Reproduce:** `OPENBLAS_NUM_THREADS=1 python benchmarks/<script>.py` (see
-  [`README.md`](README.md) for what each script measures).
-- **Caveat:** these are *stochastic* benchmarks; every number is one Monte-Carlo
-  run, so re-running shifts values. Treat the environmental-overlap section as a
-  stress test, not a stable recovery claim.
-- **In-model vs real-genotype:** the rg-accuracy benchmarks (Sections 1–4)
-  simulate summary statistics with exactly the `β̂ ~ N(Rβ, R/n)` noise the
-  bivariate likelihood assumes — LD-reference mismatch is the only model error —
-  which is favourable terrain for a model-based estimator relative to
-  moment-based LDSC. The one out-of-model test on real individual-level
-  genotypes (Section 7) is where the bivariate `cross_corr` correction is *not*
-  reliably recovered. Read "halves LDSC's error" as an in-model result; it does
-  not automatically transfer to raw real-genotype summary statistics.
+Most runs use non-repeating coalescent simulation (`msprime`) with known truth
+and int8 LD. Recorded provenance is NumPy 2.2.6, Numba 0.66, and msprime 1.4.
+The CPU, OS, exact ldpred3 revision, and complete commands were not recorded, so
+the timing rows are not suitable for current hardware or release comparisons.
+Rerun the scripts described in [`README.md`](README.md) for current evidence.
 
-## Headline findings
+Further limitations:
+
+- these are stochastic Monte Carlo runs, so reruns will move the estimates;
+- Sections 1–4 simulate the likelihood's assumed
+  `beta_hat ~ N(R beta, R / n)` model, which favors a model-based estimator;
+- Section 7 is an out-of-model, individual-genotype stress test and does not
+  show reliable recovery from the bivariate `cross_corr` correction; and
+- external HAPNEST and cached-LD runs were not regenerated.
+
+## Findings in this snapshot
 
 - **Bivariate LDpred3 halves the genetic-correlation error of cross-trait LDSC** —
   mean |r̂g − rg| of **0.021 vs 0.042** across five architectures, at roughly
   **half the sampling SD** (0.063 vs 0.120).
 - **The gain grows under asymmetric power** (one weak trait): biv MAE 0.019 vs
   LDSC 0.040 and univariate-effect estimators ~0.048.
-- **Fast:** the bivariate fit takes **0.25 s at 5k variants** and **3.37 s at 80k**
-  in the committed runs, and scales to **80k variants at <0.7 GB**.
+- In the recorded environment, the bivariate fit takes **0.25 s at 5k variants**
+  and **3.37 s at 80k**, with **<0.7 GB** peak RSS at 80k. These are historical
+  measurements, not current guarantees.
 - **Polygenic overlap** (`res.mixer`) recovers the shared fraction monotonically;
   ratios (`frac_shared`, `rho_beta`) are reliable, absolute counts approximate.
 - In the idealized **sample-overlap** sweep, overlap biases rg upward unless

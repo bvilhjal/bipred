@@ -2,12 +2,11 @@
 
 bipred builds on a set of underscore-prefixed names from ldpred3's *internal*
 modules (``ldpred3.ldpred3``, ``ldpred3._kernels``, ``ldpred3.ldsc``); see the
-seam comment in ``bipred/bivariate.py`` and the Notes in ``CHANGELOG.md``. The
-install pins an exact ldpred3 commit precisely because that surface is private
-and unversioned. Importing ``bipred`` already forces those imports to *resolve*;
-these tests guard their *behaviour*, so an ldpred3 bump that changes what a
-borrowed helper does fails loudly here instead of silently changing bivariate
-numerics or LDSC-rg standard errors.
+seam comment in ``bipred/bivariate.py``. The documented install and CI pin an
+exact ldpred3 commit because that surface is private and unversioned. bipred's
+public API imports lazily; these tests force the complete seam to resolve and
+guard its *behaviour*, so an ldpred3 bump fails loudly instead of silently
+changing bivariate numerics or LDSC-rg standard errors.
 """
 
 import numpy as np

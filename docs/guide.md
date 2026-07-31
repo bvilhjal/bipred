@@ -1,279 +1,186 @@
-# bipred user guide
+# User guide
 
-bipred is a Python library for fitting two GWAS traits jointly with one matched
-LD reference. It returns per-trait SNP heritability, genetic correlation `r_g`,
-posterior-mean effects for prediction, and a MiXeR-style overlap summary.
+Use bipred when two harmonized GWAS traits share one ancestry-matched LD
+reference. The package returns genetic correlation, SNP heritability,
+posterior-mean effects for prediction, and polygenic-overlap summaries.
 
-Use this page for day-to-day usage. See [algorithm.md](algorithm.md) for the
-model and [rg.md](rg.md) for estimator details.
-
-## When to use bipred
-
-Use bipred when:
-
-- both traits have summary statistics on the same ancestry,
-- variants are harmonized to the same order and allele orientation, and
-- you want either genetic correlation, cross-trait PRS borrowing, or polygenic
-  overlap.
-
-The most reliable outputs are `res.rg`, the posterior-mean effects, and the
-overlap ratios. Absolute causal counts are useful but approximate.
+For a self-contained first run, use
+[`examples/minimal.py`](../examples/minimal.py). Model definitions are in
+[`algorithm.md`](algorithm.md); estimator interpretation is in
+[`rg.md`](rg.md).
 
 ## Inputs
 
-You need:
+Provide:
 
-1. `beta_hat1`, `beta_hat2`: standardized marginal effects for the same variants.
-2. `n_eff1`, `n_eff2`: scalar or per-variant effective sample sizes.
-3. LD for those variants:
-   - a dense correlation matrix `corr`, or
-   - blocks `[(R, idx), ...]` with contiguous `idx` arrays partitioning
-     `0..m-1`, where each `R` is dense or an ldpred3 `LowRankLD`.
-4. Optional `cross_corr` if the GWAS share samples.
+1. `beta_hat1`, `beta_hat2`: standardized marginal effects in identical variant
+   order and allele orientation.
+2. `n_eff1`, `n_eff2`: positive scalar or per-variant effective sample sizes.
+3. Either one dense LD correlation matrix or blocks `[(R, idx), ...]` whose
+   contiguous indices partition `0..m-1`.
+4. `cross_corr` when the GWAS sampling errors are correlated through shared
+   samples.
 
-bipred does not build LD or harmonize summary statistics. Use ldpred3 for that
-preparation. The bivariate sampler consumes dense, compact float `LowRankLD`,
-and LR8 blocks, including mixed block lists.
+bipred does not harmonize summary statistics or build LD. Blocks may be dense
+float/int8 matrices or ldpred3 `LowRankLD` objects, including LR8, and
+representations may be mixed.
 
-The default `ld_int8=None` policy keeps supplied int8 blocks as-is, quantises
-float blocks with at most 1500 variants, and keeps larger float blocks float32.
-Small D8 blocks use a quarter of float32 storage and are dequantised in the
-sampler; the size cutoff avoids quantising large dense blocks where conditioning
-can be sensitive. Use `ld_int8=True` to quantise every dense float block or
-`False` to keep dense float inputs float32. This setting does not alter
-`LowRankLD` factors.
+The default `ld_int8=None` keeps supplied int8 blocks, quantizes float blocks of
+at most 1,500 variants, and keeps larger float blocks as float32. This is a
+storage heuristic, not a real-data accuracy guarantee. Use `True` to quantize
+all dense float blocks or `False` to keep them float32; this option does not
+change low-rank factors.
 
-## Quickstart
+## Fit one chain
 
-Single dense LD matrix:
+For one dense matrix:
 
 ```python
 from bipred import ldpred3_auto_bivariate
 
-res = ldpred3_auto_bivariate(corr, beta_hat1, beta_hat2, n1, n2, seed=0)
-print(res)
+res = ldpred3_auto_bivariate(
+    corr, beta_hat1, beta_hat2, n_eff1, n_eff2, seed=0
+)
 ```
 
-Genome-wide blocks:
+For genome-wide blocks:
 
 ```python
 from bipred import ldpred3_auto_bivariate_blocks
 
 res = ldpred3_auto_bivariate_blocks(
-    blocks, beta_hat1, beta_hat2, n1, n2,
+    blocks, beta_hat1, beta_hat2, n_eff1, n_eff2,
     burn_in=200, num_iter=200, ncores=2, seed=0,
 )
 ```
 
-With Numba, `ncores>1` sweeps homogeneous dense or homogeneous low-rank blocks
-concurrently and returns the same seeded arrays as `ncores=1`. Mixed
-representations or dtypes use the serial fallback. These are persistent threads,
-not subprocesses, but every sweep waits for all blocks before updating the
-global parameters. Unequal block workloads can therefore limit the speed-up;
-leave `ncores=1` unless a representative run demonstrates a benefit.
+With Numba, `ncores>1` groups prepared blocks by representation, dtype, and
+dequantization scale, then sweeps each group in parallel. Mixed panels therefore
+remain parallel; groups with few or imbalanced blocks may scale poorly. Seeded
+results match `ncores=1`, but every sweep still waits for all blocks before
+updating global parameters.
 
-For auditable dispersed starts, run chains sequentially:
+## Fit multiple chains
 
 ```python
 from bipred import ldpred3_auto_bivariate_chains
 
 fit = ldpred3_auto_bivariate_chains(
-    blocks, beta_hat1, beta_hat2, n1, n2,
-    n_chains=4, seed=0,
+    blocks, beta_hat1, beta_hat2, n_eff1, n_eff2,
+    n_chains=4, chain_ncores=4, seed=0,
 )
 res = fit.posterior
 ```
 
-All finite, equal-length chains contribute equally. Any non-finite or
-wrong-length chain aborts instead of being discarded. `fit.basic_split_rhat`
-contains classical basic split-Rhat values plus explicit degeneracy flags; it
-does not filter chains or claim convergence. The driver does not support
-`rg_decorrelated=True`. Chains are sequential by default; `chain_ncores>1`
-fits them concurrently (2.5x on four cores with eight chains, bit-identical),
-and `ncores` controls block
-parallelism within each chain only, including its per-sweep synchronization
-barrier.
+The default starts are dispersed over union-causal fractions. All finite,
+equal-length chains are pooled with equal weight; a failed or wrong-length chain
+aborts the fit. `fit.basic_split_rhat` is a classical scalar diagnostic with
+degeneracy flags. It neither filters chains nor certifies convergence, and it
+does not cover variant-level effects.
 
-## Reading `BivariateResult`
+`chain_ncores>1` runs independent chains concurrently. Do not combine it with
+`ncores>1`: nested threading is rejected because it oversubscribes cores and
+races on Numba's process-wide thread count. The multi-chain driver also rejects
+`tol>0` and `rg_decorrelated=True`, both of which require different trace
+contracts. The pooled posterior records
+`retained_iterations = n_chains * retained_per_chain` and
+`stopped_early=False`.
 
-**Table 1. Main result fields.**
+## Read the result
 
-| field | meaning |
+**Table 1. Main `BivariateResult` fields.**
+
+| Field | Meaning |
 |---|---|
-| `beta1_est`, `beta2_est` | posterior-mean standardized effects for PRS scoring |
-| `h2` | `(h2_1, h2_2)` SNP heritabilities |
-| `rg` | genetic correlation |
+| `beta1_est`, `beta2_est` | posterior-mean standardized effects for scoring |
+| `h2` | SNP heritability pair `(h2_1, h2_2)` |
+| `rg` | genome-wide genetic correlation |
 | `p` | total non-null mixture fraction |
-| `sigma` | mean of the retained 2x2 effect-covariance iterates |
-| `pi` | `(pi00, pi10, pi01, pi11)` mixture: neither / trait 1 / trait 2 / both |
-| `noise_scale` | learned `(lambda1, lambda2)`; always present, `(1.0, 1.0)` when `noise_inflation=False` |
-| `genetic_samples` | retained raw `(gvar_1, gcov, gvar_2)` quadratic traces |
-| `noise_scale_samples` | retained `(lambda1, lambda2)` trace; all ones when inflation is off |
+| `pi` | `(pi00, pi10, pi01, pi11)` mixture |
+| `sigma` | mean retained 2 × 2 effect covariance |
+| `noise_scale` | learned residual factors; `(1, 1)` when disabled |
+| `genetic_samples` | retained `(gvar_1, gcov, gvar_2)` trace |
+| `retained_iterations` | post-burn-in sweeps actually retained |
+| `stopped_early` | whether single-chain adaptive stopping fired |
 
-Overlap summary:
+The overlap summary is available as:
 
 ```python
 mx = res.mixer
-mx["polygenicity"]     # per-trait causal fractions
-mx["n_causal"]         # per-trait causal counts
-mx["n_shared"]         # shared causal count
-mx["frac_shared"]      # shared fraction of the less-polygenic trait
-mx["rho_beta"]         # effect correlation within the shared component
-mx["rg_from_overlap"]  # overlap decomposition of r_g
+mx["frac_shared"]
+mx["rho_beta"]
+mx["rg_from_overlap"]
+mx["n_causal"], mx["n_shared"]
 ```
 
-`res.mixer_iterate_summary()` maps retained `pi` draws and covariance iterates
-to empirical retained-chain intervals. Because `sigma` uses a damped moment
-update rather than a conditional posterior draw, these are not Bayesian credible
-intervals. `res.mixer_posterior()` is a deprecated compatibility alias.
-`res.mixer_calibrated(infer1, infer2)` rescales counts using two univariate
-`ldpred3_auto_infer` fits.
+Ratios are generally safer than absolute causal counts. LD can spread inclusion
+mass to correlated neighbours, while reference mismatch can add inflation.
+For count-sensitive work, consider `noise_inflation=True` and
+`res.mixer_calibrated(infer1, infer2)` with two univariate ldpred3 fits.
 
-## Genetic Correlation
+## Genetic correlation
 
-Use `res.rg` as the main estimate. It uses the joint LD likelihood and is usually
-more precise than cross-trait LD Score regression.
+Use `res.rg` by default and `rg_decorrelated=True` for strongly asymmetric-power
+pairs. `ldsc_rg` is a fast independent screen. Interpretation, sample overlap,
+and overlap-interval semantics are covered in [`rg.md`](rg.md).
 
-Use `rg_decorrelated=True` when one trait is much better powered than the other:
+For per-region exploratory estimates:
 
 ```python
-res = ldpred3_auto_bivariate_blocks(
-    blocks, beta_hat1, beta_hat2, n1, n2,
-    rg_decorrelated=True,
+from bipred import regional_rg
+
+local = regional_rg(
+    res.beta1_est, res.beta2_est, blocks, region_labels,
+    min_variants=50,
 )
 ```
 
-For a fast independent screen:
+`region_labels` has one label per variant; labels need not be contiguous.
+Regional estimates use posterior-mean effects and expose `rg`, `gcov`, `gvar1`,
+`gvar2`, and `n_variants`. They are best used for ranking or comparison:
+uncorrected sample overlap contaminates every region, and the genome-wide model
+shrinks local estimates toward the genome-wide correlation.
 
-```python
-from bipred import ldsc_rg
-from ldpred3 import ld_scores
+## Options
 
-ell = ld_scores(blocks)
-rgr = ldsc_rg(beta_hat1, beta_hat2, ell, n1, n2)
-rgr.rg, rgr.rg_se, rgr.gcov_intercept
-```
+**Table 2. Main fitting options.**
 
-If LDSC returns a huge `|rg|` or standard error on a small panel, check its
-marginal `h2` estimates. The ratio can blow up when either LDSC heritability is
-near zero.
-
-## Prediction
-
-Score `beta1_est` and `beta2_est` like ordinary LDpred weights. The joint model
-helps most when one trait is under-powered and genetically correlated with a
-better-powered trait. Validate prediction out of sample; when there is little
-shared signal, the joint fit should largely decouple the traits but can still add
-Monte Carlo noise.
-
-## Polygenic Overlap
-
-The stable overlap outputs are ratios:
-
-- `frac_shared`
-- `rho_beta`
-- `rg_from_overlap`
-
-Absolute counts (`n_causal`, `n_shared`) are approximate. LD can spread posterior
-inclusion mass around causal variants, and finite reference panels can add more
-inflation. The default `p_init=0.02` avoids the older low-power over-count seen
-with larger initial polygenicity, but very low-power counts are still weakly
-identified.
-
-For count-sensitive work:
-
-- set `noise_inflation=True` when fitting on finite reference-panel LD,
-- use `res.mixer_calibrated(infer1, infer2)` to anchor per-trait counts on
-  univariate ldpred3 fits, and
-- treat MiXeR-style counts as descriptive unless validated for the architecture.
-
-## Sample Overlap
-
-If the two GWAS share samples, pass the cross-trait sampling-noise correlation:
-
-```python
-res = ldpred3_auto_bivariate_blocks(
-    blocks, beta_hat1, beta_hat2, n1, n2,
-    cross_corr=cross_corr,
-)
-```
-
-If known,
-
-**Equation 1. Sampling-noise correlation from shared samples.**
-
-```text
-cross_corr = N_shared * rho_pheno / sqrt(N1 * N2)
-```
-
-For fully shared samples, this is the phenotypic correlation among shared
-individuals. If unknown, approximate it from the cross-trait LDSC intercept:
-
-```python
-from bipred import estimate_sample_overlap
-
-rgr = ldsc_rg(beta_hat1, beta_hat2, ell, n1, n2)
-estimate_sample_overlap(rgr, n1, n2, pheno_corr=0.4)
-```
-
-This inversion requires an assumed non-zero phenotypic correlation. The LDSC
-intercept can also contain correlated population structure, measurement effects,
-or other cross-trait confounding, so it does not identify sample overlap by
-itself. Under an overlap-only model with a positive intercept and phenotypic
-correlation, using `pheno_corr=1` gives the effective overlap and the smallest
-shared-sample count compatible with `|rho_pheno| <= 1`--a lower bound, not an
-upper bound.
-
-`cross_corr=0` is a reasonable default for independent studies or first-pass
-analyses, but it can bias `r_g` upward when samples overlap strongly.
-
-## Main Options
-
-**Table 2. Main sampler options.**
-
-| option | default | use |
+| Option | Default | Use |
 |---|---:|---|
-| `ld_int8` | `None` | dense only: auto D8 through 1500 variants and float32 above; `True`/`False` force either dense policy |
-| `burn_in`, `num_iter` | `200`, `200` | Gibbs burn-in and sampling sweeps |
-| `tol`, `check_every` | `0.0`, `50` | adaptive stopping. `tol=0` (default) always runs the full `num_iter`. With `tol>0` the chain stops once the relative RMS change of *both* posterior means and the change in `r_g` fall below `tol`, checked every `check_every` retained sweeps. Ignored when `rg_decorrelated=True`, whose thinned effect samples need the full schedule |
-| `h2_init`, `p_init`, `rg_init` | `0.1`, `0.02`, `0.0` | exact genetic-moment starts; `h2_init` may be a pair and `p_init` is union-causal |
-| `pi_init` | `None` | explicit `(pi00, pi10, pi01, pi11)` start for overlap-sensitive work |
-| `sigma_prior_scale` | `None` | fixed per-trait slab-variance shrinkage target; decouples starts from the prior |
-| `cross_corr` | `0.0` | sample-overlap noise correlation |
-| `rg_decorrelated` | `False` | better `r_g` for asymmetric-power pairs |
-| `noise_inflation`, `ni_damp` | `False`, `0.1` | learn residual noise inflation |
-| `pi_prior` | `1.0` | symmetric Dirichlet mixture prior |
-| `h2_bounds`, `h2_cap` | `(1e-4, 1.0)`, `None` | heritability clamps |
-| `iw_df` | `10.0` | shrinkage strength for the moment update of `sigma` |
-| `sample_every` | `5` | thinning for retained effect samples (only with `rg_decorrelated=True`) |
-| `ncores` | `1` | deterministic within-chain block threads for homogeneous dense or low-rank inputs; mixed inputs fall back serially |
-| `chain_ncores` | `1` | *(multi-chain only)* chains fitted concurrently in threads. The sweep kernels release the GIL, so this scales; results stay bit-identical to a serial run because chains share the LD read-only and each keeps its own deterministic seed. Cannot be combined with `ncores>1` — nesting them oversubscribes the machine and races on Numba's process-wide thread count |
-| `seed` | `None` | RNG seed |
+| `burn_in`, `num_iter` | `200`, `200` | burn-in and retained sweeps |
+| `h2_init`, `p_init`, `rg_init` | `0.1`, `0.02`, `0` | coherent genetic-moment start; `p_init` is union-causal |
+| `pi_init` | `None` | explicit four-state overlap start |
+| `sigma_prior_scale` | `None` | fixed covariance shrinkage target across starts |
+| `cross_corr` | `0` | correlation of cross-trait sampling noise |
+| `rg_decorrelated` | `False` | alternative `r_g` for asymmetric power |
+| `noise_inflation`, `ni_damp` | `False`, `0.1` | learn and damp residual-noise inflation |
+| `pi_prior` | `1` | symmetric Dirichlet mixture concentration |
+| `h2_bounds`, `h2_cap` | `(1e-4, 1)`, `None` | ordinary bounds and optional expert ceiling |
+| `iw_df` | `10` | covariance shrinkage strength |
+| `ld_int8` | `None` | automatic, forced-int8, or forced-float dense storage |
+| `ncores` | `1` | within-chain block threads |
+| `chain_ncores` | `1` | multi-chain concurrency; cannot combine with `ncores>1` |
+| `tol`, `check_every` | `0`, `50` | optional single-chain stabilization heuristic |
+| `seed` | `None` | random seed |
+
+With `tol>0`, a single chain checks the relative RMS change in both
+posterior-mean effect vectors and the change in `r_g` every `check_every`
+retained sweeps. Meeting the threshold can stop the run early. This is a
+schedule- and seed-dependent stabilization heuristic, not evidence that the
+Markov chain converged. It is disabled for `rg_decorrelated=True` and unsupported
+by multi-chain inference; use dispersed full-length chains for diagnostics.
 
 ## Pitfalls
 
-- Use the same ancestry LD reference for both traits.
-- Harmonize variant order and allele orientation before fitting.
-- Keep effects on ldpred3's standardized scale.
-- Dense, `LowRankLD`, and mixed block lists are supported. A low-rank fit uses
-  the approximation encoded by its retained factor, so choose its rank or
-  retained variance deliberately. `ld_int8` controls dense storage only.
-- Do not over-interpret absolute overlap counts at low power.
-- Increase `burn_in` and `num_iter` if `h2` or `r_g` is unstable across seeds.
-- If you would rather over-provision `num_iter` than tune it, set `tol=1e-3`
-  and let the chain stop when it has converged. `result.retained_iterations`
-  and `result.stopped_early` report what actually ran. On a well-conditioned
-  panel with `num_iter=600` this cut a fit from 1.59 s to 0.17 s (9.2x) while
-  matching `r_g` to four decimals and the posterior means to a correlation of
-  0.999999.
-- A `RuntimeWarning` about an *implausible fit* means the fitted causal
-  fraction exceeded 0.5, or `h2` hit its bound, on a panel of at least 1000
-  variants. That normally indicates the LD reference is too small or too
-  weakly regularised for its block size. It is worth acting on for two
-  reasons: the estimates are suspect, **and** the sampler is much slower,
-  because the per-variant LD row update then fires for nearly every variant
-  instead of a small minority. Measured 2.2x between a reference at
-  `n_ref/block_size` of 1.6 and one at 20. Use a larger reference, smaller
-  blocks, or `ldpred3.shrink_ld_blocks`.
-- At low power, vary `pi_init` as a pre-specified sensitivity analysis: scalar
-  `p_init` cannot determine marginal polygenicity and causal overlap separately.
+- Match ancestry and harmonize variant order, alleles, and effect scale before
+  fitting.
+- Supply `cross_corr` when samples overlap; an LDSC intercept can also contain
+  confounding and does not identify overlap by itself.
+- Treat low-power absolute causal counts and regional absolute `r_g` values as
+  exploratory.
+- Vary `pi_init` as a prespecified sensitivity analysis when overlap is weakly
+  identified.
+- Validate prediction out of sample.
+- A warning about an *implausible fit* means a large causal fraction or an
+  `h2` bound was hit on a sizeable panel. Inspect LD quality, reference size,
+  block size, and regularization before interpreting or timing that fit.

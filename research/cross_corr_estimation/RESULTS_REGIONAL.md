@@ -1,7 +1,10 @@
-# Regional genetic correlation, and why in-sampler `cross_corr` enables it
+# Regional genetic correlation and overlap correction
 
-**Status: research benchmark.** Not a shipped feature. Code:
-[`bench_regional_rg.py`](bench_regional_rg.py). Genome-wide results:
+**Status:** research evidence behind the public exploratory `regional_rg`
+readout. The benchmark's joint `cross_corr` estimator is not shipped:
+production fits require a user-supplied `cross_corr`, then `regional_rg` computes
+posterior-mean regional quadratics. Code:
+[`bench_regional_rg.py`](bench_regional_rg.py). Genome-wide prototype results:
 [`RESULTS.md`](RESULTS.md).
 
 ## Why this is the case that matters
@@ -44,6 +47,8 @@ nominal label. Two estimators are reported:
 
 [`bench_regional_main.csv`](bench_regional_main.csv), `postmean` estimator:
 
+**Table 1. Regional estimates by overlap-correction arm.**
+
 | arm | null regions (realized ≈ 0.003) | r_g = 0.4 regions (realized 0.393) | r_g = 0.8 regions (realized 0.796) | null/strong separation *d* |
 |---|---:|---:|---:|---:|
 | `naive` (cc = 0) | **0.264** | 0.548 | 0.819 | 5.45 |
@@ -80,6 +85,8 @@ identically to every region.
 
 `postmean`, null-region estimate (realized ≈ 0) and separation *d*:
 
+**Table 2. Regional estimates by region size.**
+
 | region size | `naive` | `ldsc` | **`joint`** | `oracle` | *d*: naive / ldsc / **joint** / oracle |
 |---:|---:|---:|---:|---:|---|
 | 200 variants | 0.259 | 0.471 | **0.013** | 0.056 | 7.71 / 2.51 / **9.15** / 9.44 |
@@ -94,6 +101,8 @@ regions shrink (separation 9.15 → 4.71), as expected from fewer variants.
 ## 4. Estimator choice: `postmean` beats `sampled` for regions
 
 For `joint`, RMSE by region class:
+
+**Table 3. Regional RMSE by quadratic estimator.**
 
 | estimator | null | r_g = 0.4 | r_g = 0.8 |
 |---|---:|---:|---:|
@@ -119,8 +128,9 @@ correcting `cross_corr`:
 So regional estimates are biased *toward the genome-wide mean* by construction.
 This is a real limitation of reading regional r_g out of a genome-wide model, and
 it is the main argument for a **per-region Σ** (or a hierarchical prior over
-regions) if regional inference becomes a supported feature. It is orthogonal to
-`cross_corr`: correcting overlap fixes the contamination, not the shrinkage.
+regions) if calibrated regional inference is pursued. The public readout exposes
+the global-model quantity with this limitation documented. It is orthogonal to
+`cross_corr`: correcting overlap fixes contamination, not shrinkage.
 
 ## 6. Limitations
 

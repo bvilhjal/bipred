@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+import bipred.bivariate as bivariate
 import bipred.multichain as multichain
 from bipred.bivariate import ldpred3_auto_bivariate_blocks
 
@@ -64,10 +65,10 @@ def _result(m, retained, chain, *, genetic=None):
 
 
 def _fake_runner(calls):
-    def run(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, **kwargs):
+    def run(prepared, options, start):
         chain = len(calls)
-        calls.append(kwargs)
-        return _result(len(beta_hat1), kwargs["num_iter"], chain)
+        calls.append((prepared, options, start))
+        return _result(prepared.m, options.num_iter, chain)
 
     return run
 
@@ -82,7 +83,7 @@ def _inputs(m=5):
 def test_default_starts_seeds_shared_prior_and_equal_pool(monkeypatch):
     calls = []
     monkeypatch.setattr(
-        multichain, "ldpred3_auto_bivariate_blocks", _fake_runner(calls)
+        multichain, "_ldpred3_auto_bivariate_prepared", _fake_runner(calls)
     )
     blocks, beta1, beta2 = _inputs()
     result = multichain.ldpred3_auto_bivariate_chains(
@@ -90,11 +91,12 @@ def test_default_starts_seeds_shared_prior_and_equal_pool(monkeypatch):
     )
 
     expected_p = np.exp(np.linspace(np.log(1e-4), np.log(0.2), 4))
-    np.testing.assert_allclose([call["p_init"] for call in calls], expected_p)
-    assert all(call["pi_init"] is None for call in calls)
-    assert len(set(call["seed"] for call in calls)) == 4
+    np.testing.assert_allclose(
+        [1.0 - call[2].pi[0] for call in calls], expected_p
+    )
+    assert len(set(call[2].seed for call in calls)) == 4
     np.testing.assert_array_equal(
-        result.chain_seeds, [call["seed"] for call in calls]
+        result.chain_seeds, [call[2].seed for call in calls]
     )
     np.testing.assert_allclose(result.p_inits, expected_p)
     np.testing.assert_allclose(
@@ -107,7 +109,7 @@ def test_default_starts_seeds_shared_prior_and_equal_pool(monkeypatch):
     )
     assert result.sigma_prior_scale == pytest.approx((prior1, prior2))
     assert all(
-        call["sigma_prior_scale"] == pytest.approx((prior1, prior2))
+        (call[2].psi1, call[2].psi2) == pytest.approx((prior1, prior2))
         for call in calls
     )
     np.testing.assert_allclose(result.posterior.beta1_est, 2.5)
@@ -115,6 +117,8 @@ def test_default_starts_seeds_shared_prior_and_equal_pool(monkeypatch):
     assert result.posterior.pi_samples.shape == (16, 4)
     assert result.posterior.genetic_samples.shape == (16, 3)
     assert result.posterior.noise_scale_samples.shape == (16, 2)
+    assert result.posterior.retained_iterations == 16
+    assert result.posterior.stopped_early is False
     assert len(result.chain_summaries) == 4
     assert result.n_chains == 4
     assert result.retained_per_chain == 4
@@ -134,7 +138,7 @@ def test_default_starts_seeds_shared_prior_and_equal_pool(monkeypatch):
     calls_again = []
     monkeypatch.setattr(
         multichain,
-        "ldpred3_auto_bivariate_blocks",
+        "_ldpred3_auto_bivariate_prepared",
         _fake_runner(calls_again),
     )
     repeated = multichain.ldpred3_auto_bivariate_chains(
@@ -145,7 +149,7 @@ def test_default_starts_seeds_shared_prior_and_equal_pool(monkeypatch):
     calls_with_noise = []
     monkeypatch.setattr(
         multichain,
-        "ldpred3_auto_bivariate_blocks",
+        "_ldpred3_auto_bivariate_prepared",
         _fake_runner(calls_with_noise),
     )
     with_noise = multichain.ldpred3_auto_bivariate_chains(
@@ -165,7 +169,7 @@ def test_default_starts_seeds_shared_prior_and_equal_pool(monkeypatch):
 def test_explicit_pi_starts_are_the_alternative(monkeypatch):
     calls = []
     monkeypatch.setattr(
-        multichain, "ldpred3_auto_bivariate_blocks", _fake_runner(calls)
+        multichain, "_ldpred3_auto_bivariate_prepared", _fake_runner(calls)
     )
     blocks, beta1, beta2 = _inputs()
     pi_inits = np.array(
@@ -187,9 +191,8 @@ def test_explicit_pi_starts_are_the_alternative(monkeypatch):
         num_iter=4,
     )
     for call, expected in zip(calls, pi_inits):
-        np.testing.assert_allclose(call["pi_init"], expected)
-        assert call["p_init"] == pytest.approx(1.0 - expected[0])
-        assert call["sigma_prior_scale"] == (0.7, 0.8)
+        np.testing.assert_allclose(call[2].pi, expected)
+        assert (call[2].psi1, call[2].psi2) == (0.7, 0.8)
     np.testing.assert_allclose(result.p_inits, 1.0 - pi_inits[:, 0])
     np.testing.assert_allclose(result.pi_inits, pi_inits)
     assert result.sigma_prior_scale == (0.7, 0.8)
@@ -216,13 +219,15 @@ def test_h2_and_rg_use_pooled_raw_genetic_traces(monkeypatch):
         (0.40, 0.08, 0.70),
     ]
 
-    def run(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, **kwargs):
+    def run(prepared, options, start):
         chain = len(calls)
-        calls.append(kwargs)
-        genetic = np.tile(genetic_values[chain], (kwargs["num_iter"], 1))
-        return _result(len(beta_hat1), kwargs["num_iter"], chain, genetic=genetic)
+        calls.append((prepared, options, start))
+        genetic = np.tile(genetic_values[chain], (options.num_iter, 1))
+        return _result(prepared.m, options.num_iter, chain, genetic=genetic)
 
-    monkeypatch.setattr(multichain, "ldpred3_auto_bivariate_blocks", run)
+    monkeypatch.setattr(
+        multichain, "_ldpred3_auto_bivariate_prepared", run
+    )
     blocks, beta1, beta2 = _inputs()
     result = multichain.ldpred3_auto_bivariate_chains(
         blocks, beta1, beta2, 10_000, 12_000, num_iter=4
@@ -333,17 +338,19 @@ def test_real_sampler_matches_manual_seeded_pooling():
 def test_collapsed_finite_chain_is_not_filtered(monkeypatch):
     calls = []
 
-    def run(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, **kwargs):
+    def run(prepared, options, start):
         chain = len(calls)
-        calls.append(kwargs)
-        result = _result(len(beta_hat1), kwargs["num_iter"], chain)
+        calls.append((prepared, options, start))
+        result = _result(prepared.m, options.num_iter, chain)
         if chain == 0:
             result.beta1_est.fill(0.0)
             result.beta2_est.fill(0.0)
             result.genetic_samples.fill(0.0)
         return result
 
-    monkeypatch.setattr(multichain, "ldpred3_auto_bivariate_blocks", run)
+    monkeypatch.setattr(
+        multichain, "_ldpred3_auto_bivariate_prepared", run
+    )
     blocks, beta1, beta2 = _inputs()
     result = multichain.ldpred3_auto_bivariate_chains(
         blocks, beta1, beta2, 10_000, 12_000, num_iter=4
@@ -357,16 +364,16 @@ def test_collapsed_finite_chain_is_not_filtered(monkeypatch):
 def test_nonfinite_or_unequal_chain_aborts_the_fit(monkeypatch):
     calls = []
 
-    def nonfinite(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, **kwargs):
+    def nonfinite(prepared, options, start):
         chain = len(calls)
-        calls.append(kwargs)
-        result = _result(len(beta_hat1), kwargs["num_iter"], chain)
+        calls.append((prepared, options, start))
+        result = _result(prepared.m, options.num_iter, chain)
         if chain == 2:
             result.genetic_samples[0, 0] = np.nan
         return result
 
     monkeypatch.setattr(
-        multichain, "ldpred3_auto_bivariate_blocks", nonfinite
+        multichain, "_ldpred3_auto_bivariate_prepared", nonfinite
     )
     blocks, beta1, beta2 = _inputs()
     with pytest.raises(
@@ -377,12 +384,14 @@ def test_nonfinite_or_unequal_chain_aborts_the_fit(monkeypatch):
         )
     assert len(calls) == 3
 
-    def unequal(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, **kwargs):
-        result = _result(len(beta_hat1), kwargs["num_iter"], 0)
+    def unequal(prepared, options, start):
+        result = _result(prepared.m, options.num_iter, 0)
         result.genetic_samples = result.genetic_samples[:-1]
         return result
 
-    monkeypatch.setattr(multichain, "ldpred3_auto_bivariate_blocks", unequal)
+    monkeypatch.setattr(
+        multichain, "_ldpred3_auto_bivariate_prepared", unequal
+    )
     with pytest.raises(RuntimeError, match="genetic_samples with shape"):
         multichain.ldpred3_auto_bivariate_chains(
             blocks, beta1, beta2, 10_000, 12_000, num_iter=4
@@ -392,11 +401,13 @@ def test_nonfinite_or_unequal_chain_aborts_the_fit(monkeypatch):
 def test_sampler_failure_reports_chain_and_seed(monkeypatch):
     calls = []
 
-    def fail(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, **kwargs):
-        calls.append(kwargs)
+    def fail(prepared, options, start):
+        calls.append((prepared, options, start))
         raise ArithmeticError("deliberate numerical failure")
 
-    monkeypatch.setattr(multichain, "ldpred3_auto_bivariate_blocks", fail)
+    monkeypatch.setattr(
+        multichain, "_ldpred3_auto_bivariate_prepared", fail
+    )
     blocks, beta1, beta2 = _inputs()
     expected_seed = int(multichain._deterministic_chain_seeds(19, 4)[0])
     with pytest.raises(
@@ -436,6 +447,85 @@ def test_decorrelated_rg_is_explicitly_unsupported():
             rg_decorrelated=True,
             num_iter=4,
         )
+
+
+def test_adaptive_stopping_is_rejected_before_inputs_or_chains_are_touched(
+        monkeypatch):
+    def unexpected(*args, **kwargs):
+        raise AssertionError("input preparation or chain execution was reached")
+
+    monkeypatch.setattr(multichain, "_prepare_bivariate_inputs", unexpected)
+    monkeypatch.setattr(
+        multichain, "_ldpred3_auto_bivariate_prepared", unexpected
+    )
+    blocks, beta1, beta2 = _inputs()
+    with pytest.raises(ValueError, match=r"tol > 0.*equal-length"):
+        multichain.ldpred3_auto_bivariate_chains(
+            blocks,
+            beta1,
+            beta2,
+            10_000,
+            12_000,
+            tol=1e-3,
+            num_iter=4,
+        )
+
+
+def test_multichain_prepares_dense_ld_once_and_shares_read_only_payload(
+        monkeypatch):
+    prepare_calls = []
+    real_prepare = bivariate._prepare_block
+
+    def counted_prepare(R, ld_int8):
+        prepare_calls.append((R, ld_int8))
+        return real_prepare(R, ld_int8)
+
+    seen_prepared = []
+
+    def run(prepared, options, start):
+        seen_prepared.append(prepared)
+        return _result(prepared.m, options.num_iter, len(seen_prepared) - 1)
+
+    monkeypatch.setattr(bivariate, "_prepare_block", counted_prepare)
+    monkeypatch.setattr(
+        multichain, "_ldpred3_auto_bivariate_prepared", run
+    )
+    blocks, beta1, beta2 = _inputs()
+    result = multichain.ldpred3_auto_bivariate_chains(
+        blocks,
+        beta1,
+        beta2,
+        10_000,
+        12_000,
+        n_chains=4,
+        num_iter=4,
+        seed=3,
+    )
+
+    assert len(prepare_calls) == 1
+    assert len(seen_prepared) == 4
+    assert all(prepared is seen_prepared[0] for prepared in seen_prepared)
+    assert seen_prepared[0].blocks[0][1].flags.writeable is False
+    assert result.posterior.retained_iterations == 16
+
+
+def test_shared_configuration_error_is_not_wrapped_as_a_chain_failure(
+        monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        multichain, "_ldpred3_auto_bivariate_prepared", _fake_runner(calls)
+    )
+    blocks, beta1, beta2 = _inputs()
+    with pytest.raises(ValueError, match="n_eff.*finite positive"):
+        multichain.ldpred3_auto_bivariate_chains(
+            blocks,
+            beta1,
+            beta2,
+            0,
+            12_000,
+            num_iter=4,
+        )
+    assert calls == []
 
 
 def test_basic_split_rhat_formula_and_degeneracy_metadata():

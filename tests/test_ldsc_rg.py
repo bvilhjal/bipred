@@ -104,6 +104,8 @@ def test_estimate_sample_overlap_inversion():
     ("beta_hat1", np.array([1.0, 2.0, np.inf, 4.0])),
     ("beta_hat2", np.array([1.0, 2.0, np.nan, 4.0])),
     ("ld_scores", np.array([1.0, 2.0, np.nan, 4.0])),
+    ("ld_scores", np.array([1.0, 2.0, 0.0, 4.0])),
+    ("ld_scores", np.array([1.0, 2.0, -0.1, 4.0])),
 ])
 def test_ldsc_rg_validates_summary_statistic_vectors(name, bad):
     beta, ell, n = _simple_inputs()

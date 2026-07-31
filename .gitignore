@@ -1,6 +1,12 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.venv/
+venv/
 
 # Python build / packaging artifacts
 *.egg-info/

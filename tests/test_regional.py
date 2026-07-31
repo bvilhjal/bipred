@@ -151,8 +151,15 @@ def test_degenerate_region_gives_nan_not_an_exception():
 
 @pytest.mark.parametrize("kwargs,match", [
     (dict(regions=[0, 0, 1]), "one label per variant"),
+    (dict(regions=np.array([[0, 0], [1, 1]])), "one-dimensional"),
+    (dict(regions=[0, 0, None, 1]), "None labels"),
+    (dict(beta1=np.ones((2, 2))), "one-dimensional"),
+    (dict(beta2=np.ones((2, 2))), "one-dimensional"),
     (dict(min_variants=0), "min_variants must be >= 1"),
     (dict(min_variants=1.5), "min_variants must be an integer"),
+    (dict(min_variants=np.bool_(True)), "min_variants must be an integer"),
+    (dict(allow_legacy_lowrank=1), "allow_legacy_lowrank.*boolean"),
+    (dict(clip=1), "clip.*boolean"),
 ])
 def test_validation(kwargs, match):
     R = _ar1(0.3, 4)

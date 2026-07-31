@@ -1,59 +1,49 @@
 # Overlap correction and regional genetic correlation
 
-**Status: research. Nothing here is shipped.** This directory imports almost
-nothing from `bipred` (only `ldsc_rg`, to build a competing baseline) and adds no
-public API. It exists to decide whether two features are worth building, and to
-leave a record adequate for someone else to check the reasoning.
+**Status:** `bipred.regional_rg` is now a public exploratory API. The
+in-sampler estimator of `cross_corr` and the per-region covariance models in
+this directory remain research prototypes and are not used by the package.
 
 ## Start here
 
-| if you want | read |
+**Table 1. Research documents.**
+
+| Goal | Document |
 |---|---|
-| the story, with the derivations and the dead ends | **[`NOTES.md`](NOTES.md)** |
-| genome-wide numbers | [`RESULTS.md`](RESULTS.md) |
-| regional numbers | [`RESULTS_REGIONAL.md`](RESULTS_REGIONAL.md) |
+| derivations, failed approaches, and conclusions | [`NOTES.md`](NOTES.md) |
+| genome-wide `cross_corr` experiments | [`RESULTS.md`](RESULTS.md) |
+| evidence behind public `regional_rg` caveats | [`RESULTS_REGIONAL.md`](RESULTS_REGIONAL.md) |
 
-## The question, and the answer
+## Conclusions
 
-`cross_corr` is the correlation of the GWAS *sampling noise* induced by
-overlapping samples. bipred takes it as a fixed user input, usually derived from
-the cross-trait LDSC intercept. Can the Gibbs sampler estimate it instead?
+`cross_corr` is the correlation of GWAS sampling noise induced by overlapping
+samples. It reflects the phenotypic correlation among shared individuals; it is
+not the environmental correlation alone.
 
-Yes — and the useful part of the answer is *where it matters*:
+- Genome-wide joint estimation was not worth integrating. In these simulations
+  it helped below roughly 50,000 variants, while the LDSC intercept caught up at
+  larger `m`, where real GWAS normally operate.
+- Regional estimates cannot identify overlap locally. Users must supply a
+  defensible genome-wide `cross_corr` to the fit before calling `regional_rg`.
+  Leaving overlap uncorrected contaminated every simulated region.
+- Public `regional_rg` deliberately reads regional quadratics from
+  posterior-mean effects. It supports dense, int8, and low-rank LD, but estimates
+  remain shrunk toward the genome-wide correlation and are intended mainly for
+  ranking and comparison.
+- Experimental per-region covariance models did not resolve calibration well
+  enough to ship.
 
-- **Genome-wide: not worth building.** The in-sampler estimator wins below
-  m ≈ 50,000 variants, but the LDSC intercept converges as `1/sqrt(m)` and is
-  equal or better past that. A real GWAS is comfortably past it.
-- **Regionally: a prerequisite.** A region has 10²–10³ variants by construction,
-  where the intercept is unusable, and overlap cannot be estimated within a
-  region at all. Left uncorrected it manufactures r_g ≈ 0.26 in regions whose
-  true r_g is **zero** — at every null locus, since the same spurious covariance
-  is added to all of them.
-- **A second problem sits behind it.** Regional estimates are also shrunk toward
-  the genome-wide correlation, because the sampler carries one effect covariance
-  for the whole genome. Correcting `cross_corr` does not touch this. Pooling the
-  full per-region covariance fails outright; constraining regions to share a
-  scale and differ only in correlation does much better. See `NOTES.md` §8–§10.
+## Files and commands
 
-A clarification, since the name misleads: `cross_corr` is **not** the
-environmental correlation `r_e`. It is a *noise* correlation, reflecting the
-phenotypic correlation among shared individuals — genetic and environmental
-combined. Summary statistics do not separate them.
+**Table 2. Research artifacts.**
 
-## Files
-
-| file | what it is |
+| File | Purpose |
 |---|---|
-| `NOTES.md` | the narrative account, including two errors of ours and what they cost |
-| `RESULTS.md`, `RESULTS_REGIONAL.md` | measurements, with limitations |
-| `estimate_cross_corr_prototype.py` | the original minimal proof of concept (see caveat below) |
-| `bench_cross_corr.py` | genome-wide benchmark; grids `main`, `n`, `m`, `ldwide`, `scale` |
-| `bench_regional_rg.py` | regional r_g benchmark; grids `main`, `size` |
-| `bench_hier_sigma.py` | per-region covariance models: `global`, `perregion`, `hier`, `rho`, fixed-`nu` sweep |
-| `bench_*.csv`, `results.csv` | committed outputs; every figure quoted in the docs re-derives from these |
-
-Each script is runnable standalone and documents its own design in its module
-docstring:
+| `estimate_cross_corr_prototype.py` | minimal joint-estimation prototype |
+| `bench_cross_corr.py` | genome-wide grids: `main`, `n`, `m`, `ldwide`, `scale` |
+| `bench_regional_rg.py` | evidence used to characterize `regional_rg` |
+| `bench_hier_sigma.py` | unshipped per-region covariance experiments |
+| `bench_*.csv`, `results.csv` | committed raw outputs |
 
 ```bash
 OPENBLAS_NUM_THREADS=1 python research/cross_corr_estimation/bench_cross_corr.py all 20
@@ -61,28 +51,21 @@ OPENBLAS_NUM_THREADS=1 python research/cross_corr_estimation/bench_regional_rg.p
 OPENBLAS_NUM_THREADS=1 python research/cross_corr_estimation/bench_hier_sigma.py main 10
 ```
 
-Numba-accelerated where it matters, with a pure-NumPy fallback; all seeded.
+The scripts are seeded and use Numba where useful, with NumPy fallbacks.
 
-> **Caveat on `estimate_cross_corr_prototype.py` and `results.csv`.** The
-> prototype draws the causal effects *once* and redraws only the sampling noise
-> across its five replicates, and reports `np.std` with `ddof=0`. Its ± figures
-> therefore understate replicate-to-replicate variability — the same defect
-> described in `NOTES.md` §6, which is why that section exists. The *direction*
-> of its conclusion is confirmed by the properly replicated benchmarks; its
-> dispersions are not. It is kept because it is the shortest readable derivation
-> of the method.
+The earliest prototype redraws sampling noise but reuses one causal-effect draw
+across its five replicates and reports population SD (`ddof=0`). Its dispersion
+is therefore understated. Later benchmarks redraw effects and noise per
+replicate; keep the prototype only as a short derivation.
 
-## What a production feature would still require
+## What remains unshipped
 
-1. **Whitening for every LD representation.** The update needs a per-block
-   `L^{-1}`. Dense LD has one; bipred's default int8 and its low-rank factors do
-   not. This is the main integration question.
-2. **Opt-in**, default off, so the golden-test-guarded kernels and existing
-   outputs are untouched when it is not in use — the more so because estimating
-   the parameter costs ~1.7× RMSE when there is no overlap to find.
-3. The sweep-boundary draw wired into the Numba/threading RNG, a
-   `BivariateResult` field, validation, docs.
-4. Validation on the **four-state mixture** and realistic LD, neither of which
-   these infinitesimal, dense-LD prototypes exercise.
-5. For regional inference specifically: resolve the shrinkage of `NOTES.md` §8.
-   It is a larger obstacle than the whitening.
+Integrating the joint `cross_corr` update would still require:
+
+1. whitening for dense, int8, and low-rank LD;
+2. validation in the production four-state mixture and realistic LD;
+3. opt-in API, result metadata, seeded threading behavior, and tests; and
+4. evidence that it improves prediction and heritability, not only `r_g`.
+
+The regional readout itself has shipped; its known biases are part of the public
+contract rather than solved by the unshipped joint estimator.

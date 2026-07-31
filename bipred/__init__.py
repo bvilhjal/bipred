@@ -18,8 +18,9 @@ Public API::
 
 ``ldpred3_auto_bivariate`` runs on a single dense LD matrix;
 ``ldpred3_auto_bivariate_blocks`` streams the genome block by block. Both return
-a :class:`~bipred.bivariate.BivariateResult`. The multi-chain driver runs
-dispersed chains sequentially and pools every finite, equal-length chain.
+a :class:`~bipred.bivariate.BivariateResult`. The multi-chain driver can run
+dispersed chains serially or concurrently and pools every finite, equal-length
+chain.
 
 Per-locus structure comes from :func:`~bipred.regional.regional_rg`, which turns
 a fit into a **regional** genetic correlation. Read its docstring first: it

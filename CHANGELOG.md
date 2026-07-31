@@ -1,259 +1,65 @@
 # Changelog
 
-All notable changes to **bipred** are recorded here. The format is loosely based
-on [Keep a Changelog](https://keepachangelog.com/), and the project aims to
-follow [Semantic Versioning](https://semver.org/).
+User-visible changes to **bipred** are recorded here. The project is currently
+`0.1.0.dev0`; all entries remain unreleased.
 
 ## [Unreleased]
 
-### Performance
-- **`ncores > 1` now parallelises mixed LD panels.** The fused block-parallel sweep
-  previously required *every* prepared block to share kind, dtype and dequantisation
-  scale, and silently fell back to a fully serial sweep otherwise — which is exactly
-  what the default `ld_int8=None` policy produces (int8 at or below 1500 variants,
-  float32 above), so a genome-wide fit could ignore `ncores` entirely without
-  reporting it. Blocks are now bucketed by representation and each bucket is swept
-  by its own fused parallel call. Measured 1.87x on 2 cores and 2.13x on 4 for a
-  14-block mixed panel (m=20400, 80 sweeps) that previously ran serial at any
-  `ncores`. Results remain bit-identical to `ncores=1`.
-- **Per-sweep working buffers are allocated once.** The sampler drew
-  `rng.random(m)`, two `rng.standard_normal(m)` and two `np.zeros(m)` afresh every
-  sweep; these are now preallocated and refilled in place (`out=` for the RNG, so
-  the stream is unchanged). Removes five length-m float64 allocations per sweep —
-  ~40 MB/sweep at m=1e6, ~400 MB/sweep at m=1e7. The `noise_inflation` effective-N
-  deflation and residual chi-square likewise reuse buffers, preserving the original
-  multiplication order.
-- **`regional_rg` no longer loops over variants in Python.** First-appearance region
-  order comes from `np.unique(..., return_index=True)` instead of an interpreted
-  pass over all `m` labels; each block's effects are gathered once rather than once
-  per region within the block; and the int8 dequantisation scale is applied in place,
-  removing a second `len(sub)^2` float64 temporary per region.
-- **Cross-trait LDSC jackknife uses contiguous index slices.** Delete-a-block
-  replicates built a fresh length-m boolean mask per block and re-gathered several
-  columns per fit; `np.array_split` already yields contiguous ranges, so the
-  complement is now two slices and each column is gathered once per replicate.
-- **Lower peak memory for `rg_decorrelated=True`.** `_decorrelated_cov` forms the two
-  `R @ samples` products one at a time instead of holding both alongside the retained
-  effect samples — three `(n_saved, m)` arrays live instead of four.
+### Added
 
-All of the above are bit-exact: the golden bivariate and LDSC tests, and the
-serial/parallel equivalence tests, pass unchanged.
+- Bivariate LDpred for dense and blockwise LD:
+  `ldpred3_auto_bivariate`, `ldpred3_auto_bivariate_blocks`, and
+  `BivariateResult`.
+- Four-state polygenic-overlap summaries, retained-iterate summaries, optional
+  residual-noise inflation, and calibration against two univariate ldpred3
+  fits.
+- Cross-trait LD Score regression (`ldsc_rg`) and the
+  `estimate_sample_overlap` helper.
+- Deterministic multi-chain fitting with dispersed starts, equal-weight pooling,
+  basic split-Rhat diagnostics, and optional chain concurrency through
+  `chain_ncores`.
+- Regional exploratory genetic correlation (`regional_rg`) from posterior-mean
+  effects. Results expose regional covariance, variances, and variant counts;
+  known sample-overlap contamination and genome-wide shrinkage are documented.
+- Optional single-chain adaptive stopping through `tol` and `check_every`, with
+  explicit retained-iteration metadata. This is a stabilization heuristic, not
+  a convergence test.
 
 ### Changed
-- **LDpred3 0.2.13 compatibility.** The tested dependency revision is now
-  `db3ebd2385b7e3f347712f8761682c0eb49df3e4`, including the corrected
-  low-rank-plus-diagonal contract introduced in `382fb90`. BiPred no longer imports or
-  advertises LDpred3's removed packed-triangular D8T representation, and its
-  declared minimum is now `ldpred3>=0.2.13`. Cross-trait LDSC explicitly checks
-  predictor variation before calling LDpred3's WLS helper, preserving the
-  documented full-fit error and undefined jackknife SE for unidentified fits.
-  A public-export smoke test now catches lazy import failures at the dependency
-  seam.
-- **Coherent four-state initialization.** `h2_init` (now scalar or per-trait),
-  `p_init`, and `rg_init` now initialize a `pi`/`Sigma` pair whose implied
-  marginal heritabilities and genetic correlation equal those values exactly.
-  Previously, the equal non-null split made the implied marginal `h2` only
-  `2/3 * h2_init` and the implied genetic correlation `rg_init / 2`.
-  `p_init` is now documented precisely as the union-causal probability;
-  `pi_init` exposes the otherwise-unidentified four-state overlap, and
-  `sigma_prior_scale` can hold the persistent covariance-prior target fixed
-  while starts vary. Seeded outputs change because this corrects the actual
-  starting covariance rather than merely relabelling it.
-- **Size-aware automatic dense-LD storage.** `ld_int8=None` is now the default:
-  supplied int8 blocks stay int8, float blocks with at most 1500 variants are
-  int8-quantised, and larger float blocks remain float32. This keeps D8's
-  fourfold storage saving on small blocks without exposing large dense blocks to
-  conditioning-sensitive quantisation. `ld_int8=True` quantises every float
-  block and `False` keeps every float input float32. Existing small-block int8
-  goldens are unchanged.
-- **Default `p_init` lowered from `0.1` to `0.02`** for the bivariate sampler
-  (`ldpred3_auto_bivariate[_blocks]`), matching ldpred3's realistic ~2 %-causal
-  starting polygenicity. Besides being a better default, this **fixes the
-  low-power absolute-count over-count**: at low per-SNP power the single-chain
-  count is influenced by its starting value, and the old `p_init=0.1` inflated it
-  ~3×. With `p_init=0.02` the `mixer` `n_causal`/`n_shared` calibrate to ≈1× truth
-  across the whole power range (benchmarked below). The mixture is still updated
-  each sweep; the bivariate golden test pins `p_init` explicitly, so it is
-  unaffected.
 
-### Added
-- **Regional (per-locus) genetic correlation** — `regional_rg` and
-  `RegionalRgResult`. Turns a fitted bivariate model into a per-region genetic
-  correlation by restricting the LD-aware quadratics to each region's variants,
-  using the posterior-mean effects. Regions are given as a per-variant label
-  array, may be non-contiguous, and may span blocks (LD is block-diagonal, so
-  the within-block contributions sum exactly). All three LD representations are
-  supported without densifying: float32, int8 (dequantised on the fly) and
-  `LowRankLD` factors, for which the region quadratic is
-  `(W_sub' a)·(W_sub' b) + sum residual_i a_i b_i`. The result also exposes the
-  three raw quadratics so regions can be pooled or `rg` re-derived without
-  refitting.
-
-  Two known biases are documented rather than corrected, and callers should read
-  them before interpreting output. Uncorrected **sample overlap inflates every
-  region identically** — regions whose true `rg` is zero read about 0.26 in
-  simulation — so `cross_corr` should be supplied to the fit whenever the cohorts
-  may overlap; the contamination cannot be estimated within a region and does not
-  average out across them. Separately, regional estimates are **shrunk toward the
-  genome-wide correlation** because the sampler carries a single genome-wide
-  effect covariance; this is unaffected by `cross_corr` and does not diminish
-  with larger regions. The estimates are therefore better suited to ranking and
-  comparing regions than as calibrated absolute values. Quantified in
-  `research/cross_corr_estimation/RESULTS_REGIONAL.md`.
-- **Semantic guards on the ldpred3 private-API seam.** A new
-  `tests/test_ldpred3_seam.py` pins the *behaviour* (not just the importability)
-  of the underscore-prefixed ldpred3 symbols bipred depends on — the int8 scale
-  `_Q8 == 127`, the WLS/weight helpers `_wls` / `_weights`, and the per-variant-N
-  broadcaster `_as_n_vector` — so an ldpred3 revision bump that silently changes
-  any of them fails loudly here instead of quietly perturbing bivariate numerics
-  or LDSC-rg standard errors.
-- **Scalar-N hoisting regression test.** A bit-identity test pins the documented
-  invariant that a shared scalar N and a constant per-variant N vector produce
-  exactly equal results (the `n_const` fast path leaves the per-SNP arithmetic
-  unchanged) — previously asserted only in a docstring.
-- **Deterministic within-chain block parallelism.** `ncores>1` now fuses
-  homogeneous dense or homogeneous low-rank blocks into one Numba `prange`
-  sweep. Random arrays are generated before launch and the three counts plus six
-  floating statistics are reduced in genome order, preserving seeded
-  `ncores=1` results exactly. Mixed representations or dtypes fall back
-  serially. Multi-chain inference still runs chains sequentially; this setting
-  parallelises blocks within each chain. The persistent worker threads meet at
-  a required barrier before every global parameter update, so speed-up depends
-  on block count and workload balance rather than scaling automatically with
-  `ncores`.
-- **Sequential multi-chain bivariate inference.**
-  `ldpred3_auto_bivariate_chains` runs deterministic dispersed chains one at a
-  time under one shared covariance prior and pools every finite, equal-length
-  chain with equal weight. Non-finite or unequal chains abort rather than being
-  filtered. The result exposes auditable starts/seeds and classical basic
-  split-Rhat values with degeneracy metadata, but makes no convergence claim
-  and has no `converged` flag. `rg_decorrelated=True` is not supported by
-  this driver. Split chains stuck at different constants report infinite
-  Rhat, sampler failures include the chain seed, and the reported noise scale
-  is consistently the retained-iterate mean for single- and multi-chain fits.
-- **Compact low-rank LD inference.** The bivariate block sampler now
-  consumes ldpred3 float `LowRankLD` and LR8 factors without materialising dense
-  LD, and permits mixed dense/low-rank block lists. It maintains two persistent
-  rank-size score vectors per low-rank block, giving `O(k*r)` sweep work and
-  storage for block size `k` and rank `r`. The adapter supports both released
-  row-normalised factors and ldpred3's newer globally scaled factor plus
-  diagonal-residual contract; `ld_int8` continues to control dense storage only.
-  Because legacy row normalisation can fabricate strong LD for weak factor rows,
-  it now requires explicit `allow_legacy_lowrank=True`; corrected compact
-  inference requires ldpred3 revision `382fb90` or newer.
-- **Configurable four-state mixture prior (`pi_prior`).** The Dirichlet
-  concentration for the per-sweep `π` draw is now a parameter (default `1.0`,
-  the historical uniform prior; `0.5` is Jeffreys). Backward compatible. Mirrors
-  ldpred3's univariate `p_prior`; a *minor* lever for the absolute counts under
-  real LD (matters mainly in the no-LD limit).
-- **Re-characterized and re-benchmarked the absolute polygenic counts (docs +
-  benchmark).** Against known truth, with the realistic `p_init=0.02` default the
-  `mixer` counts are **well calibrated across the whole per-SNP power range**
-  (per-trait `count/true` ≈1.0 up to `N·h²/M~0.5`, ≈1.1–1.2 by `N·h²/M=2`) — the
-  large low-power over-count reported in earlier development was a `p_init=0.1`
-  artifact. The residual is a mild over-count that **grows with power**
-  (LD-spreading — correlated SNPs recruited around each causal), a little larger
-  on a finite reference panel. Trimmed by `noise_inflation` (mismatch part) and
-  by univariate anchoring via `mixer_calibrated`; `r_g` and the overlap ratios
-  cancel it. **New `unical` sweep** in `benchmarks/mixer_overlap.py` benchmarks
-  `mixer_calibrated` vs truth (joint vs calibrated per-trait and shared counts
-  across power); the `ldmatch` framing was corrected (LD-spreading vs
-  reference-mismatch) and all sweeps were rerun. `docs/rg.md` and
-  `docs/algorithm.md` (the "Calibrating the counts" table) rewritten accordingly.
-- **Initial release: bivariate (two-trait) LDpred, split out of `ldpred3`.**
-  The four-state joint sampler (`ldpred3_auto_bivariate` /
-  `ldpred3_auto_bivariate_blocks`, returning `BivariateResult`) moves here
-  unchanged from `ldpred3/bivariate.py`. It jointly fits two traits sharing one
-  LD reference and reports per-trait SNP heritability, the genetic correlation
-  `r_g` (two estimators: the same-sweep quadratic ratio and a decorrelated
-  variant for asymmetric-power pairs), the four-state causal mixture
-  `(π₀₀, π₁₀, π₀₁, π₁₁)`, and posterior-mean effects that let a well-powered
-  trait sharpen a correlated under-powered one. Sample overlap is handled via
-  `cross_corr`; the effect-covariance `Σ` uses an inverse-Wishart-inspired
-  diagonal shrinkage target (`iw_df`) in a damped moment update.
-- **MiXeR-style polygenic-overlap parameters** (`BivariateResult.mixer` and
-  `.mixer_calibrated`): per-trait and shared polygenicity, the shared fraction,
-  the within-shared effect correlation `ρ_β`, and the `r_g` overlap
-  decomposition. `mixer_calibrated` anchors the absolute counts on two univariate
-  `ldpred3_auto_infer` runs.
-- **Retained-iterate summaries for overlap counts** —
-  `BivariateResult.mixer_iterate_summary(level=0.95)`. The sampler retains
-  post-burn-in mixture draws and effect-covariance iterates (`pi_samples`,
-  `sigma_samples`) and maps them through the MiXeR decomposition to return an
-  empirical mean and central iterate interval for `n_causal`, `n_shared`,
-  `frac_shared`, `ρ_β`, and `rg_from_overlap`. Because `Sigma` receives a damped
-  moment update rather than a conditional posterior draw, these are not Bayesian
-  credible intervals and no calibration claim is made. They also do not capture
-  LD-reference-mismatch bias. The old `mixer_posterior()` name remains as a
-  deprecated compatibility alias.
-- **Noise-inflation option for calibrated absolute counts** —
-  `ldpred3_auto_bivariate*(..., noise_inflation=True)`. Learns a per-trait
-  LDSC-intercept-style factor `λ_t ≥ 1` from the residual misfit
-  (`b_hat − R·β`) and fits with an effective `N_t / λ_t`. Under a matched LD
-  reference the residual is pure sampling noise so `λ ≈ 1` (a no-op); under
-  LD-reference mismatch it is inflated, so `λ > 1` makes the sampler stop reading
-  the misfit as extra polygenicity. This removes the **N-growing** component of
-  the polygenic-overlap count inflation with `h²`/`rg` unchanged: in the
-  committed `calibration` sweep (`benchmarks/mixer_overlap.csv`, N = 1k-20k),
-  the reference-mismatch count inflation rises to ~1.2× with the option off and
-  is pulled back to ~1.0× with it on (learned `λ` ≈ 1.1-1.2; a scalar `λ` can't
-  absorb structured mismatch entirely). Off
-  by default; the learned factors are on `BivariateResult.noise_scale`. New
-  `benchmarks/mixer_overlap.py` `calibration` sweep reports the on/off relative
-  polygenicity, `λ`, and retained-iterate interval inclusion across power.
-- **Cross-trait LD Score regression** (`ldsc_rg`, `LDSCRgResult`,
-  `estimate_sample_overlap`), moved from ldpred3 so bipred owns *all*
-  genetic-correlation estimation. It is the fast, moment-based `r_g` estimator and
-  the independent cross-check on the joint fit, and reuses ldpred3's univariate
-  LDSC internals (`ld_scores`, and the `_wls` / `_weights` helpers from
-  `ldpred3.ldsc`). ldpred3 keeps only univariate `ldsc_h2`.
-- **Tests** carried over from ldpred3: statistical recovery of `r_g` / `h²` /
-  overlap and cross-trait borrowing (`tests/test_bivariate.py`), plus a
-  bit-exact golden characterization test (`tests/test_golden_bivariate.py`).
-- **Benchmarks and docs** for genetic-correlation accuracy vs bivariate LDSC,
-  sample-overlap corrections, MiXeR-style overlap recovery, and weak-trait
-  prediction gain (`benchmarks/`, `docs/`).
+- Coherent initialization now makes `h2_init`, `p_init`, and `rg_init` match the
+  implied starting moments. `pi_init` exposes overlap directly, and
+  `sigma_prior_scale` can keep the shrinkage target fixed across starts.
+- The default union-causal start is `p_init=0.02`.
+- Dense-LD storage defaults to `ld_int8=None`: supplied int8 remains int8,
+  float blocks up to 1,500 variants are quantized, and larger blocks remain
+  float32.
+- Compact float and LR8 `LowRankLD` blocks use ldpred3's
+  low-rank-plus-diagonal contract. Legacy row-normalized factors require
+  `allow_legacy_lowrank=True`.
+- `ncores>1` buckets blocks by representation, dtype, and scale, so mixed LD
+  panels remain parallel while seeded results match `ncores=1`.
+- The tested ldpred3 dependency revision is
+  `db3ebd2385b7e3f347712f8761682c0eb49df3e4` (`ldpred3>=0.2.13,<0.3`).
 
 ### Fixed
-- **Review follow-ups** (theory / documentation / implementation review; see
-  `REVIEW.md`). The shorthand initialization with `|rg_init| > 0.999` (and
-  `pi_init=None`) could produce negative single-trait mixture masses; the
-  shared mass now saturates at the union probability (an all-shared start),
-  keeping the implied moments exact. The fallback `rg` ratio now uses the
-  clamped `h2`-scale denominators, so a non-PD (int8-quantised) block can no
-  longer slam `rg` to ±1 through the variance floor. Validation tightening:
-  `h2_init` / `sigma_prior_scale` reject numeric strings, `ldsc_rg` sample
-  sizes reject mixed bool/string sequences, and `estimate_sample_overlap`
-  validates its result type. Documentation corrections: the `rg_decorrelated`
-  bias mechanism (same-sweep coupling *inflates* the genetic covariance; the
-  sampled-quadratic ratio attenuates through the weak trait's sampled
-  variance), the `res.h2` estimand, the Equation 1 noise covariance, the
-  `noise_inflation` × `cross_corr` interaction, compact-LD rejection, the full
-  ldpred3 seam (Notes), and the `mixer_overlap.py` /
-  `bivariate_demo.py` benchmark-table rows; the noise-inflation numbers above
-  now match the committed calibration sweep.
-- **`BivariateResult` optional-field annotations.** The optional result fields
-  (`pi`, `pi_samples`, `sigma_samples`, `noise_scale`, `genetic_samples`,
-  `noise_scale_samples`) were annotated as non-optional but default to `None`;
-  they are now typed `Optional[...]` to match their actual contract.
-- **Benchmark documentation accuracy.** `rg_polygenicity.py` and
-  `benchmarks/README.md` no longer describe the committed polygenicity run as
-  being at a "larger m" — the committed `rg_polygenicity.csv` uses the default
-  m = 5,000 (a larger m remains available via the `MUT_RATE`/`K` env vars).
-  `benchmarks/RESULTS.md` gains three caveats near its headline: the rg-accuracy
-  wins (Sections 1–4) are measured in a regime matched to the bivariate
-  likelihood and do not transfer to the real-genotype stress test (Section 7);
-  LDpred3 attenuates high true rg downward; and Section 1's LDSC error excludes
-  `|rg| > 1.5` replicates while bipred's are not, making the comparison
-  conservative. No committed benchmark numbers changed.
 
-### Notes
-- bipred depends on `ldpred3` (`>=` the release that removes the in-tree
-  `bivariate` and cross-trait-`ldsc_rg` code) for the shared LD representations,
-  the Numba sampler shim and the univariate LDSC machinery. The private seam:
-  `HAVE_NUMBA`, `_jit`, `_jit_parallel`, `_set_threads`, `prange`,
-  `_as_n_vector`, `LowRankLD`, `_check_h2_p`,
-  `_finite_control`, `_integer_at_least`, `_validate_beta_hat`,
-  `_validate_blocks`, `_validate_boolean_controls`, `_validate_iterations` and
-  `_validate_seed` from `ldpred3.ldpred3`; `_wls` and `_weights` from
-  `ldpred3.ldsc`; and `_Q8` from `ldpred3._kernels`.
+- Multi-chain fitting rejects adaptive stopping instead of failing later on
+  unequal trace lengths; `rg_decorrelated=True` remains unsupported there.
+- Input validation now rejects invalid booleans, non-finite controls, malformed
+  regional vectors, and non-positive LD scores at public boundaries.
+- The fallback `r_g` ratio uses the reported heritability scale, avoiding
+  boundary artifacts from non-positive-definite quantized LD.
+- Public exports and the private ldpred3 compatibility seam have behavioral
+  regression tests.
+
+### Performance
+
+- Per-sweep random and residual buffers are reused.
+- Mixed LD panels use fused block-parallel sweeps; regional quadratics and LDSC
+  jackknife paths avoid repeated gathers and masks.
+- Decorrelated `r_g` uses fewer simultaneous effect-sized arrays.
+
+Performance depends on hardware, block balance, LD representation, and current
+code. Reproduce the benchmark suite rather than treating development anecdotes
+as release guarantees.

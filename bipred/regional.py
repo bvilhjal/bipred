@@ -17,27 +17,21 @@ and `LowRankLD` factors, for which
 Posterior-mean effects are used deliberately rather than the sampled-quadratic
 ratio that the genome-wide `rg` uses. The sampled ratio inflates its denominator
 with posterior noise, which matters more per region than genome-wide because a
-region has far fewer variants; in the benchmarks behind this module the
-posterior-mean estimator had roughly half the RMSE at null and strong regions
-alike.
+region has far fewer variants.
 
 **Two biases are known and are not corrected here.** Read them before
-interpreting output; both are quantified in
-`research/cross_corr_estimation/RESULTS_REGIONAL.md`.
+interpreting output; see `docs/rg.md` for guidance.
 
 1. *Sample overlap contaminates every region identically.* If the two GWAS share
    samples and `cross_corr` was not supplied to the fit, the same spurious
-   covariance is added to every region at once — in simulation, regions whose
-   true rg is zero read about **0.26**. It does not average out across regions
-   and cannot be estimated within one, because a region has too few variants.
-   Supply `cross_corr` to the fit whenever the cohorts may overlap.
+   covariance is added to every region at once. It does not average out across
+   regions and cannot be estimated reliably within one. Supply `cross_corr` to
+   the fit whenever the cohorts may overlap.
 2. *Regional estimates are shrunk toward the genome-wide correlation.* The
    sampler carries a single effect covariance for the whole genome, so every
-   per-SNP posterior borrows across traits at the genome-wide rate. Strong
-   regions are attenuated and null regions pulled up (about -0.07 and +0.06
-   respectively in simulation). This is a property of reading regional structure
-   out of a genome-wide model; it is unaffected by `cross_corr`, and it does not
-   diminish with larger regions.
+   per-SNP posterior borrows across traits at the genome-wide rate. This is a
+   property of reading regional structure out of a genome-wide model; it is
+   unaffected by `cross_corr`.
 
 Consequently these estimates are more trustworthy for *ranking and comparing*
 regions than as calibrated absolute values.
@@ -48,7 +42,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 import numpy as np
 
-from ldpred3.ldpred3 import LowRankLD, _validate_blocks
+from ldpred3.ldpred3 import (
+    LowRankLD,
+    _validate_blocks,
+    _validate_boolean_controls,
+)
 
 from .bivariate import _prepare_lowrank_block
 
@@ -111,15 +109,17 @@ def regional_rg(beta1, beta2, blocks, regions, *, min_variants=1,
     Parameters
     ----------
     beta1, beta2 : array_like
-        Posterior-mean standardised effects for the two traits, length ``m``.
-        These are :attr:`BivariateResult.beta1_est` / ``beta2_est``.
+        One-dimensional posterior-mean standardised effects for the two traits,
+        length ``m``. These are :attr:`BivariateResult.beta1_est` /
+        ``beta2_est``.
     blocks : sequence
         The same LD blocks passed to the fit: ``(R, idx)`` pairs where ``R`` is a
         dense float/int8 matrix or a :class:`LowRankLD` factor.
     regions : array_like
-        Length-``m`` region label per variant. Labels may be integers or strings;
-        variants sharing a label form one region, and regions need not be
-        contiguous. Use ``None``-free labels — every variant must be assigned.
+        One-dimensional length-``m`` region label per variant. Labels may be
+        integers or strings; variants sharing a label form one region, and
+        regions need not be contiguous. ``None`` is not a valid label because
+        every variant must be assigned.
     min_variants : int, default 1
         Regions with fewer variants than this report NaN ``rg``. Small regions
         are noisy; raising this is a convenience, not a correction.
@@ -140,8 +140,14 @@ def regional_rg(beta1, beta2, blocks, regions, *, min_variants=1,
     region, and all regional estimates are shrunk toward the genome-wide
     correlation. Neither is corrected here.
     """
-    b1 = np.asarray(beta1, dtype=np.float64).ravel()
-    b2 = np.asarray(beta2, dtype=np.float64).ravel()
+    _validate_boolean_controls(
+        allow_legacy_lowrank=allow_legacy_lowrank,
+        clip=clip,
+    )
+    b1 = np.asarray(beta1, dtype=np.float64)
+    b2 = np.asarray(beta2, dtype=np.float64)
+    if b1.ndim != 1 or b2.ndim != 1:
+        raise ValueError("beta1 and beta2 must be one-dimensional vectors")
     if b1.shape != b2.shape:
         raise ValueError(
             f"beta1 and beta2 must have the same length; got {b1.size} and "
@@ -152,17 +158,22 @@ def regional_rg(beta1, beta2, blocks, regions, *, min_variants=1,
         raise ValueError("beta1 and beta2 must contain only finite values")
     m = b1.size
 
-    if isinstance(min_variants, bool) or not isinstance(min_variants, (int, np.integer)):
+    if (isinstance(min_variants, (bool, np.bool_))
+            or not isinstance(min_variants, (int, np.integer))):
         raise TypeError("min_variants must be an integer")
     min_variants = int(min_variants)
     if min_variants < 1:
         raise ValueError("min_variants must be >= 1")
 
-    labels = np.asarray(regions).ravel()
+    labels = np.asarray(regions)
+    if labels.ndim != 1:
+        raise ValueError("regions must be a one-dimensional label vector")
     if labels.size != m:
         raise ValueError(
             f"regions must have one label per variant; got {labels.size} for "
             f"{m} variants")
+    if labels.dtype == object and any(label is None for label in labels):
+        raise ValueError("regions must not contain None labels")
 
     # ``return_index`` already gives each unique label's first occurrence, so the
     # first-appearance order is one stable argsort -- no per-variant Python loop.
@@ -185,7 +196,7 @@ def regional_rg(beta1, beta2, blocks, regions, *, min_variants=1,
         idx = np.asarray(idx, dtype=np.int64).ravel()
         if isinstance(R, LowRankLD):
             U, row_scales, residual = _prepare_lowrank_block(
-                R, allow_legacy=allow_legacy_lowrank)
+                R, allow_legacy=bool(allow_legacy_lowrank))
             W = row_scales[:, None] * np.asarray(U, dtype=np.float64)
             dense = None
         else:
@@ -213,7 +224,7 @@ def regional_rg(beta1, beta2, blocks, regions, *, min_variants=1,
         denom = np.sqrt(gvar1 * gvar2)
         rg = np.where(denom > 0.0, gcov / denom, np.nan)
     rg[counts < min_variants] = np.nan
-    if clip:
+    if bool(clip):
         rg = np.clip(rg, -1.0, 1.0)
 
     return RegionalRgResult(region=region_ids, rg=rg, gcov=gcov, gvar1=gvar1,

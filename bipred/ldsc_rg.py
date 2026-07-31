@@ -152,7 +152,7 @@ def ldsc_rg(beta_hat1, beta_hat2, ld_scores, n_eff1, n_eff2, *, m_snps=None,
     beta_hat1, beta_hat2 : array_like (m,)
         Standardized marginal effects for the two traits (same variant order).
     ld_scores : array_like (m,)
-        LD scores from ``ldpred3.ld_scores``.
+        Strictly positive LD scores from ``ldpred3.ld_scores``.
     n_eff1, n_eff2 : float or array_like
         Per-trait GWAS sample sizes.
     m_snps : float, optional
@@ -181,6 +181,8 @@ def ldsc_rg(beta_hat1, beta_hat2, ld_scores, n_eff1, n_eff2, *, m_snps=None,
     m = b1.shape[0]
     if b2.shape != (m,) or ell.shape != (m,):
         raise ValueError("beta_hat1, beta_hat2, and ld_scores must have equal length")
+    if np.any(ell <= 0.0):
+        raise ValueError("ld_scores must contain only positive values")
     N1 = _as_sample_size(n_eff1, "n_eff1", m)
     N2 = _as_sample_size(n_eff2, "n_eff2", m)
     M = float(m) if m_snps is None else _as_finite_scalar(

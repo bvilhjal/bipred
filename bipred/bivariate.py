@@ -18,8 +18,9 @@ borrow strength through the ``both`` component; disjoint traits can drive
 
 Both GWAS are assumed to use the **same** LD reference (same ancestry). Sample
 overlap can be passed via ``cross_corr`` (the cross-trait correlation of the
-sampling noise, i.e. the bivariate-LDSC intercept); the default 0 assumes
-independent GWAS samples.
+sampling errors); the default 0 assumes independent GWAS samples. A cross-trait
+LDSC intercept can reflect overlap but also correlated confounding, so it is not
+automatically interchangeable with this correlation.
 """
 
 from __future__ import annotations
@@ -85,6 +86,56 @@ _DIAGNOSTIC_MIN_VARIANTS = 1000
 _DIAGNOSTIC_MAX_CAUSAL_FRACTION = 0.5
 _DENSE = 0
 _LOWRANK = 1
+
+
+@dataclass(frozen=True)
+class _BivariateOptions:
+    """Validated controls shared by every chain in one fit."""
+
+    ld_int8: Optional[bool]
+    allow_legacy_lowrank: bool
+    h2_init: tuple
+    rg_init: float
+    cross_corr: float
+    burn_in: int
+    num_iter: int
+    h2_bounds: tuple
+    h2_cap: Optional[tuple]
+    iw_df: float
+    rg_decorrelated: bool
+    noise_inflation: bool
+    ni_damp: float
+    pi_prior: float
+    sample_every: int
+    ncores: int
+    tol: float
+    check_every: int
+
+
+@dataclass(frozen=True)
+class _PreparedBivariateInputs:
+    """Canonical read-only inputs reusable across independent chains."""
+
+    beta_hat1: np.ndarray
+    beta_hat2: np.ndarray
+    n_eff1: np.ndarray
+    n_eff2: np.ndarray
+    blocks: tuple
+    m: int
+    n_const: bool
+
+
+@dataclass(frozen=True)
+class _BivariateStart:
+    """Validated chain-specific initial state and shared prior target."""
+
+    pi: np.ndarray
+    s1: float
+    s2: float
+    s12: float
+    psi1: float
+    psi2: float
+    seed: Optional[int]
 
 
 def _finite_pair(name, value):
@@ -299,6 +350,225 @@ def _prepare_lowrank_block(R, *, allow_legacy=False):
             np.ascontiguousarray(residual, dtype=np.float64))
 
 
+def _validate_bivariate_options(*, ld_int8, allow_legacy_lowrank, h2_init,
+                                rg_init, cross_corr, burn_in, num_iter,
+                                h2_bounds, h2_cap, iw_df, rg_decorrelated,
+                                noise_inflation, ni_damp, pi_prior,
+                                sample_every, ncores, tol, check_every):
+    """Validate and canonicalise controls shared by one or more chains."""
+    h2_init = _finite_scalar_or_pair("h2_init", h2_init)
+    rg_init = _finite_control("rg_init", rg_init)
+    if not -1.0 < rg_init < 1.0:
+        raise ValueError("rg_init must be in (-1, 1)")
+    cross_corr = _finite_control("cross_corr", cross_corr)
+    if not -1.0 < cross_corr < 1.0:
+        raise ValueError("cross_corr must be in (-1, 1)")
+    burn_in, num_iter = _validate_iterations(burn_in, num_iter)
+    if ld_int8 is not None:
+        _validate_boolean_controls(ld_int8=ld_int8)
+        ld_int8 = bool(ld_int8)
+    _validate_boolean_controls(
+        allow_legacy_lowrank=allow_legacy_lowrank,
+        rg_decorrelated=rg_decorrelated,
+        noise_inflation=noise_inflation,
+    )
+    iw_df = _finite_control("iw_df", iw_df)
+    if iw_df <= 0.0:
+        raise ValueError("iw_df must be positive")
+    ni_damp = _finite_control("ni_damp", ni_damp)
+    if not 0.0 < ni_damp <= 1.0:
+        raise ValueError("ni_damp must be in (0, 1]")
+    pi_prior = _finite_control("pi_prior", pi_prior)
+    if pi_prior <= 0.0:
+        raise ValueError(
+            "pi_prior must be positive (an improper <=0 concentration can "
+            "collapse the mixture)"
+        )
+    tol = _finite_control("tol", tol, lower=0.0)
+    check_every = _integer_at_least("check_every", check_every, 1)
+    sample_every = _integer_at_least("sample_every", sample_every, 1)
+    ncores = _integer_at_least("ncores", ncores, 1)
+
+    lo, hi = _finite_pair("h2_bounds", h2_bounds)
+    if not (0.0 < lo <= min(h2_init) and max(h2_init) <= hi):
+        raise ValueError("h2_bounds must contain both positive h2_init values")
+    h2_bounds = (lo, hi)
+    if h2_cap is not None:
+        h2_cap = _finite_pair("h2_cap", h2_cap)
+        if h2_cap[0] <= 0.0 or h2_cap[1] <= 0.0:
+            raise ValueError("h2_cap values must be positive")
+
+    return _BivariateOptions(
+        ld_int8=ld_int8,
+        allow_legacy_lowrank=bool(allow_legacy_lowrank),
+        h2_init=h2_init,
+        rg_init=rg_init,
+        cross_corr=cross_corr,
+        burn_in=burn_in,
+        num_iter=num_iter,
+        h2_bounds=h2_bounds,
+        h2_cap=h2_cap,
+        iw_df=iw_df,
+        rg_decorrelated=bool(rg_decorrelated),
+        noise_inflation=bool(noise_inflation),
+        ni_damp=ni_damp,
+        pi_prior=pi_prior,
+        sample_every=sample_every,
+        ncores=ncores,
+        tol=tol,
+        check_every=check_every,
+    )
+
+
+_BIVARIATE_OPTION_DEFAULTS = {
+    "ld_int8": None,
+    "allow_legacy_lowrank": False,
+    "h2_init": 0.1,
+    "rg_init": 0.0,
+    "cross_corr": 0.0,
+    "burn_in": 200,
+    "num_iter": 200,
+    "h2_bounds": (1e-4, 1.0),
+    "h2_cap": None,
+    "iw_df": 10.0,
+    "rg_decorrelated": False,
+    "noise_inflation": False,
+    "ni_damp": 0.1,
+    "pi_prior": 1.0,
+    "sample_every": 5,
+    "ncores": 1,
+    "tol": 0.0,
+    "check_every": 50,
+}
+
+
+def _bivariate_options_from_kwargs(kwargs, *, caller):
+    """Validate a public ``**kwargs`` mapping without starting a chain."""
+    unknown = sorted(set(kwargs) - set(_BIVARIATE_OPTION_DEFAULTS))
+    if unknown:
+        raise TypeError(
+            f"{caller}() got an unexpected keyword argument {unknown[0]!r}"
+        )
+    values = dict(_BIVARIATE_OPTION_DEFAULTS)
+    values.update(kwargs)
+    return _validate_bivariate_options(**values)
+
+
+def _readonly_view(value):
+    """Return a non-writeable view without changing the caller's array flags."""
+    view = np.asarray(value).view()
+    view.setflags(write=False)
+    return view
+
+
+def _prepare_bivariate_inputs(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2,
+                              options):
+    """Validate and canonicalise immutable data shared across chains once."""
+    bh1 = np.ascontiguousarray(
+        _validate_beta_hat(beta_hat1), dtype=np.float64
+    )
+    bh2 = np.ascontiguousarray(
+        _validate_beta_hat(beta_hat2), dtype=np.float64
+    )
+    m = bh1.shape[0]
+    if m == 0:
+        raise ValueError("beta_hat vectors must contain at least one variant")
+    if bh2.shape[0] != m:
+        raise ValueError("beta_hat1 and beta_hat2 must have the same length")
+    n1 = np.ascontiguousarray(_as_n_vector(n_eff1, m), dtype=np.float64)
+    n2 = np.ascontiguousarray(_as_n_vector(n_eff2, m), dtype=np.float64)
+    n_const = bool(n1.min() == n1.max() and n2.min() == n2.max())
+
+    validated_blocks = _validate_blocks(blocks, m, contiguous=True)
+    prepared_blocks = []
+    for R, idx in sorted(validated_blocks, key=lambda bi: int(bi[1][0])):
+        start = int(idx[0])
+        size = int(idx.shape[0])
+        if isinstance(R, LowRankLD):
+            U, row_scales, residual = _prepare_lowrank_block(
+                R, allow_legacy=options.allow_legacy_lowrank
+            )
+            prepared_blocks.append(
+                (
+                    _LOWRANK,
+                    _readonly_view(U),
+                    start,
+                    size,
+                    _readonly_view(row_scales),
+                    _readonly_view(residual),
+                )
+            )
+        else:
+            Rq, scale = _prepare_block(R, options.ld_int8)
+            prepared_blocks.append(
+                (_DENSE, _readonly_view(Rq), start, size, scale, None)
+            )
+
+    return _PreparedBivariateInputs(
+        beta_hat1=_readonly_view(bh1),
+        beta_hat2=_readonly_view(bh2),
+        n_eff1=_readonly_view(n1),
+        n_eff2=_readonly_view(n2),
+        blocks=tuple(prepared_blocks),
+        m=m,
+        n_const=n_const,
+    )
+
+
+def _validate_sigma_prior_scale(value):
+    """Canonicalise a shared covariance-prior scale once."""
+    if value is None:
+        return None
+    return _finite_scalar_or_pair("sigma_prior_scale", value)
+
+
+def _prepare_bivariate_start(m, options, *, p_init, pi_init,
+                             sigma_prior_scale, seed):
+    """Build one validated chain start from canonical shared controls."""
+    seed = _validate_seed(seed)
+    pi, s1, s2, s12 = _initial_hyperparameters(
+        m, options.h2_init, p_init, options.rg_init, pi_init=pi_init
+    )
+    if sigma_prior_scale is None:
+        psi1, psi2 = s1, s2
+    else:
+        psi1, psi2 = sigma_prior_scale
+    return _BivariateStart(
+        pi=pi,
+        s1=s1,
+        s2=s2,
+        s12=s12,
+        psi1=float(psi1),
+        psi2=float(psi2),
+        seed=seed,
+    )
+
+
+def _instantiate_chain_blocks(prepared):
+    """Add fresh mutable low-rank projection buffers for one chain."""
+    blocks = []
+    for kind, data, start, size, aux, residual in prepared.blocks:
+        if kind == _LOWRANK:
+            rank = int(data.shape[1])
+            blocks.append(
+                (
+                    kind,
+                    data,
+                    start,
+                    size,
+                    aux,
+                    residual,
+                    np.zeros(rank),
+                    np.zeros(rank),
+                )
+            )
+        else:
+            blocks.append(
+                (kind, data, start, size, aux, residual, None, None)
+            )
+    return blocks
+
+
 def _bivar_converged(avg1, avg2, prev1, prev2, count, rg, prev_rg, tol):
     """Adaptive-stopping test on the running bivariate posterior.
 
@@ -331,11 +601,9 @@ def _warn_if_implausible_fit(h2, p, h2_bounds, m):
 
     A poorly conditioned LD reference inflates h2, which inflates the fitted
     causal fraction, which makes the guarded per-variant LD row update fire for
-    nearly every variant instead of a small minority. That is a real slowdown on
-    top of a wrong answer -- measured at 2.2x between a reference with
-    n_ref/block_size ~ 1.6 and one at ~20 -- so it is worth saying out loud
-    rather than leaving the caller to wonder why a run was both slow and
-    implausible.
+    nearly every variant instead of a small minority. That adds a real slowdown
+    on top of a wrong answer, so it is worth saying out loud rather than leaving
+    the caller to wonder why a run was both slow and implausible.
     """
     # Only meaningful at scale. On a handful of variants a large causal fraction
     # or an h2 at its bound is ordinary -- there is not enough data for either to
@@ -848,7 +1116,9 @@ class BivariateResult:
     causal. ``sigma``, ``pi``, and ``noise_scale`` are means over the retained
     stochastic hyperparameter iterates. ``genetic_samples`` retains raw
     ``(gvar1, gcov, gvar2)`` quadratics and ``noise_scale_samples`` retains the
-    two noise scales at every post-burn-in sweep. See :attr:`mixer` for the
+    two noise scales at every post-burn-in sweep. ``retained_iterations`` is the
+    number of rows retained in those traces; ``stopped_early`` reports whether
+    adaptive stopping shortened a single-chain run. See :attr:`mixer` for the
     MiXeR-style polygenic-overlap summary.
     """
 
@@ -1117,170 +1387,137 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
         global parameters; imbalanced blocks can therefore limit speed-up, and
         a panel split across many small buckets parallelises less well than one
         homogeneous panel.
+    tol : float, default 0
+        Optional stabilization threshold for the running posterior means and
+        genetic correlation. A positive value may stop retained sampling early;
+        this is a computational heuristic, not a convergence diagnostic.
+    check_every : int, default 50
+        Retained sweeps between stabilization checks when ``tol > 0``.
     seed : int or None
 
     Returns
     -------
     BivariateResult
     """
-    h2_init = _finite_scalar_or_pair("h2_init", h2_init)
-    rg_init = _finite_control("rg_init", rg_init)
-    if not -1.0 < rg_init < 1.0:
-        raise ValueError("rg_init must be in (-1, 1)")
-    cross_corr = _finite_control("cross_corr", cross_corr)
-    if not -1.0 < cross_corr < 1.0:
-        raise ValueError("cross_corr must be in (-1, 1)")
-    burn_in, num_iter = _validate_iterations(burn_in, num_iter)
-    if ld_int8 is not None:
-        _validate_boolean_controls(ld_int8=ld_int8)
-        ld_int8 = bool(ld_int8)
-    _validate_boolean_controls(
+    options = _validate_bivariate_options(
+        ld_int8=ld_int8,
         allow_legacy_lowrank=allow_legacy_lowrank,
+        h2_init=h2_init,
+        rg_init=rg_init,
+        cross_corr=cross_corr,
+        burn_in=burn_in,
+        num_iter=num_iter,
+        h2_bounds=h2_bounds,
+        h2_cap=h2_cap,
+        iw_df=iw_df,
         rg_decorrelated=rg_decorrelated,
         noise_inflation=noise_inflation,
+        ni_damp=ni_damp,
+        pi_prior=pi_prior,
+        sample_every=sample_every,
+        ncores=ncores,
+        tol=tol,
+        check_every=check_every,
     )
-    iw_df = _finite_control("iw_df", iw_df)
-    if iw_df <= 0.0:
-        raise ValueError("iw_df must be positive")
-    ni_damp = _finite_control("ni_damp", ni_damp)
-    if not 0.0 < ni_damp <= 1.0:
-        raise ValueError("ni_damp must be in (0, 1]")
-    pi_prior = _finite_control("pi_prior", pi_prior)
-    if pi_prior <= 0.0:
-        raise ValueError("pi_prior must be positive (an improper <=0 "
-                         "concentration can collapse the mixture)")
-    tol = _finite_control("tol", tol, lower=0.0)
-    check_every = _integer_at_least("check_every", check_every, 1)
-    sample_every = _integer_at_least("sample_every", sample_every, 1)
-    ncores = _integer_at_least("ncores", ncores, 1)
-    seed = _validate_seed(seed)
+    prepared = _prepare_bivariate_inputs(
+        blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, options
+    )
+    sigma_prior_scale = _validate_sigma_prior_scale(sigma_prior_scale)
+    start = _prepare_bivariate_start(
+        prepared.m,
+        options,
+        p_init=p_init,
+        pi_init=pi_init,
+        sigma_prior_scale=sigma_prior_scale,
+        seed=seed,
+    )
+    return _ldpred3_auto_bivariate_prepared(prepared, options, start)
 
-    lo, hi = _finite_pair("h2_bounds", h2_bounds)
-    if not (0.0 < lo <= min(h2_init) and max(h2_init) <= hi):
-        raise ValueError(
-            "h2_bounds must contain both positive h2_init values"
-        )
-    h2_bounds = (lo, hi)
-    if h2_cap is not None:
-        h2_cap = _finite_pair("h2_cap", h2_cap)
-        if h2_cap[0] <= 0.0 or h2_cap[1] <= 0.0:
-            raise ValueError("h2_cap values must be positive")
 
-    bh1 = np.ascontiguousarray(_validate_beta_hat(beta_hat1), dtype=np.float64)
-    bh2 = np.ascontiguousarray(_validate_beta_hat(beta_hat2), dtype=np.float64)
-    m = bh1.shape[0]
-    if m == 0:
-        raise ValueError("beta_hat vectors must contain at least one variant")
-    if bh2.shape[0] != m:
-        raise ValueError("beta_hat1 and beta_hat2 must have the same length")
-    n1 = _as_n_vector(n_eff1, m)
-    n2 = _as_n_vector(n_eff2, m)
-    # Shared (scalar) N -> the noise-covariance / determinant / posterior scalars
-    # are identical for every SNP each sweep, so the kernel hoists them out of the
-    # per-SNP loop. Per-variant N falls back to the exact per-SNP computation.
-    n_const = bool(n1.min() == n1.max() and n2.min() == n2.max())
+def _ldpred3_auto_bivariate_prepared(prepared, options, start):
+    """Run one chain from canonical shared data and fresh mutable workspaces."""
+    bh1 = prepared.beta_hat1
+    bh2 = prepared.beta_hat2
+    n1 = prepared.n_eff1
+    n2 = prepared.n_eff2
+    m = prepared.m
+    n_const = prepared.n_const
+    fblocks = _instantiate_chain_blocks(prepared)
 
-    blocks = _validate_blocks(blocks, m, contiguous=True)
-    # Prepared tuple:
-    # (kind, payload, start, size, scale_or_row_scales, diagonal_residual,
-    #  projection1, projection2)
-    # Dense blocks keep the established payload + scalar scale. Low-rank blocks
-    # keep U, an optional diagonal correction, and two rank-size W.T@beta buffers.
-    fblocks = []
-    for R, idx in sorted(blocks, key=lambda bi: int(bi[1][0])):
-        if isinstance(R, LowRankLD):
-            U, row_scales, residual = _prepare_lowrank_block(
-                R, allow_legacy=bool(allow_legacy_lowrank)
-            )
-            rank = int(U.shape[1])
-            fblocks.append((_LOWRANK, U, int(idx[0]), int(idx.shape[0]),
-                            row_scales, residual, np.zeros(rank), np.zeros(rank)))
-        else:
-            Rq, scale = _prepare_block(R, ld_int8)
-            fblocks.append((_DENSE, Rq, int(idx[0]), int(idx.shape[0]),
-                            scale, None, None, None))
+    burn_in = options.burn_in
+    num_iter = options.num_iter
+    lo, hi = options.h2_bounds
+    h2_cap = options.h2_cap
+    iw_df = options.iw_df
+    rg_decorrelated = options.rg_decorrelated
+    noise_inflation = options.noise_inflation
+    ni_damp = options.ni_damp
+    pi_prior = options.pi_prior
+    sample_every = options.sample_every
+    ncores = options.ncores
+    tol = options.tol
+    check_every = options.check_every
+    cross_corr = options.cross_corr
 
     # One fused native call is worthwhile only for ncores > 1. A typed.List needs
     # one element type, so blocks are bucketed by representation -- (kind, dtype,
     # dequantisation scale) -- and each bucket gets its own fused parallel call.
-    # The previous all-or-nothing test silently fell back to the serial path for
-    # any mixed panel, which is exactly what the default ``ld_int8=None`` policy
-    # produces (int8 below the 1500-variant cutoff, float32 above it), so a
-    # genome-wide fit with ncores > 1 could run fully serial without saying so.
-    # Bucketing keeps each block's arithmetic and the global reduction order
-    # unchanged, so results stay bit-identical to the serial path.
+    # Prepared payloads are always C-contiguous. Bucketing keeps each block's
+    # arithmetic and the global reduction order unchanged, so results stay
+    # bit-identical to the serial path.
     parallel_groups = []
     parallel_counts = parallel_stats = None
     if HAVE_NUMBA and ncores > 1 and fblocks:
-        if all(np.asarray(data).flags.c_contiguous
-               for _kind, data, _start, _k, _aux, _res, _p1, _p2 in fblocks):
-            buckets = {}
-            for pos, (kind, data, _start, _k, aux, _res, _p1, _p2) in enumerate(
-                    fblocks):
-                key = (kind, np.asarray(data).dtype.str,
-                       float(aux) if kind == _DENSE else 0.0)
-                buckets.setdefault(key, []).append(pos)
+        buckets = {}
+        for pos, (kind, data, _start, _k, aux, _res, _p1, _p2) in enumerate(
+                fblocks):
+            key = (kind, np.asarray(data).dtype.str,
+                   float(aux) if kind == _DENSE else 0.0)
+            buckets.setdefault(key, []).append(pos)
 
-            from numba.typed import List as NumbaList
+        from numba.typed import List as NumbaList
 
-            parallel_counts = np.empty((len(fblocks), 3), dtype=np.int64)
-            parallel_stats = np.empty((len(fblocks), 6), dtype=np.float64)
-            for (kind, _dtype, scale), positions in buckets.items():
-                payloads = NumbaList()
+        parallel_counts = np.empty((len(fblocks), 3), dtype=np.int64)
+        parallel_stats = np.empty((len(fblocks), 6), dtype=np.float64)
+        for (kind, _dtype, scale), positions in buckets.items():
+            payloads = NumbaList()
+            for pos in positions:
+                payloads.append(fblocks[pos][1])
+            group = {
+                "kind": kind,
+                "scale": scale,
+                "payloads": payloads,
+                "index": np.asarray(positions, dtype=np.int64),
+                "starts": np.asarray(
+                    [fblocks[p][2] for p in positions], dtype=np.int64
+                ),
+                "sizes": np.asarray(
+                    [fblocks[p][3] for p in positions], dtype=np.int64
+                ),
+                "counts": np.empty((len(positions), 3), dtype=np.int64),
+                "stats": np.empty((len(positions), 6), dtype=np.float64),
+            }
+            if kind == _LOWRANK:
+                aux_list = NumbaList()
+                residual_list = NumbaList()
+                proj1_list = NumbaList()
+                proj2_list = NumbaList()
                 for pos in positions:
-                    payload_view = np.asarray(fblocks[pos][1]).view()
-                    payload_view.setflags(write=False)
-                    payloads.append(payload_view)
-                group = {
-                    "kind": kind,
-                    "scale": scale,
-                    "payloads": payloads,
-                    "index": np.asarray(positions, dtype=np.int64),
-                    "starts": np.asarray([fblocks[p][2] for p in positions],
-                                         dtype=np.int64),
-                    "sizes": np.asarray([fblocks[p][3] for p in positions],
-                                        dtype=np.int64),
-                    "counts": np.empty((len(positions), 3), dtype=np.int64),
-                    "stats": np.empty((len(positions), 6), dtype=np.float64),
-                }
-                if kind == _LOWRANK:
-                    aux_list = NumbaList()
-                    residual_list = NumbaList()
-                    proj1_list = NumbaList()
-                    proj2_list = NumbaList()
-                    for pos in positions:
-                        _k2, _d, _s, _n, aux, residual, proj1, proj2 = fblocks[pos]
-                        aux_view = np.asarray(aux).view()
-                        residual_view = np.asarray(residual).view()
-                        aux_view.setflags(write=False)
-                        residual_view.setflags(write=False)
-                        aux_list.append(aux_view)
-                        residual_list.append(residual_view)
-                        proj1_list.append(proj1)
-                        proj2_list.append(proj2)
-                    group["aux"] = aux_list
-                    group["residuals"] = residual_list
-                    group["proj1s"] = proj1_list
-                    group["proj2s"] = proj2_list
-                parallel_groups.append(group)
-            _set_threads(ncores)
-        else:
-            warnings.warn(
-                "ncores > 1 requested but some prepared LD blocks are not "
-                "C-contiguous; falling back to the serial sweep",
-                RuntimeWarning,
-                stacklevel=2,
-            )
+                    _k2, _d, _s, _n, aux, residual, proj1, proj2 = fblocks[pos]
+                    aux_list.append(aux)
+                    residual_list.append(residual)
+                    proj1_list.append(proj1)
+                    proj2_list.append(proj2)
+                group["aux"] = aux_list
+                group["residuals"] = residual_list
+                group["proj1s"] = proj1_list
+                group["proj2s"] = proj2_list
+            parallel_groups.append(group)
+        _set_threads(ncores)
 
-    pi, s1, s2, s12 = _initial_hyperparameters(
-        m, h2_init, p_init, rg_init, pi_init=pi_init,
-    )
-    if sigma_prior_scale is None:
-        psi1, psi2 = s1, s2
-    else:
-        psi1, psi2 = _finite_scalar_or_pair(
-            "sigma_prior_scale", sigma_prior_scale,
-        )
+    pi = start.pi.copy()
+    s1, s2, s12 = start.s1, start.s2, start.s12
+    psi1, psi2 = start.psi1, start.psi2
 
     # (Co)variance-component regularisation. The effect covariance Sigma is
     # updated each sweep by shrinking toward a weak inverse-Wishart prior (MTGSAM
@@ -1293,7 +1530,7 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     # ``h2_cap`` to additionally clamp the implied per-trait h2 (expert override).
     nu0 = float(iw_df)
 
-    rng = np.random.default_rng(seed)
+    rng = np.random.default_rng(start.seed)
     curr1 = np.zeros(m); curr2 = np.zeros(m)
     rb1 = np.zeros(m); rb2 = np.zeros(m)
     avg1 = np.zeros(m); avg2 = np.zeros(m)

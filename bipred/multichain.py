@@ -1,4 +1,4 @@
-"""Sequential multi-chain inference for the bivariate LDpred3 sampler.
+"""Deterministic multi-chain inference for the bivariate LDpred3 sampler.
 
 Every finite, equal-length chain contributes equally to the posterior.  Basic
 split-Rhat is returned as a diagnostic only; this module makes no convergence
@@ -12,13 +12,16 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .bivariate import (
+    _BivariateStart,
+    _bivariate_options_from_kwargs,
     BivariateResult,
     _finite_pair,
-    _finite_scalar_or_pair,
     _initial_hyperparameters,
     _integer_at_least,
+    _ldpred3_auto_bivariate_prepared,
+    _prepare_bivariate_inputs,
     _validate_seed,
-    ldpred3_auto_bivariate_blocks,
+    _validate_sigma_prior_scale,
 )
 
 __all__ = [
@@ -56,7 +59,11 @@ class BivariateChainSummary:
 
 @dataclass
 class MultiChainBivariateResult:
-    """Equal-weight pooled posterior and explicit chain diagnostics."""
+    """Equal-weight pooled posterior and explicit chain diagnostics.
+
+    ``posterior.retained_iterations`` counts all pooled draws, while
+    ``retained_per_chain`` records the fixed trace length of each chain.
+    """
 
     posterior: BivariateResult
     basic_split_rhat: BivariateBasicSplitRHat
@@ -266,19 +273,21 @@ def ldpred3_auto_bivariate_chains(
     chain_ncores=1,
     **bivariate_kwargs,
 ):
-    """Run deterministic bivariate chains sequentially and pool every chain.
+    """Run deterministic bivariate chains and pool every chain equally.
 
     By default, initial union-causal probabilities are log-spaced from 1e-4 to
     0.2.  Explicit pi_inits, with one four-state row per chain, are an
     alternative.  The covariance prior scale is shared by all chains and is
     derived once from prior_p_init unless supplied explicitly.
 
-    num_iter must be even and at least four.  Basic split-Rhat is diagnostic
-    metadata only: high values never remove a chain or change the posterior.
+    ``num_iter`` must be even and at least four. Adaptive stopping (``tol > 0``)
+    is not supported because split-Rhat and equal pooling require equal-length
+    traces. Basic split-Rhat is diagnostic metadata only: high values never
+    remove a chain or change the posterior.
 
-    chain_ncores > 1 runs that many chains concurrently in threads. The per-block
-    sweep kernels release the GIL, so this scales; without that it would be
-    slower than running the chains one at a time. Chains share the LD blocks
+    ``chain_ncores > 1`` runs that many chains concurrently in threads. With
+    Numba, the per-block sweep kernels release the GIL; the pure-Python fallback
+    does not provide the same scaling. Chains share canonical LD payloads
     read-only and touch no other common mutable state, and each keeps its own
     deterministic seed, so a threaded run is bit-identical to a serial one.
 
@@ -299,7 +308,22 @@ def ldpred3_auto_bivariate_chains(
         )
 
     bivariate_kwargs = dict(bivariate_kwargs)
-    if chain_ncores > 1 and int(bivariate_kwargs.get("ncores", 1) or 1) > 1:
+    for reserved in ("p_init", "pi_init", "seed", "sigma_prior_scale"):
+        if reserved in bivariate_kwargs:
+            raise ValueError(f"{reserved} is reserved for the chain driver")
+    options = _bivariate_options_from_kwargs(
+        bivariate_kwargs, caller="ldpred3_auto_bivariate_chains"
+    )
+    if options.rg_decorrelated:
+        raise ValueError(
+            "rg_decorrelated=True is not supported by multi-chain inference"
+        )
+    if options.tol > 0.0:
+        raise ValueError(
+            "tol > 0 is not supported by multi-chain inference because "
+            "equal-length traces are required for pooling and split-Rhat"
+        )
+    if chain_ncores > 1 and options.ncores > 1:
         raise ValueError(
             "chain_ncores > 1 cannot be combined with ncores > 1: the two "
             "would oversubscribe the machine and every chain would race the "
@@ -307,52 +331,18 @@ def ldpred3_auto_bivariate_chains(
             "chain-level threading (chain_ncores) or within-chain block "
             "threading (ncores)."
         )
-    for reserved in ("p_init", "pi_init", "seed", "sigma_prior_scale"):
-        if reserved in bivariate_kwargs:
-            raise ValueError(f"{reserved} is reserved for the chain driver")
-    rg_decorrelated = bivariate_kwargs.pop("rg_decorrelated", False)
-    if not isinstance(rg_decorrelated, (bool, np.bool_)):
-        raise ValueError("rg_decorrelated must be True or False")
-    if rg_decorrelated:
-        raise ValueError(
-            "rg_decorrelated=True is not supported by multi-chain inference"
-        )
 
-    retained = _integer_at_least(
-        "num_iter", bivariate_kwargs.get("num_iter", 200), 4
-    )
+    retained = options.num_iter
+    if retained < 4:
+        raise ValueError("num_iter must be an integer >= 4")
     if retained % 2:
         raise ValueError("num_iter must be even for basic split-Rhat")
-    bivariate_kwargs["num_iter"] = retained
-    noise_inflation = bivariate_kwargs.get("noise_inflation", False)
-    if not isinstance(noise_inflation, (bool, np.bool_)):
-        raise ValueError("noise_inflation must be True or False")
-
-    bh1 = np.asarray(beta_hat1)
-    bh2 = np.asarray(beta_hat2)
-    if bh1.ndim != 1 or bh2.ndim != 1 or bh1.size == 0:
-        raise ValueError("beta_hat1 and beta_hat2 must be nonempty vectors")
-    if bh1.shape != bh2.shape:
-        raise ValueError("beta_hat1 and beta_hat2 must have the same length")
-    m = bh1.size
-    try:
-        blocks = list(blocks)
-    except TypeError:
-        raise ValueError("blocks must be a sequence of (LD, index) pairs") from None
-
-    h2_init = bivariate_kwargs.get("h2_init", 0.1)
-    rg_init = bivariate_kwargs.get("rg_init", 0.0)
-    h2_init = _finite_scalar_or_pair("h2_init", h2_init)
-    bivariate_kwargs["h2_init"] = h2_init
-    h2_bounds = _finite_pair(
-        "h2_bounds", bivariate_kwargs.get("h2_bounds", (1e-4, 1.0))
+    noise_inflation = options.noise_inflation
+    h2_bounds = options.h2_bounds
+    prepared = _prepare_bivariate_inputs(
+        blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, options
     )
-    if not (
-        0.0 < h2_bounds[0] <= min(h2_init)
-        and max(h2_init) <= h2_bounds[1]
-    ):
-        raise ValueError("h2_bounds must contain both positive h2_init values")
-    bivariate_kwargs["h2_bounds"] = h2_bounds
+    m = prepared.m
 
     explicit_pi = pi_inits is not None
     if explicit_pi:
@@ -366,14 +356,14 @@ def ldpred3_auto_bivariate_chains(
             ) from None
         if raw_pi.shape != (n_chains, 4):
             raise ValueError("pi_inits must have shape (n_chains, 4)")
-        starts = []
+        initial_hypers = []
         for row in raw_pi:
-            starts.append(
+            initial_hypers.append(
                 _initial_hyperparameters(
-                    m, h2_init, 0.02, rg_init, pi_init=row
-                )[0]
+                    m, options.h2_init, 0.02, options.rg_init, pi_init=row
+                )
             )
-        start_pi = np.asarray(starts)
+        start_pi = np.asarray([initial[0] for initial in initial_hypers])
         p_starts = 1.0 - start_pi[:, 0]
     else:
         if p_init_range is None:
@@ -384,26 +374,35 @@ def ldpred3_auto_bivariate_chains(
         p_starts = np.exp(
             np.linspace(np.log(p_lo), np.log(p_hi), n_chains)
         )
-        start_pi = np.asarray(
-            [
-                _initial_hyperparameters(
-                    m, h2_init, float(p_start), rg_init
-                )[0]
-                for p_start in p_starts
-            ]
-        )
+        initial_hypers = [
+            _initial_hyperparameters(
+                m, options.h2_init, float(p_start), options.rg_init
+            )
+            for p_start in p_starts
+        ]
+        start_pi = np.asarray([initial[0] for initial in initial_hypers])
 
     if sigma_prior_scale is None:
         _, prior_s1, prior_s2, _ = _initial_hyperparameters(
-            m, h2_init, prior_p_init, rg_init
+            m, options.h2_init, prior_p_init, options.rg_init
         )
         shared_prior_scale = (prior_s1, prior_s2)
     else:
-        shared_prior_scale = _finite_scalar_or_pair(
-            "sigma_prior_scale", sigma_prior_scale
-        )
+        shared_prior_scale = _validate_sigma_prior_scale(sigma_prior_scale)
 
     chain_seeds = _deterministic_chain_seeds(seed, n_chains)
+    chain_starts = tuple(
+        _BivariateStart(
+            pi=initial[0].copy(),
+            s1=initial[1],
+            s2=initial[2],
+            s12=initial[3],
+            psi1=shared_prior_scale[0],
+            psi2=shared_prior_scale[1],
+            seed=int(chain_seed),
+        )
+        for initial, chain_seed in zip(initial_hypers, chain_seeds)
+    )
     beta1_sum = np.zeros(m)
     beta2_sum = np.zeros(m)
     pi_traces = []
@@ -413,20 +412,10 @@ def ldpred3_auto_bivariate_chains(
     summaries = []
 
     def _run_one(index, chain_seed, p_start, pi_start):
-        """Fit one chain. Reads the shared blocks, owns everything it writes."""
+        """Fit one chain from shared inputs and chain-local mutable buffers."""
         try:
-            return ldpred3_auto_bivariate_blocks(
-                blocks,
-                beta_hat1,
-                beta_hat2,
-                n_eff1,
-                n_eff2,
-                p_init=float(p_start),
-                pi_init=pi_start if explicit_pi else None,
-                sigma_prior_scale=shared_prior_scale,
-                seed=int(chain_seed),
-                rg_decorrelated=False,
-                **bivariate_kwargs,
+            return _ldpred3_auto_bivariate_prepared(
+                prepared, options, chain_starts[index]
             )
         except Exception as error:
             raise RuntimeError(
@@ -507,6 +496,8 @@ def ldpred3_auto_bivariate_chains(
         noise_scale=(float(noise_mean[0]), float(noise_mean[1])),
         genetic_samples=pooled_genetic,
         noise_scale_samples=pooled_noise,
+        retained_iterations=int(pooled_pi.shape[0]),
+        stopped_early=False,
     )
 
     return MultiChainBivariateResult(

@@ -127,7 +127,7 @@ class TestChainThreading:
         """An exception raised inside a worker thread must still surface with
         the chain it came from, not as a bare error from the pool."""
         import bipred.multichain as mc
-        real = mc.ldpred3_auto_bivariate_blocks
+        real = mc._ldpred3_auto_bivariate_prepared
         calls = {"n": 0}
 
         def flaky(*args, **kwargs):
@@ -136,7 +136,7 @@ class TestChainThreading:
                 raise RuntimeError("synthetic per-chain failure")
             return real(*args, **kwargs)
 
-        monkeypatch.setattr(mc, "ldpred3_auto_bivariate_blocks", flaky)
+        monkeypatch.setattr(mc, "_ldpred3_auto_bivariate_prepared", flaky)
         blocks, b1, b2, n = problem
         with pytest.raises(RuntimeError, match=r"chain \d+ \(seed \d+\) failed"):
             ldpred3_auto_bivariate_chains(blocks, b1, b2, n, n,
