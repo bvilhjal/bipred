@@ -40,7 +40,7 @@ from ldpred3's ``[fast]`` extra.
 
 import importlib
 
-__version__ = "0.2.0.dev1"
+__version__ = "0.2.0"
 
 # public name -> submodule it lives in
 _EXPORTS = {

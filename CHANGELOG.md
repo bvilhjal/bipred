@@ -1,9 +1,11 @@
 # Changelog
 
 User-visible changes to **bipred** are recorded here. The project is currently
-`0.2.0.dev1`; all entries remain unreleased.
+`0.2.0`.
 
 ## [Unreleased]
+
+## [0.2.0] - 2026-08-03
 
 ### Added
 
