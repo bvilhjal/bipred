@@ -159,6 +159,8 @@ def make_figure(rows):
         base = ok[0]
         ax.loglog(xs, [base[3] * (x / base[0]) for x in xs], "--", color="gray",
                   lw=1, alpha=.7, label="linear in m")
+    ax.set_xticks(xs, [f"{x / 1000:g}k" for x in xs])
+    ax.minorticks_off()
     ax.set_xlabel("m (variants)"); ax.set_ylabel("fit time (s)")
     ax.set_title("Running time"); ax.grid(alpha=.3, which="both"); ax.legend(fontsize=8)
 

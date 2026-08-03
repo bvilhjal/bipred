@@ -227,6 +227,8 @@ def make_figure(rows, rows_t, base):
             a.plot(xs, [r[f"{mth}_t"] for r in rows_t], mark[mth] + "-", ms=4,
                    color=colors[mth], label=mth)
         a.set_xscale("log"); a.set_yscale("log")
+        a.set_xticks(xs, [f"{x / 1000:g}k" for x in xs])
+        a.minorticks_off()
         a.set_xlabel("m (variants)"); a.set_ylabel("seconds / fit")
         a.set_title("running time vs m", fontsize=9); a.grid(alpha=.3, which="both")
         a.legend(fontsize=8)
