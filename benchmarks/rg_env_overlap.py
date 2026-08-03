@@ -7,16 +7,16 @@ naive genetic-correlation estimate reads as genetic — a false positive. This
 stress-tests the proposed corrections; it does not assume that they recover the
 true **genetic** rg in every cell:
 
-  - bivariate **LDSC** with a free cross-trait intercept — the intercept absorbs
-    the free and constrained fits are compared directly.
+  - bivariate **LDSC** with a free or constrained cross-trait intercept.
   - bivariate **LDpred3** with ``cross_corr`` set to the phenotypic correlation on
     the overlap (here read straight off the shared cohort, or from the LDSC
     intercept); ``cross_corr=0`` leaves the bias.
 
 Real individual-level genotypes/phenotypes (the independent-block coalescent genome
 of ``infer_vs_ldsc_sbayes``) are used so the confounding arises mechanistically:
-both GWAS run on the *same* people, genetic effects have correlation ``rg`` and the
-residual environments have correlation ``re``. Needs ``msprime``.
+both GWAS run on the *same* people, genetic effects have target correlation
+``rg`` and the residual environments have correlation ``re``. The finite
+effects' realized genetic correlation is recorded separately. Needs ``msprime``.
 
     OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python benchmarks/rg_env_overlap.py
 """
@@ -40,9 +40,11 @@ CELLS = [(0.0, 0.0), (0.0, 0.3), (0.0, 0.6), (0.5, 0.0), (0.5, 0.6)]
 
 
 def simulate(gg, rg, re, rng):
-    """Two phenotypes on the shared GWAS cohort with genetic corr rg + env corr re;
-    return the two traits' standardized marginal GWAS and the realized phenotypic
-    correlation (the sampling-noise correlation induced by the full overlap)."""
+    """Simulate two phenotypes with target genetic corr ``rg`` and env corr ``re``.
+
+    Return the standardized marginal GWAS, realized phenotypic correlation, and
+    realized genetic correlation of the finite simulated genetic components.
+    """
     Zg, m = gg["Zg"], gg["m"]
     good = gg["good"]
     Lg = np.linalg.cholesky([[1.0, rg], [rg, 1.0]])
@@ -55,6 +57,7 @@ def simulate(gg, rg, re, rng):
     g1 = Zg @ b1; g2 = Zg @ b2
     b1 *= np.sqrt(H2 / g1.var()); b2 *= np.sqrt(H2 / g2.var())
     g1 = Zg @ b1; g2 = Zg @ b2
+    rg_realized = float(np.corrcoef(g1, g2)[0, 1])
     # environments correlated by re, on the SAME individuals
     Le = np.linalg.cholesky([[1.0, re], [re, 1.0]])
     e = (Le @ rng.standard_normal((2, N))) * np.sqrt(1.0 - H2)
@@ -63,16 +66,17 @@ def simulate(gg, rg, re, rng):
     rho_pheno = float(np.corrcoef(y1, y2)[0, 1])          # overlap noise correlation
     bhat1 = (Zg.T @ y1) / N                                # standardized marginal effects
     bhat2 = (Zg.T @ y2) / N
-    return bhat1, bhat2, rho_pheno
+    return bhat1, bhat2, rho_pheno, rg_realized
 
 
 def run_cell(rg, re, seed):
     out = {k: [] for k in ("ldsc_free", "ldsc_con", "biv_cc0", "biv_cc")}
-    icpt = []
+    icpt, realized = [], []
     gg = G.genome(0)                       # one fixed LD genome; average over the
     for rep in range(REPS):                # phenotype / effect / environment draw
         rng = np.random.default_rng(seed + rep)
-        bhat1, bhat2, rho = simulate(gg, rg, re, rng)
+        bhat1, bhat2, rho, rg_realized = simulate(gg, rg, re, rng)
+        realized.append(rg_realized)
         ld, ell, n = gg["ld"], gg["ell"], float(N)
         free = ldsc_rg(bhat1, bhat2, ell, n, n, n_blocks=G.NB)
         out["ldsc_free"].append(free.rg)
@@ -85,14 +89,19 @@ def run_cell(rg, re, seed):
         out["biv_cc"].append(ldpred3_auto_bivariate_blocks(
             ld, bhat1, bhat2, n, n, burn_in=150, num_iter=180,
             cross_corr=rho, seed=rep).rg)
-    return out, float(np.mean(icpt))
+    return out, np.asarray(realized, float), float(np.mean(icpt))
 
 
-def agg(x):
-    """Summarize the script's documented diagnostic window, ``|rg| <= 1.5``."""
+def agg(x, realized):
+    """Summarize retained estimates and their per-replicate realized-truth error."""
     x = np.asarray(x, float)
-    x = x[np.abs(x) <= 1.5]
-    return (float(np.mean(x)), float(np.std(x))) if x.size else (float("nan"), float("nan"))
+    realized = np.asarray(realized, float)
+    keep = np.isfinite(x) & np.isfinite(realized) & (np.abs(x) <= 1.5)
+    if not keep.any():
+        return float("nan"), float("nan"), float("nan"), int(x.size)
+    return (float(np.mean(x[keep])), float(np.std(x[keep])),
+            float(np.mean(np.abs(x[keep] - realized[keep]))),
+            int((~keep).sum()))
 
 
 def main():
@@ -101,26 +110,35 @@ def main():
           f"traits on the SAME N={N} individuals (m={G.M}, h2={H2}, {REPS} reps)\n")
     print("Summary means/SDs exclude non-finite estimates and |rg| > 1.5; inspect "
           "raw runs when diagnosing divergence.\n")
-    print(f"{'rg':>4} {'re':>4} | {'LDSC free':>13} | {'LDSC icpt=0':>13} | "
-          f"{'biv cc=0':>13} | {'biv cc=rho':>13} | {'LDSC icpt':>9}")
-    print("-" * 86)
+    print(f"{'rg target/real':>14} {'re':>4} | {'LDSC free':>13} | "
+          f"{'LDSC icpt=0':>13} | {'biv cc=0':>13} | {'biv cc=rho':>13} | "
+          f"{'LDSC icpt':>9}")
+    print("-" * 98)
     for rg, re in CELLS:
-        out, icpt = run_cell(rg, re, seed=2000 + int(rg * 10) * 100 + int(re * 10))
-        r = {"rg_true": rg, "re": re}
+        out, realized, icpt = run_cell(
+            rg, re, seed=2000 + int(rg * 10) * 100 + int(re * 10))
+        r = {"rg_target": rg,
+             "rg_realized": round(float(np.mean(realized)), 4),
+             "rg_realized_sd": round(float(np.std(realized)), 4),
+             "re": re}
         for k in ("ldsc_free", "ldsc_con", "biv_cc0", "biv_cc"):
-            mu, sd = agg(out[k])
+            mu, sd, mae, fail = agg(out[k], realized)
             r[k] = round(mu, 4); r[k + "_sd"] = round(sd, 4)
+            r[k + "_mae_realized"] = round(mae, 4)
+            r[k + "_fail"] = fail
         r["ldsc_intercept"] = round(icpt, 4)
         rows.append(r)
-        print(f"{rg:>4} {re:>4} | {r['ldsc_free']:>6}±{r['ldsc_free_sd']:<5} | "
+        print(f"{rg:>5.2f}/{r['rg_realized']:<5.2f} {re:>4} | "
+              f"{r['ldsc_free']:>6}±{r['ldsc_free_sd']:<5} | "
               f"{r['ldsc_con']:>6}±{r['ldsc_con_sd']:<5} | "
               f"{r['biv_cc0']:>6}±{r['biv_cc0_sd']:<5} | "
               f"{r['biv_cc']:>6}±{r['biv_cc_sd']:<5} | {r['ldsc_intercept']:>9}")
     with open(os.path.join(HERE, "rg_env_overlap.csv"), "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
         w.writeheader(); w.writerows(rows)
-    print("\nCompare every corrected and uncorrected cell with rg_true, including "
-          "its SD. This stress test can expose an unstable or biased correction.")
+    print("\nCSV MAE columns compare each retained estimate with that replicate's "
+          "realized genetic rg. This stress test can expose an unstable or biased "
+          "correction.")
     print("wrote rg_env_overlap.csv")
 
 

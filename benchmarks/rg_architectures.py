@@ -1,11 +1,11 @@
 """Genetic-correlation (rg) estimation across architectures — realistic LD.
 
-For a sweep of true genetic correlations across several architectures, two
-correlated traits are simulated (shared causal variants with bivariate-normal
-effects of correlation rg), a GWAS is produced from the population LD, and rg is
-estimated by **bivariate LDSC** (`ldsc_rg`) and **bivariate LDpred3**
-(`ldpred3_auto_bivariate_blocks`) against the truth. Both fit an LD estimated from
-a finite **reference panel** (the dominant real-world error).
+For a sweep of target effect correlations across several architectures, two
+correlated traits are simulated, a GWAS is produced from the population LD, and
+rg is estimated by **bivariate LDSC** (`ldsc_rg`) and **bivariate LDpred3**
+(`ldpred3_auto_bivariate_blocks`). Each estimate is scored against that
+replicate's realized population-LD genetic correlation. Both methods fit LD
+estimated from a finite reference panel.
 
 The LD is **realistic and non-repeating**: each of the ``NB`` blocks is its own
 coalescent-with-recombination segment (`simulate_genotypes_by_mutation_rate`), so
@@ -157,9 +157,22 @@ def gv(a, b):
     return sum(a[ix] @ (POP_R[i] @ b[ix]) for i, ix in enumerate(IDX))
 
 
+def realized_rg(b1, b2):
+    """Return the realized genetic correlation under the population LD."""
+    v1 = float(gv(b1, b1))
+    v2 = float(gv(b2, b2))
+    if not np.isfinite(v1) or not np.isfinite(v2) or v1 <= 0 or v2 <= 0:
+        return float("nan")
+    cov = float(gv(b1, b2))
+    return cov / np.sqrt(v1 * v2)
+
+
 def sim_effects(arch, rg, rng, p=None):
-    """Two traits: shared causal set, bivariate-normal effects of correlation rg,
-    each scaled to h²=``H2`` under the population LD.
+    """Two traits with a shared causal set and target effect correlation ``rg``.
+
+    Each trait is scaled to h²=``H2`` under the population LD. Finite effect
+    draws and LD mean that the realized genetic correlation need not equal
+    ``rg``; callers should score estimates against :func:`realized_rg`.
 
     ``p`` overrides the architecture's causal fraction (for a polygenicity sweep);
     ``None`` uses ``ARCHS[arch]``."""
@@ -204,11 +217,12 @@ def sumstats_pair(b1, b2, n1, n2, rng, rho_e=0.0):
 
 
 def run_cell(arch, rg, base_seed):
-    ld, bp, t_ld, t_bp = [], [], [], []
+    realized, ld, bp, t_ld, t_bp = [], [], [], [], []
     for rep in range(REPS):
         ref, ell = ref_panel(rep)
         rng = np.random.default_rng(base_seed + rep)
         b1, b2 = sim_effects(arch, rg, rng)
+        realized.append(realized_rg(b1, b2))
         bh1, bh2 = sumstats_pair(b1, b2, N1, N2, rng)
         t0 = time.perf_counter()
         ld.append(ldsc_rg(bh1, bh2, ell, N1, N2, n_blocks=NB).rg)
@@ -217,7 +231,7 @@ def run_cell(arch, rg, base_seed):
         bp.append(ldpred3_auto_bivariate_blocks(ref, bh1, bh2, N1, N2, burn_in=150,
                                                 num_iter=180, seed=rep).rg)
         t_bp.append(time.perf_counter() - t0)
-    return (np.array(ld, float), np.array(bp, float),
+    return (np.array(realized, float), np.array(ld, float), np.array(bp, float),
             float(np.mean(t_ld)), float(np.mean(t_bp)))
 
 
@@ -238,18 +252,39 @@ def _write_csv(csv_path, rows):
         w.writerows(rows)
 
 
-def _summarise_cell(arch, rg, ld, bp, t_ld, t_bp):
-    """One CSV row for a cell. LDSC's rg = rho_g / sqrt(h2_1 h2_2) diverges when a
-    marginal h2 estimate is ~0 (its documented failure mode); those reps are
-    counted as failures and only the in-range ones are summarised."""
-    ok = np.isfinite(ld) & (np.abs(ld) <= 1.5)
-    ldv = ld[ok]
-    return {"arch": arch, "rg_true": rg,
-            "ldsc_rg": round(float(np.mean(ldv)), 4) if ldv.size else "",
-            "ldsc_sd": round(float(np.std(ldv)), 4) if ldv.size else "",
-            "ldsc_fail": int((~ok).sum()),
-            "ldpred3_rg": round(float(np.mean(bp)), 4),
-            "ldpred3_sd": round(float(np.std(bp)), 4),
+def _estimate_summary(est, realized):
+    """Mean, SD, realized-truth MAE and diagnostic failure count."""
+    ok = np.isfinite(est) & np.isfinite(realized) & (np.abs(est) <= 1.5)
+    if not ok.any():
+        return "", "", "", int(est.size)
+    values = est[ok]
+    return (round(float(np.mean(values)), 4),
+            round(float(np.std(values)), 4),
+            round(float(np.mean(np.abs(values - realized[ok]))), 4),
+            int((~ok).sum()))
+
+
+def _summarise_cell(arch, rg_target, realized, ld, bp, t_ld, t_bp):
+    """One cell scored against each replicate's realized genetic correlation.
+
+    The ``|rg| <= 1.5`` diagnostic window is applied symmetrically. LDSC can
+    diverge when a marginal h² estimate is near zero; failure counts make that
+    conditioning explicit.
+    """
+    finite_truth = realized[np.isfinite(realized)]
+    realized_mean = (round(float(np.mean(finite_truth)), 4)
+                     if finite_truth.size else "")
+    realized_sd = (round(float(np.std(finite_truth)), 4)
+                   if finite_truth.size else "")
+    ld_mean, ld_sd, ld_mae, ld_fail = _estimate_summary(ld, realized)
+    bp_mean, bp_sd, bp_mae, bp_fail = _estimate_summary(bp, realized)
+    return {"arch": arch, "rg_target": rg_target,
+            "rg_realized_mean": realized_mean, "rg_realized_sd": realized_sd,
+            "ldsc_rg": ld_mean, "ldsc_sd": ld_sd,
+            "ldsc_mae_realized": ld_mae,
+            "ldsc_fail": ld_fail,
+            "ldpred3_rg": bp_mean, "ldpred3_sd": bp_sd,
+            "ldpred3_mae_realized": bp_mae, "ldpred3_fail": bp_fail,
             "ldsc_t": round(t_ld, 4), "ldpred3_t": round(t_bp, 3)}
 
 
@@ -267,14 +302,20 @@ def main():
     t0 = time.time()
     for arch in archs:
         ai = all_archs.index(arch)
-        for ri, rg in enumerate(RGS):
-            ld, bp, t_ld, t_bp = run_cell(arch, rg, base_seed=700 + 100 * ai + 10 * ri)
-            r = _summarise_cell(arch, rg, ld, bp, t_ld, t_bp)
+        for ri, rg_target in enumerate(RGS):
+            realized, ld, bp, t_ld, t_bp = run_cell(
+                arch, rg_target, base_seed=700 + 100 * ai + 10 * ri)
+            r = _summarise_cell(
+                arch, rg_target, realized, ld, bp, t_ld, t_bp)
             rows.append(r)
-            fail = f" [{r['ldsc_fail']} fail]" if r["ldsc_fail"] else ""
-            print(f"  {arch:>13} rg={rg:>4} | LDSC {r['ldsc_rg']:>6}±{r['ldsc_sd']:<5}{fail}"
+            ld_fail = f" [{r['ldsc_fail']} fail]" if r["ldsc_fail"] else ""
+            bp_fail = f" [{r['ldpred3_fail']} fail]" if r["ldpred3_fail"] else ""
+            print(f"  {arch:>13} target={rg_target:>4} "
+                  f"realized={r['rg_realized_mean']:>6}±{r['rg_realized_sd']:<5}"
+                  f" | LDSC {r['ldsc_rg']:>6}±{r['ldsc_sd']:<5}{ld_fail}"
                   f" | LDpred3 {r['ldpred3_rg']:>6}±{r['ldpred3_sd']:<5}"
-                  f" | t: LDSC {r['ldsc_t']:.3f}s / LDpred3 {r['ldpred3_t']:.2f}s",
+                  f"{bp_fail} | t: LDSC {r['ldsc_t']:.3f}s / "
+                  f"LDpred3 {r['ldpred3_t']:.2f}s",
                   flush=True)
             _write_csv(csv_path, rows)          # checkpoint after every cell
     if not os.environ.get("OUT"):
@@ -303,15 +344,16 @@ def make_figure(rows):
         return float(v) if v not in ("", None) else np.nan
 
     for ax, a in zip(axes, archs):
-        rr = sorted([r for r in rows if r["arch"] == a], key=lambda r: float(r["rg_true"]))
-        x = [float(r["rg_true"]) for r in rr]
+        rr = sorted([r for r in rows if r["arch"] == a],
+                    key=lambda r: float(r["rg_target"]))
+        x = [num(r["rg_realized_mean"]) for r in rr]
         ax.plot([0, 1], [0, 1], ls="--", c="k", lw=1, alpha=.5)
         ax.errorbar(x, [num(r["ldsc_rg"]) for r in rr], [num(r["ldsc_sd"]) for r in rr],
                     fmt="o-", ms=4, capsize=2, label="LDSC", color="C0")
         ax.errorbar(x, [num(r["ldpred3_rg"]) for r in rr], [num(r["ldpred3_sd"]) for r in rr],
                     fmt="s-", ms=4, capsize=2, label="LDpred3", color="C3")
         ax.set_title(a, fontsize=9)
-        ax.set_xlabel("true r_g")
+        ax.set_xlabel("realized genetic r_g")
         ax.grid(alpha=.3)
     axes[0].set_ylabel("estimated r_g")
     axes[0].legend(fontsize=8)

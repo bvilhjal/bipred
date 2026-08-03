@@ -1,9 +1,10 @@
 """Genetic-correlation recovery across polygenicity.
 
-Sweeps the causal fraction ``p`` in {0.1, 0.01, 0.001, 0.0001} at a fixed true
-``rg``, comparing bivariate LDSC (``ldsc_rg``) and bivariate LDpred3
-(``ldpred3_auto_bivariate_blocks``) against the truth. The LD is the realistic
-non-repeating coalescent model of ``rg_architectures.py``. The committed
+Sweeps the causal fraction ``p`` in {0.1, 0.01, 0.001, 0.0001} at a fixed target
+effect correlation, comparing bivariate LDSC (``ldsc_rg``) and bivariate
+LDpred3 (``ldpred3_auto_bivariate_blocks``) against each replicate's realized
+genetic correlation. The LD is the realistic non-repeating coalescent model of
+``rg_architectures.py``. The committed
 ``rg_polygenicity.csv`` uses that benchmark's default geometry (m = 5,000);
 raising msprime's mutation rate (with a larger ``K``) makes each segment yield
 more SNPs for an optional larger-m run (see the invocation below), rather than
@@ -36,7 +37,7 @@ from _benchmark_utils import peak_rss_bytes                         # noqa: E402
 import rg_architectures as R                                      # noqa: E402
 from bipred import ldsc_rg, ldpred3_auto_bivariate_blocks         # noqa: E402
 
-RG = float(os.environ.get("RG", "0.5"))          # true genetic correlation
+RG = float(os.environ.get("RG", "0.5"))          # target effect correlation
 # Polygenicity sweep; env P runs a single value (one worker per p, for parallel
 # runs), else the full set. env OUT sets the csv basename (and skips the figure).
 PS = ([float(os.environ["P"])] if os.environ.get("P")
@@ -52,10 +53,12 @@ def run_cell(p, base_seed):
     # variability of each method's rg estimate (its accuracy at this p), not
     # genotype-panel variability.
     ref, ell = R.ref_panel(0)                    # same genotypes for every rep
-    ld, bp, t_ld, t_bp = [], [], [], []
+    realized, n_causal, ld, bp, t_ld, t_bp = [], [], [], [], [], []
     for rep in range(REPS):
         rng = np.random.default_rng(base_seed + rep)
         b1, b2 = R.sim_effects("polygenic", RG, rng, p=p)       # new phenotype
+        realized.append(R.realized_rg(b1, b2))
+        n_causal.append(np.count_nonzero(b1))
         bh1, bh2 = R.sumstats_pair(b1, b2, R.N1, R.N2, rng)
         t0 = time.perf_counter()
         ld.append(ldsc_rg(bh1, bh2, ell, R.N1, R.N2, n_blocks=R.NB).rg)
@@ -65,14 +68,15 @@ def run_cell(p, base_seed):
                                                 burn_in=BURN, num_iter=ITER,
                                                 seed=rep).rg)
         t_bp.append(time.perf_counter() - t0)
-    return (np.array(ld, float), np.array(bp, float),
+    return (np.array(realized, float), np.array(n_causal, int),
+            np.array(ld, float), np.array(bp, float),
             float(np.mean(t_ld)), float(np.mean(t_bp)))
 
 
 def main():
     csv_path = os.path.join(HERE, os.environ.get("OUT", "rg_polygenicity") + ".csv")
     print(f"Genetic correlation vs polygenicity — realistic non-repeating LD "
-          f"(m={R.M:,} = {R.NB}x{R.K}, true rg={RG}, Nref={R.NREF}, "
+          f"(m={R.M:,} = {R.NB}x{R.K}, target effect corr={RG}, Nref={R.NREF}, "
           f"N1={R.N1}/N2={R.N2}, {REPS} reps)\n", flush=True)
     # Warm the sampler's Numba kernels (also forces the one-time LD build/load).
     _rng = np.random.default_rng(0)
@@ -82,29 +86,39 @@ def main():
     ldpred3_auto_bivariate_blocks(_ref, _bh1, _bh2, R.N1, R.N2,
                                   burn_in=5, num_iter=5)
 
-    print(f"{'p':>8} | {'n_causal':>8} | {'rg LDSC':>14} | {'rg LDpred3':>14} | "
-          f"{'t LDSC':>7} | {'t LDpred3':>9}")
+    print(f"{'p':>8} | {'n causal':>12} | {'realized rg':>14} | "
+          f"{'rg LDSC':>14} | {'rg LDpred3':>14}")
     print("-" * 78)
     rows = []
     t0 = time.time()
     for pi, p in enumerate(PS):
-        ld, bp, t_ld, t_bp = run_cell(p, base_seed=1000 + 100 * pi)
-        ok = np.isfinite(ld) & (np.abs(ld) <= 1.5)
-        ldv = ld[ok]
-        row = {"p": p, "n_causal": int(round(p * R.M)),
-               "rg_true": RG,
-               "ldsc_rg": round(float(np.mean(ldv)), 4) if ldv.size else "",
-               "ldsc_sd": round(float(np.std(ldv)), 4) if ldv.size else "",
-               "ldsc_fail": int((~ok).sum()),
-               "ldpred3_rg": round(float(np.mean(bp)), 4),
-               "ldpred3_sd": round(float(np.std(bp)), 4),
+        realized, n_causal, ld, bp, t_ld, t_bp = run_cell(
+            p, base_seed=1000 + 100 * pi)
+        truth = realized[np.isfinite(realized)]
+        ld_mean, ld_sd, ld_mae, ld_fail = R._estimate_summary(ld, realized)
+        bp_mean, bp_sd, bp_mae, bp_fail = R._estimate_summary(bp, realized)
+        row = {"p": p, "n_causal_expected": round(p * R.M, 3),
+               "n_causal_mean": round(float(np.mean(n_causal)), 3),
+               "n_causal_sd": round(float(np.std(n_causal)), 3),
+               "rg_target": RG,
+               "rg_realized_mean": (round(float(np.mean(truth)), 4)
+                                    if truth.size else ""),
+               "rg_realized_sd": (round(float(np.std(truth)), 4)
+                                  if truth.size else ""),
+               "ldsc_rg": ld_mean, "ldsc_sd": ld_sd,
+               "ldsc_mae_realized": ld_mae, "ldsc_fail": ld_fail,
+               "ldpred3_rg": bp_mean, "ldpred3_sd": bp_sd,
+               "ldpred3_mae_realized": bp_mae, "ldpred3_fail": bp_fail,
                "ldsc_t": round(t_ld, 4), "ldpred3_t": round(t_bp, 3)}
         rows.append(row)
-        fail = f" [{row['ldsc_fail']}f]" if row["ldsc_fail"] else ""
-        print(f"{p:>8} | {row['n_causal']:>8} | "
-              f"{row['ldsc_rg']!s:>7}±{row['ldsc_sd']!s:<6}{fail}"
-              f" | {row['ldpred3_rg']!s:>7}±{row['ldpred3_sd']!s:<6}"
-              f" | {t_ld:>6.2f}s | {t_bp:>8.2f}s", flush=True)
+        ld_fail_text = f" [{ld_fail}f]" if ld_fail else ""
+        bp_fail_text = f" [{bp_fail}f]" if bp_fail else ""
+        print(f"{p:>8} | {row['n_causal_mean']:>6.1f}±{row['n_causal_sd']:<4.1f}"
+              f" | {row['rg_realized_mean']!s:>7}±"
+              f"{row['rg_realized_sd']!s:<6}"
+              f" | {row['ldsc_rg']!s:>7}±{row['ldsc_sd']!s:<6}{ld_fail_text}"
+              f" | {row['ldpred3_rg']!s:>7}±"
+              f"{row['ldpred3_sd']!s:<6}{bp_fail_text}", flush=True)
         with open(csv_path, "w", newline="") as fh:
             w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
             w.writeheader()
@@ -133,8 +147,12 @@ def make_figure(rows):
     xs = [r["p"] for r in rows]
     fig, (ax, axt) = plt.subplots(1, 2, figsize=(11.5, 4.4))
 
-    # accuracy: estimated rg vs polygenicity
-    ax.axhline(RG, ls="--", c="k", lw=1, alpha=.5, label=f"true rg={RG}")
+    # Estimates versus realized genetic correlation at each polygenicity.
+    ax.axhline(RG, ls=":", c="k", lw=1, alpha=.4,
+               label=f"effect-correlation target={RG}")
+    ax.errorbar(xs, [num(r["rg_realized_mean"]) for r in rows],
+                [num(r["rg_realized_sd"]) for r in rows], fmt="x--", ms=5,
+                capsize=3, color="0.35", label="realized genetic rg")
     ax.errorbar(xs, [num(r["ldsc_rg"]) for r in rows],
                 [num(r["ldsc_sd"]) for r in rows], fmt="o-", ms=5, capsize=3,
                 color="C0", label="bivariate LDSC")
@@ -144,7 +162,7 @@ def make_figure(rows):
     ax.set_xscale("log")
     ax.set_xlabel("polygenicity p (causal fraction)")
     ax.set_ylabel("estimated rg")
-    ax.set_title("Accuracy")
+    ax.set_title("Recovery")
     ax.grid(alpha=.3, which="both")
     ax.legend()
 

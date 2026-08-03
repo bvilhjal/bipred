@@ -9,12 +9,12 @@ unique msprime segment per block), reused here so the scaling curve is measured 
 the same realistic LD as the accuracy benchmark — each size builds ``m/K`` unique
 blocks (``NB`` via the env hook), cached per size like the accuracy benchmark.
 
-For each size one polygenic two-trait pair at a fixed true ``rg`` is simulated
-from the population LD and both estimators are fitted against a finite reference
-panel: bivariate LDSC (``ldsc_rg``) and bivariate LDpred3
+For each size one polygenic two-trait pair at a fixed effect-correlation target
+is simulated from the population LD and both estimators are fitted against a
+finite reference panel: bivariate LDSC (``ldsc_rg``) and bivariate LDpred3
 (``ldpred3_auto_bivariate_blocks``, the default path incl. its two univariate
 h²-cap pre-passes). Reports per-fit wall time, peak RSS and the recovered rg, so
-the curve shows both the cost growth and that accuracy holds as m grows.
+the curve shows cost growth and the estimates for one realized draw per size.
 
     OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python benchmarks/rg_scaling.py
     python benchmarks/rg_scaling.py 5000 10000 20000 40000 80000   # custom m
@@ -32,7 +32,7 @@ sys.path.insert(0, HERE)
 from _benchmark_utils import peak_rss_bytes                         # noqa: E402
 
 K = 200                                # SNPs per (unique coalescent) block
-RG = 0.5                               # true genetic correlation for the sweep
+RG = 0.5                               # target effect correlation for the sweep
 BURN, ITER = 150, 180                  # per-fit sampler sweeps (as rg_architectures)
 ENV = dict(os.environ, OPENBLAS_NUM_THREADS="1", OMP_NUM_THREADS="1",
            MKL_NUM_THREADS="1", NUMBA_NUM_THREADS="1", NUMEXPR_NUM_THREADS="1")
@@ -51,6 +51,7 @@ def _worker(m):
     ref, ell = R.ref_panel(0)
     rng = np.random.default_rng(123)
     b1, b2 = R.sim_effects("polygenic", RG, rng)
+    rg_realized = R.realized_rg(b1, b2)
     bh1, bh2 = R.sumstats_pair(b1, b2, R.N1, R.N2, rng)
     nb = m // K
 
@@ -71,7 +72,9 @@ def _worker(m):
     print("RESULT " + json.dumps(
         {"m": m, "nb": nb, "t_ldsc": t_ldsc, "t_ldpred3": t_ldpred3,
          "mem_gb": mem_gb, "rg_ldsc": rg_ldsc, "rg_ldpred3": rg_bp,
-         "rg_true": RG}))
+         "rg_target": RG, "rg_realized": rg_realized,
+         "abs_error_ldsc_realized": abs(rg_ldsc - rg_realized),
+         "abs_error_ldpred3_realized": abs(rg_bp - rg_realized)}))
 
 
 def run(m):
@@ -93,33 +96,42 @@ def write_csv(rows):
     with open(os.path.join(HERE, "rg_scaling.csv"), "w", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(["m", "nb", "t_ldsc_s", "t_ldpred3_s", "peak_gb",
-                    "rg_ldsc", "rg_ldpred3", "rg_true"])
+                    "rg_ldsc", "rg_ldpred3", "rg_target", "rg_realized",
+                    "abs_error_ldsc_realized",
+                    "abs_error_ldpred3_realized"])
         w.writerows(rows)
 
 
 def main():
     sizes = [int(float(a)) for a in sys.argv[1:] if not a.startswith("--")] or \
             [5000, 10000, 20000, 40000, 80000]
+    if any(m <= 0 or m % K for m in sizes):
+        raise ValueError(f"every m must be a positive multiple of K={K}")
     print(f"Genetic-correlation scaling with m — realistic non-repeating LD "
-          f"(K={K}/block, true rg={RG}, {BURN}+{ITER} sweeps, single core)\n",
+          f"(K={K}/block, target effect corr={RG}, {BURN}+{ITER} sweeps, "
+          f"single core)\n",
           flush=True)
     print(f"{'m':>8} | {'LDSC (s)':>9} | {'LDpred3 (s)':>11} | {'peak GB':>7} | "
-          f"{'rg LDSC':>8} | {'rg LDpred3':>10}")
-    print("-" * 72)
+          f"{'realized':>8} | {'rg LDSC':>8} | {'rg LDpred3':>10}")
+    print("-" * 83)
     rows = []
     for m in sizes:
         res = run(m)
         if res["ok"]:
             print(f"{m:>8,} | {res['t_ldsc']:>9.3f} | {res['t_ldpred3']:>11.2f} | "
-                  f"{res['mem_gb']:>7.2f} | {res['rg_ldsc']:>8.3f} | "
+                  f"{res['mem_gb']:>7.2f} | {res['rg_realized']:>8.3f} | "
+                  f"{res['rg_ldsc']:>8.3f} | "
                   f"{res['rg_ldpred3']:>10.3f}", flush=True)
             rows.append([m, m // K, round(res["t_ldsc"], 4),
                          round(res["t_ldpred3"], 3), round(res["mem_gb"], 3),
-                         round(res["rg_ldsc"], 4), round(res["rg_ldpred3"], 4), RG])
+                         round(res["rg_ldsc"], 4), round(res["rg_ldpred3"], 4), RG,
+                         round(res["rg_realized"], 4),
+                         round(res["abs_error_ldsc_realized"], 4),
+                         round(res["abs_error_ldpred3_realized"], 4)])
         else:
             tag = "OOM" if res["killed"] else "FAIL"
             print(f"{m:>8,} | {tag}  ({res['msg'][:70]})", flush=True)
-            rows.append([m, m // K, tag, tag, tag, tag, tag, RG])
+            rows.append([m, m // K, tag, tag, tag, tag, tag, RG, "", "", ""])
         write_csv(rows)
     make_figure(rows)
     print("\nwrote rg_scaling.csv and rg_scaling.png")
@@ -155,14 +167,17 @@ def make_figure(rows):
     ax.set_xlabel("m (thousands)"); ax.set_ylabel("peak RSS (GB)")
     ax.set_title("Memory"); ax.grid(alpha=.3)
 
-    ax = axes[2]                       # recovered rg vs m (accuracy holds)
-    ax.axhline(RG, ls="--", c="k", lw=1, alpha=.5, label=f"true rg={RG}")
+    ax = axes[2]                       # recovered rg vs m (one draw per size)
+    ax.axhline(RG, ls=":", c="k", lw=1, alpha=.4,
+               label=f"effect-correlation target={RG}")
+    ax.plot([x / 1000 for x in xs], [r[8] for r in ok], "x--", color="0.35",
+            label="realized genetic rg")
     ax.plot([x / 1000 for x in xs], [r[6] for r in ok], "s-", color="C3",
             label="LDpred3")
     ax.plot([x / 1000 for x in xs], [r[5] for r in ok], "o-", color="C0",
             label="LDSC")
     ax.set_xlabel("m (thousands)"); ax.set_ylabel("estimated rg")
-    ax.set_title("Accuracy"); ax.grid(alpha=.3); ax.legend(fontsize=8)
+    ax.set_title("Single-draw recovery"); ax.grid(alpha=.3); ax.legend(fontsize=8)
 
     fig.suptitle("Genetic-correlation estimation: scaling with m "
                  "(realistic non-repeating LD, single core)")

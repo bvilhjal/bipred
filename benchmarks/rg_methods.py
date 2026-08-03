@@ -108,32 +108,44 @@ def sweep(rows, N1, N2, tag):
     print(f"\n== accuracy: {tag} (N1={N1} N2={N2}, rho_beta={RHO_BETA}, m={R.M}, "
           f"{REPS} reps) ==", flush=True)
     hdr = " ".join(f"{mth:>12}" for mth in METHODS)
-    print(f"{'rg_true':>7} | {hdr}", flush=True)
+    print(f"{'rg target/realized':>18} | {hdr}", flush=True)
     for frac in [0.0, 0.25, 0.5, 0.75, 1.0]:
         acc = {mth: [] for mth in METHODS}
         tim = {mth: [] for mth in METHODS}
-        tru = None
+        realized = []
+        target = None
         for rep in range(REPS):
             ref, ell = R.ref_panel(rep)
             rng = np.random.default_rng(6000 + rep)
-            b1, b2, tru = sim(rng, frac)
+            b1, b2, target = sim(rng, frac)
+            realized.append(R.realized_rg(b1, b2))
             bh1, bh2 = R.sumstats_pair(b1, b2, N1, N2, rng)
             rg, t = estimate_all(ref, ell, bh1, bh2, N1, N2, rep)
             for mth in METHODS:
                 acc[mth].append(rg[mth]); tim[mth].append(t[mth])
-        row = {"tag": tag, "N1": N1, "N2": N2, "rg_true": round(tru, 3)}
+        realized = np.asarray(realized, float)
+        row = {
+            "tag": tag, "N1": N1, "N2": N2,
+            "rg_target": round(target, 3),
+            "rg_realized": round(float(np.mean(realized)), 3),
+            "rg_realized_sd": round(float(np.std(realized)), 3),
+        }
         cells = []
         for mth in METHODS:
             a = np.array(acc[mth], float)
-            ok = np.isfinite(a) & (np.abs(a) <= 1.5)
+            ok = np.isfinite(a) & np.isfinite(realized) & (np.abs(a) <= 1.5)
             mean = float(np.mean(a[ok])) if ok.any() else np.nan
             sd = float(np.std(a[ok])) if ok.any() else np.nan
+            mae = float(np.mean(np.abs(a[ok] - realized[ok]))) if ok.any() else np.nan
             row[f"{mth}_rg"] = round(mean, 3)
             row[f"{mth}_sd"] = round(sd, 3)
+            row[f"{mth}_mae_realized"] = round(mae, 3)
+            row[f"{mth}_fail"] = int((~ok).sum())
             row[f"{mth}_t"] = round(float(np.mean(tim[mth])), 3)
             cells.append(f"{mean:>6.2f}±{sd:<5.2f}")
         rows.append(row)
-        print(f"{tru:>7.2f} | " + " ".join(cells), flush=True)
+        print(f"{target:>6.2f}/{row['rg_realized']:<6.2f} | "
+              + " ".join(cells), flush=True)
     t_line = " ".join(f"{mth} {np.mean([r[f'{mth}_t'] for r in rows if r['tag']==tag]):.2f}s"
                       for mth in METHODS)
     print(f"  mean time/fit: {t_line}", flush=True)
@@ -184,15 +196,15 @@ def make_figure(rows, rows_t, base):
     colors = {"ldsc": "C0", "uni_gv": "C2", "uni_r2": "C1", "biv": "C3"}
     mark = {"ldsc": "o", "uni_gv": "^", "uni_r2": "v", "biv": "s"}
     for p, tag in enumerate(tags):
-        rr = sorted([r for r in rows if r["tag"] == tag], key=lambda r: r["rg_true"])
-        x = [r["rg_true"] for r in rr]
+        rr = sorted([r for r in rows if r["tag"] == tag], key=lambda r: r["rg_target"])
+        x = [r["rg_realized"] for r in rr]
         ax[p].plot([0, 1], [0, 1], "k--", lw=1, alpha=.5)
         for mth in METHODS:
             ax[p].errorbar(x, [r[f"{mth}_rg"] for r in rr],
                            [r[f"{mth}_sd"] for r in rr], fmt=mark[mth] + "-", ms=4,
                            capsize=2, color=colors[mth], label=mth, alpha=.85)
         ax[p].set_title(f"accuracy — {tag}", fontsize=9)
-        ax[p].set_xlabel("true r_g"); ax[p].grid(alpha=.3)
+        ax[p].set_xlabel("mean realized r_g"); ax[p].grid(alpha=.3)
         if p == 0:
             ax[p].set_ylabel("estimated r_g"); ax[p].legend(fontsize=8)
     if rows_t:
