@@ -97,7 +97,9 @@ def main():
         truth = realized[np.isfinite(realized)]
         ld_mean, ld_sd, ld_mae, ld_fail = R._estimate_summary(ld, realized)
         bp_mean, bp_sd, bp_mae, bp_fail = R._estimate_summary(bp, realized)
-        row = {"p": p, "n_causal_expected": round(p * R.M, 3),
+        # sim_effects forces one causal variant when the Bernoulli draw is empty.
+        n_expected = p * R.M + (1.0 - p) ** R.M
+        row = {"p": p, "n_causal_expected": round(n_expected, 3),
                "n_causal_mean": round(float(np.mean(n_causal)), 3),
                "n_causal_sd": round(float(np.std(n_causal)), 3),
                "rg_target": RG,

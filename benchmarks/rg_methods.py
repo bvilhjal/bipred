@@ -14,6 +14,8 @@ cached segments + finite reference panels):
     ``b1'R b2 / sqrt(r2_1 . r2_2)``.
   * ``biv``     -- the bivariate joint fit's genetic correlation
     (``ldpred3_auto_bivariate_blocks(...).rg``).
+  * ``biv_decorr`` -- the same joint fit with ``rg_decorrelated=True``. This is a
+    sensitivity estimator based on cross-sweep quadratics, not the default.
 
 ``uni_gv`` and ``uni_r2`` are read off the *same* pair of univariate runs, so they
 share a running time (the two ``ldpred3_auto_infer`` calls); only a cheap
@@ -98,10 +100,19 @@ def estimate_all(ref, ell, bh1, bh2, N1, N2, rep):
     rg["biv"] = ldpred3_auto_bivariate_blocks(ref, bh1, bh2, N1, N2, burn_in=BURN,
                                               num_iter=ITER, seed=rep).rg
     t["biv"] = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    try:
+        rg["biv_decorr"] = ldpred3_auto_bivariate_blocks(
+            ref, bh1, bh2, N1, N2, burn_in=BURN, num_iter=ITER,
+            rg_decorrelated=True, seed=rep).rg
+    except ValueError:
+        rg["biv_decorr"] = np.nan
+    t["biv_decorr"] = time.perf_counter() - t0
     return rg, t
 
 
-METHODS = ["ldsc", "uni_gv", "uni_r2", "biv"]
+METHODS = ["ldsc", "uni_gv", "uni_r2", "biv", "biv_decorr"]
 
 
 def sweep(rows, N1, N2, tag):
@@ -193,8 +204,10 @@ def make_figure(rows, rows_t, base):
     fig, ax = plt.subplots(1, npan, figsize=(4.2 * npan, 3.8))
     if npan == 1:
         ax = [ax]
-    colors = {"ldsc": "C0", "uni_gv": "C2", "uni_r2": "C1", "biv": "C3"}
-    mark = {"ldsc": "o", "uni_gv": "^", "uni_r2": "v", "biv": "s"}
+    colors = {"ldsc": "C0", "uni_gv": "C2", "uni_r2": "C1",
+              "biv": "C3", "biv_decorr": "C4"}
+    mark = {"ldsc": "o", "uni_gv": "^", "uni_r2": "v",
+            "biv": "s", "biv_decorr": "D"}
     for p, tag in enumerate(tags):
         rr = sorted([r for r in rows if r["tag"] == tag], key=lambda r: r["rg_target"])
         x = [r["rg_realized"] for r in rr]

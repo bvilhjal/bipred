@@ -10,9 +10,9 @@ structurally separate from the LD-mediated genetic covariance, so:
 2. **Setting ``cross_corr``**: use the known overlap
    (``N_shared·rho_pheno/sqrt(N1 N2)``) when you have it, otherwise the
    cross-trait LDSC intercept (``ldsc_rg(...).gcov_intercept``, inverted by
-   ``estimate_sample_overlap``) — the standard estimator, well-anchored at real
-   GWAS scale. The benchmark reports the observed correction without promoting
-   a universal default.
+   ``estimate_sample_overlap``) under the assumptions described in
+   ``docs/rg.md``. This benchmark reports the effect of a known correction; it
+   does not validate intercept inversion or promote a universal default.
 
 Realistic non-repeating coalescent LD (``rg_architectures``). Needs ``msprime``.
 

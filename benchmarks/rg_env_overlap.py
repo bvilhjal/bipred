@@ -10,7 +10,7 @@ true **genetic** rg in every cell:
   - bivariate **LDSC** with a free or constrained cross-trait intercept.
   - bivariate **LDpred3** with ``cross_corr`` set to the phenotypic correlation on
     the overlap (here read straight off the shared cohort, or from the LDSC
-    intercept); ``cross_corr=0`` leaves the bias.
+    intercept), compared with ``cross_corr=0``.
 
 Real individual-level genotypes/phenotypes (the independent-block coalescent genome
 of ``infer_vs_ldsc_sbayes``) are used so the confounding arises mechanistically:

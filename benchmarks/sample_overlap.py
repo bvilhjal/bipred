@@ -1,9 +1,9 @@
 """Sample-overlap validation for the bivariate genetic-correlation estimators.
 
 Overlapping GWAS samples induce a correlation in the two traits' sampling noise
-(controlled here by ``rho_e``), which inflates a naive genetic-correlation
-estimate even when the traits are genetically uncorrelated. This checks that the
-estimators respond to their overlap corrections on the **same realistic
+(controlled here by ``rho_e``), which can shift a genetic-correlation estimate.
+This checks how the estimators respond to their overlap corrections on the
+**same realistic
 non-repeating coalescent LD** as
 ``rg_architectures.py`` (whose population blocks and helpers are reused):
 
@@ -105,9 +105,9 @@ def main():
         writer = csv.DictWriter(fh, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
-    print(f"\nUncorrected columns (LDSC icpt=0, biv cc=0) should be biased upward by "
-          f"the overlap. Score all methods against realized rg and inspect failure "
-          f"counts before interpreting correction. ({time.time()-t0:.0f}s)\n"
+    print(f"\nCompare corrected and uncorrected columns against realized rg; "
+          f"Monte Carlo variation can dominate the expected overlap shift at "
+          f"this power. Inspect MAE and failure counts. ({time.time()-t0:.0f}s)\n"
           "wrote sample_overlap.csv")
 
 
