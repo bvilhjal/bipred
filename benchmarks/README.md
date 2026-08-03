@@ -9,9 +9,11 @@ by the [`bipred`](../) package — the joint fit (`ldpred3_auto_bivariate`,
 use the repository's small msprime helper. Both packages must be installed to
 run the benchmarks.
 
-[`RESULTS.md`](RESULTS.md) is a 2026-07-06 historical snapshot generated before
-the current sampler and LD paths. Use the scripts and committed CSV files as the
-reproducible sources; rerun them before making current performance claims.
+[`RESULTS.md`](RESULTS.md) is the bipred 0.2.0 snapshot generated on 2026-08-03
+from benchmark source revision `17d6ae2`. The CSV files are the authoritative
+numeric record. Accuracy is paired against each finite effect draw's realized
+population-LD genetic correlation; `rg_target` records the generating
+effect-correlation parameter separately.
 
 From a checkout, `[bench]` installs the dependencies for the self-contained
 simulation and plotting scripts:
@@ -27,6 +29,7 @@ Run single-core for stable timings on POSIX shells:
 
 ```bash
 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+NUMBA_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 MPLCONFIGDIR=/tmp/bipred-mpl \
   python benchmarks/<script>.py
 ```
 
@@ -36,8 +39,13 @@ The PowerShell equivalent on Windows is:
 $env:OPENBLAS_NUM_THREADS = "1"
 $env:OMP_NUM_THREADS = "1"
 $env:MKL_NUM_THREADS = "1"
+$env:NUMBA_NUM_THREADS = "1"
+$env:NUMEXPR_NUM_THREADS = "1"
 python benchmarks/<script>.py
 ```
+
+Run timing scripts sequentially. Concurrent benchmark processes compete for
+memory bandwidth and turn timing columns into decorative fiction.
 
 Most scripts simulate a **realistic non-repeating coalescent** genome, so they
 need `msprime` (`pip install msprime`). Population LD is cached under
@@ -57,18 +65,38 @@ alibi.
 
 | Script | What it measures | Needs msprime |
 |--------|------------------|:---:|
-| `rg_architectures.py` | Genetic correlation (bivariate LDSC vs bivariate LDpred3) vs truth across a six-point r_g grid × five architectures, on realistic non-repeating coalescent LD; timing + memory (→ `rg_architectures.{csv,png}`) | ✓ |
-| `rg_polygenicity.py` | Genetic-correlation recovery vs polygenicity (p=0.1…1e-4); the committed run uses the default m=5,000 (a larger m is available via the `MUT_RATE`/`K` env vars, denser blocks); LD simulated once, reused across p (→ `rg_polygenicity.{csv,png}`) | ✓ |
-| `rg_methods.py` | rg estimators compared — cross-trait LDSC / `uni_gv` / `uni_r2` / the bivariate joint fit: accuracy (symmetric & asymmetric power) + running time + a timing scan across m (→ `rg_methods.{csv,png}`, `rg_methods_timing.csv`) | ✓ |
-| `rg_scaling.py` | Genetic-correlation estimation scaling with m (bivariate LDSC vs LDpred3): per-fit time / peak RSS / accuracy, one subprocess per size (→ `rg_scaling.{csv,png}`) | ✓ |
-| `mixer_overlap.py` | MiXeR-style polygenic-overlap recovery (`res.mixer`): overlap fraction, within-shared ρ_β, the r_g decomposition and relative polygenicity across six sweeps (`overlap`, `rho`, `power`, `ldmatch` — LD-spreading vs reference mismatch, `calibration` — noise-inflation on/off, `unical` — `mixer_calibrated` vs truth) (→ `mixer_overlap.{csv,png}`) | ✓ |
-| `overlap_estimation.py` | Bivariate rg sensitivity to sample overlap and how to set `cross_corr` (→ `overlap_estimation.csv`) | ✓ |
-| `sample_overlap.py` | Validates the sample-overlap corrections (free LDSC intercept, bivariate `cross_corr`) on the realistic non-repeating rg LD; also per-fit timing | ✓ |
+| `rg_architectures.py` | LDSC and joint-fit genetic correlation across six targets × five architectures; paired realized-truth error, failures, timing, and memory (→ `rg_architectures.{csv,png}`) | ✓ |
+| `rg_polygenicity.py` | Realized-truth recovery as the causal fraction falls from 0.1 to 1e-4; expected and observed causal counts (→ `rg_polygenicity.{csv,png}`) | ✓ |
+| `rg_methods.py` | LDSC, `uni_gv`, `uni_r2`, the default joint fit, and `rg_decorrelated=True` under symmetric and asymmetric power, plus timing versus m (→ `rg_methods.{csv,png}`, `rg_methods_timing.csv`) | ✓ |
+| `rg_scaling.py` | Per-fit time, peak RSS, and single-draw recovery versus m, one subprocess per size (→ `rg_scaling.{csv,png}`) | ✓ |
+| `mixer_overlap.py` | MiXeR-style overlap, effect correlation, joint and overlap-derived r_g, LD matching, noise inflation, and univariate count anchoring (→ `mixer_overlap.{csv,png}`) | ✓ |
+| `overlap_estimation.py` | Paired effect of known sample-overlap `cross_corr`; it does not validate LDSC-intercept inversion (→ `overlap_estimation.csv`) | ✓ |
+| `sample_overlap.py` | Lower-power comparison of free/constrained LDSC and unset/set bivariate overlap corrections (→ `sample_overlap.csv`) | ✓ |
 | `bivariate_demo.py` | Bivariate prediction gain for a weak trait across two-trait architectures (needs `ld_library.npz` in the cwd) | — |
-| `rg_env_overlap.py` | Stress test of genetic-rg estimators under **environmental** correlation on shared samples; current results include unstable corrected cells and `agg()` excludes `|rg| > 1.5` (→ `rg_env_overlap.csv`) | ✓ |
+| `rg_env_overlap.py` | Individual-genotype stress test under **environmental** correlation on shared samples; records paired MAE and failures after the `|r_g| <= 1.5` diagnostic window (→ `rg_env_overlap.csv`) | ✓ |
 | `hapnest/run_bivariate.py` | rg / h² / MiXeR-overlap recovery **and** out-of-sample PRS gain (bivariate vs univariate) on **HAPNEST** genotypes+phenotypes — synthetic genomes resampled from a real 1000G+HGDP reference, so real LD/MAF/structure with known truth (→ `hapnest/run_bivariate.csv`). See [`hapnest/README.md`](hapnest/README.md). | — (needs HAPNEST) |
 
 `rg_env_overlap.py` reuses the univariate `infer_vs_ldsc_sbayes.py` benchmark
 (which stays a univariate benchmark and imports only from `ldpred3`) for its
 real-genotype coalescent genome; a copy is included here so `rg_env_overlap.py`
 can `import infer_vs_ldsc_sbayes` at runtime.
+
+## Committed artifact contract
+
+**Table 2. Generated artifacts and data-row counts.**
+
+| Stem | CSV rows | PNG |
+|---|---:|:---:|
+| `rg_architectures` | 30 | ✓ |
+| `rg_polygenicity` | 4 | ✓ |
+| `rg_methods` | 10 | ✓ |
+| `rg_methods_timing` | 3 | — |
+| `rg_scaling` | 5 | ✓ |
+| `mixer_overlap` | 29 | ✓ |
+| `overlap_estimation` | 6 | — |
+| `sample_overlap` | 3 | — |
+| `rg_env_overlap` | 5 | — |
+
+That is nine CSVs and five PNGs. `bivariate_demo.py`, HAPNEST, and standalone
+`infer_vs_ldsc_sbayes.py` require the external inputs named in
+[`RESULTS.md`](RESULTS.md).

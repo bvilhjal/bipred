@@ -53,7 +53,7 @@ guide. Summary statistics must already be ancestry-matched and harmonized.
 - [Benchmark guide](https://github.com/bvilhjal/bipred/blob/main/benchmarks/README.md):
   scripts and reproducibility.
 - [Benchmark results](https://github.com/bvilhjal/bipred/blob/main/benchmarks/RESULTS.md):
-  dated historical snapshot; rerun before making current performance claims.
+  the reproducible bipred 0.2.0 snapshot, including limitations and provenance.
 
 ## License
 

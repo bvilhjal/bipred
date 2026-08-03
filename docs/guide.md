@@ -113,16 +113,18 @@ mx["rg_from_overlap"]
 mx["n_causal"], mx["n_shared"]
 ```
 
-Ratios are generally safer than absolute causal counts. LD can spread inclusion
-mass to correlated neighbours, while reference mismatch can add inflation.
-For count-sensitive work, consider `noise_inflation=True` and
-`res.mixer_calibrated(infer1, infer2)` with two univariate ldpred3 fits.
+Ratios avoid the literal causal-count interpretation but still need calibration.
+LD can spread inclusion mass to correlated neighbours, while reference mismatch
+can add inflation. For count-sensitive work, compare `noise_inflation=True` and
+`res.mixer_calibrated(infer1, infer2)` with the unadjusted result; neither is
+guaranteed to improve calibration at every power setting.
 
 ## Genetic correlation
 
 Use `res.rg` by default. For strongly asymmetric-power pairs,
-`rg_decorrelated=True` is an optional sensitivity estimator with limited direct
-benchmark coverage; compare it with the default rather than replacing the
+`rg_decorrelated=True` is an optional sensitivity estimator. It had higher
+paired error than the default in the committed 0.2.0 symmetric and asymmetric
+synthetic sweeps, so compare it with the default rather than replacing the
 default automatically. `ldsc_rg` is a fast independent screen. Interpretation,
 sample overlap, and overlap-interval semantics are covered in [`rg.md`](rg.md).
 

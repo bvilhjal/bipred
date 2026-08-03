@@ -1,229 +1,240 @@
-# Historical benchmark snapshot
+# Benchmarks for bipred 0.2.0
 
-> **Dated evidence, not current performance.** The numeric artifacts summarized
-> here were generated on 2026-07-06 and committed with `f409ec7`; the original
-> summary followed in `ecc886b8`. They predate the reviewed base revision
-> `5b69184`, including later low-rank, regional, mixed-panel parallel, and
-> adaptive-stopping work. No numbers were refreshed for the documentation
-> cleanup.
+These artifacts were regenerated on 2026-08-03 from benchmark source revision
+`17d6ae2`. They replace the 2026-07-06 snapshot.
 
-Most runs use non-repeating coalescent simulation (`msprime`) with known truth
-and int8 LD. Recorded provenance is NumPy 2.2.6, Numba 0.66, and msprime 1.4.
-The CPU, OS, exact ldpred3 revision, and complete commands were not recorded, so
-the timing rows are not suitable for current hardware or release comparisons.
-Rerun the scripts described in [`README.md`](README.md) for current evidence.
+**Table 1. Recorded environment.**
 
-Further limitations:
+| Component | Value |
+|---|---|
+| Python | 3.14.6 |
+| bipred | 0.2.0 |
+| ldpred3 | 0.4.3 |
+| NumPy / Numba | 2.4.6 / 0.66.0 |
+| msprime / Matplotlib | 1.4.2 / 3.11.1 |
+| Platform | Darwin 25.5.0, arm64 |
+| Numerical threads | 1 |
 
-- these are stochastic Monte Carlo runs, so reruns will move the estimates;
-- Sections 1–4 simulate the likelihood's assumed
-  `beta_hat ~ N(R beta, R / n)` model, which favors a model-based estimator;
-- Section 7 is an out-of-model, individual-genotype stress test and does not
-  show reliable recovery from the bivariate `cross_corr` correction; and
-- external HAPNEST and cached-LD runs were not regenerated.
+All timing runs used one OpenBLAS, OMP, MKL, Numba, and NumExpr thread. Times
+are machine-specific. Peak RSS includes simulation, LD construction, reference
+panels, and JIT state present in each process.
 
-## Findings in this snapshot
+## Reading the results
 
-- **Bivariate LDpred3 halves the genetic-correlation error of cross-trait LDSC** —
-  mean |r̂g − rg| of **0.021 vs 0.042** across five architectures, at roughly
-  **half the sampling SD** (0.063 vs 0.120).
-- **The gain grows under asymmetric power** (one weak trait): biv MAE 0.019 vs
-  LDSC 0.040 and univariate-effect estimators ~0.048.
-- In the recorded environment, the bivariate fit takes **0.25 s at 5k variants**
-  and **3.37 s at 80k**, with **<0.7 GB** peak RSS at 80k. These are historical
-  measurements, not current guarantees.
-- **Polygenic overlap** (`res.mixer`) recovers the shared fraction monotonically;
-  ratios (`frac_shared`, `rho_beta`) are reliable, absolute counts approximate.
-- In the idealized **sample-overlap** sweep, overlap biases rg upward unless
-  `cross_corr` is set; the separate environmental-overlap stress test is much
-  noisier and does not establish robust recovery by the bivariate correction.
+The generating parameter is an effect-correlation target. A finite causal draw
+under LD generally has a different genetic correlation. Every accuracy column
+therefore uses paired error against that replicate's realized
 
----
+**Equation 1. Realized LD-adjusted genetic correlation.**
+
+```text
+r_g = beta1' R beta2 /
+      sqrt((beta1' R beta1) (beta2' R beta2)).
+```
+
+That distinction matters most for sparse architectures. The previous artifacts
+scored against the target and could mislabel Monte Carlo variation as estimator
+error.
+
+Other limits are equally important:
+
+- most runs simulate the fitted `beta_hat ~ N(R beta, R / N)` model, so they
+  favor a model-based estimator;
+- estimates outside `|r_g| <= 1.5` are counted as failures before summaries;
+- the environmental-overlap run is an intentionally out-of-model stress test;
+- Monte Carlo sizes range from 5 to 20 replicates, not publication-scale
+  calibration studies; and
+- external HAPNEST, cached-LD, and GCTB runs were not available.
 
 ## 1. Genetic correlation across architectures
 
-rg recovery across five genetic architectures × six true-rg values, comparing
-cross-trait LDSC with the bivariate joint fit. Table shows mean absolute error
-(MAE) and mean sampling SD, averaged over the six rg points (10 reps each).
+The main sweep has five architectures, six targets, and ten replicates per cell
+at 5,000 variants. MAE is computed per replicate against realized genetic
+correlation, then averaged over the six targets.
 
-**Table 1. Genetic-correlation accuracy by architecture.**
+**Table 2. Paired genetic-correlation error by architecture.**
 
-| Architecture | LDSC MAE | LDSC SD | **LDpred3 MAE** | **LDpred3 SD** |
-|---|---:|---:|---:|---:|
-| infinitesimal | 0.010 | 0.045 | 0.021 | **0.024** |
-| sparse | 0.082 | 0.149 | **0.018** | **0.100** |
-| moderate | 0.031 | 0.080 | **0.015** | **0.046** |
-| polygenic | 0.014 | 0.079 | **0.012** | **0.033** |
-| major_locus | 0.071 | 0.249 | **0.040** | **0.115** |
-| **all** | 0.042 | 0.120 | **0.021** | **0.063** |
+| Architecture | LDSC MAE | LDpred3 MAE | LDSC mean SD | LDpred3 mean SD | Failures, LDSC / LDpred3 |
+|---|---:|---:|---:|---:|---:|
+| infinitesimal | 0.0289 | 0.0215 | 0.0448 | 0.0238 | 0 / 0 |
+| sparse | 0.0914 | 0.0075 | 0.1434 | 0.0990 | 0 / 0 |
+| moderate | 0.0583 | 0.0108 | 0.0800 | 0.0460 | 0 / 0 |
+| polygenic | 0.0484 | 0.0134 | 0.0802 | 0.0325 | 0 / 0 |
+| major locus | 0.0989 | 0.0079 | 0.1748 | 0.1152 | 4 / 0 |
+| **All cells** | **0.0652** | **0.0122** | **0.1047** | **0.0633** | **4 / 0** |
 
-LDpred3 wins on every non-infinitesimal architecture and always has the tighter
-SD. LDSC edges it on point accuracy only for the infinitesimal case, where its
-moment assumptions hold exactly — but even there LDpred3's SD is ~2× smaller.
-
-Two things to read carefully in Table 1. First, LDpred3's tighter SD is the
-bias–variance trade of a shrinkage estimator: it **attenuates high true rg**
-downward — at rg = 0.95 the LDpred3 estimate is 0.906 (infinitesimal), 0.922
-(polygenic) and 0.938 (moderate) — a bias that averaging MAE over the six-point
-rg grid partly masks. Second, the LDSC MAE/SD here **exclude** replicates where
-LDSC returns |r̂g| > 1.5 (the `ldsc_fail` column of the CSV; e.g. one dropped
-replicate in `major_locus` at rg = 0.95), while LDpred3 replicates are never
-excluded — so the comparison, if anything, flatters LDSC and the LDpred3 win is
-conservative.
+Within this likelihood-matched simulation, the joint fit has lower paired MAE
+in 26 of 30 cells and lower SD in all 30. It does not win everywhere:
+high-correlation shrinkage is visible. In the infinitesimal target-0.95 cell,
+realized r_g was 0.9509, while the joint and LDSC means were 0.8998 and 0.9474.
+This is evidence for the tested model and geometry, not a universal ranking over
+real GWAS.
 
 **Figure 1. Genetic-correlation estimates across architectures.**
 
-![rg across architectures](rg_architectures.png)
+![Genetic correlation across architectures](rg_architectures.png)
 
-## 2. Genetic correlation vs polygenicity
+## 2. Polygenicity
 
-rg recovery (true rg = 0.5) as the causal fraction `p` drops from 0.1 to 1e-4
-(fewer causal variants → weaker signal).
+At very low polygenicity, the realized truth itself becomes highly variable.
+The expected causal count includes the script's enforced minimum of one causal
+variant.
 
-**Table 2. Genetic-correlation recovery by polygenicity.**
+**Table 3. Recovery as the causal fraction decreases.**
 
-| p | # causal | LDSC r̂g (sd) | **LDpred3 r̂g (sd)** |
-|---:|---:|---:|---:|
-| 0.1 | 500 | 0.469 (0.094) | **0.498 (0.034)** |
-| 0.01 | 50 | 0.263 (0.237) | **0.429 (0.066)** |
-| 0.001 | 5 | 0.407 (0.572) | 0.315 (0.590) |
-| 0.0001 | ~0 | −0.550 (0.764) | 0.598 (0.796) |
-
-LDpred3 stays close to truth with a far tighter SD down to ~50 causal variants;
-below that (≤5 causal) neither estimator is identified and both have huge SD.
-
-**Figure 2. Genetic-correlation estimates by polygenicity.**
-
-![rg vs polygenicity](rg_polygenicity.png)
-
-## 3. rg estimators compared
-
-Four estimators — cross-trait LDSC, two univariate-effect estimators (`uni_gv`,
-`uni_r2`) and the bivariate joint fit (`biv`) — at symmetric and asymmetric power.
-Values are mean absolute error over five true-rg points.
-
-**Table 3. Estimator error by power setting.**
-
-| Power setting | LDSC | uni_gv | uni_r2 | **biv** |
-|---|---:|---:|---:|---:|
-| symmetric (N=50k / 50k) | 0.039 | 0.027 | 0.026 | **0.016** |
-| asymmetric (N=50k / 10k) | 0.040 | 0.048 | 0.047 | **0.019** |
-
-The bivariate fit is the most accurate in both regimes, and its lead **widens
-when one trait is under-powered** (where the univariate-effect estimators
-degrade). Per-fit running time also favours it:
-
-**Table 4. Estimator running time by variant count.**
-
-| m | # blocks | LDSC | uni_gv / uni_r2 | **biv** |
-|---:|---:|---:|---:|---:|
-| 5,000 | 25 | 0.02s | 1.25s | **0.25s** |
-| 20,000 | 100 | 0.23s | 5.42s | **0.98s** |
-| 50,000 | 250 | 1.30s | 15.6s | **2.48s** |
-
-**Figure 3. Genetic-correlation estimator comparison.**
-
-![rg estimators](rg_methods.png)
-
-## 4. Scaling with m
-
-Per-fit time, peak memory and accuracy (true rg = 0.5) as the variant count grows
-to 80k, one subprocess per size.
-
-**Table 5. Scaling results by variant count.**
-
-| m | # blocks | LDSC time | LDpred3 time | peak RSS | LDpred3 r̂g |
+| Causal fraction | Expected / observed causal count | Realized r_g, mean ± SD | LDSC MAE | LDpred3 MAE | Failures, LDSC / LDpred3 |
 |---:|---:|---:|---:|---:|---:|
-| 5,000 | 25 | 0.02s | 0.22s | 0.25 GB | 0.494 |
-| 10,000 | 50 | 0.07s | 0.45s | 0.30 GB | 0.504 |
-| 20,000 | 100 | 0.24s | 0.90s | 0.33 GB | 0.520 |
-| 40,000 | 200 | 0.95s | 1.86s | 0.40 GB | 0.497 |
-| 80,000 | 400 | 3.47s | 3.37s | 0.62 GB | 0.475 |
+| 0.1 | 500.0 / 492.6 | 0.494 ± 0.030 | 0.0491 | 0.0089 | 0 / 0 |
+| 0.01 | 50.0 / 45.2 | 0.425 ± 0.071 | 0.1734 | 0.0105 | 0 / 0 |
+| 0.001 | 5.007 / 3.6 | 0.320 ± 0.589 | 0.3159 | 0.0107 | 0 / 0 |
+| 0.0001 | 1.107 / 1.0 | 0.600 ± 0.800 | 0.2448 | 0.0043 | 3 / 0 |
 
-Time grows roughly linearly in m (block-diagonal LD), memory stays under 0.7 GB
-at 80k variants, and accuracy holds across the range.
+At one realized causal variant, genetic correlation is essentially a
+sign-dominated quantity. The large SD is not evidence that the target 0.5 was
+missed; the estimator must recover the realized draw.
 
-**Figure 4. Running time, memory, and accuracy scaling.**
+**Figure 2. Genetic-correlation recovery by polygenicity.**
 
-![rg scaling](rg_scaling.png)
+![Genetic correlation by polygenicity](rg_polygenicity.png)
 
-## 5. Polygenic overlap (MiXeR-style)
+## 3. Estimator comparison
 
-`res.mixer` decomposes the four-state mixture into a polygenic-overlap summary.
-The **overlap sweep** varies the true shared fraction (fixed within-shared
-ρ_β = 0.8):
+The comparison uses five target points and six replicates at symmetric
+`N=50k/50k` and asymmetric `N=50k/10k` power.
 
-**Table 6. Polygenic-overlap recovery.**
+**Table 4. Mean paired MAE across the target grid.**
 
-| true frac_shared | frac_shared_hat (sd) | true rg | rg_from_overlap (sd) |
-|---:|---:|---:|---:|
-| 0.00 | 0.046 (0.028) | 0.0 | −0.003 (0.023) |
-| 0.25 | 0.323 (0.067) | 0.2 | 0.176 (0.064) |
-| 0.50 | 0.578 (0.068) | 0.4 | 0.346 (0.063) |
-| 0.75 | 0.841 (0.033) | 0.6 | 0.528 (0.025) |
-| 1.00 | 0.983 (0.005) | 0.8 | 0.744 (0.012) |
+| Estimator | Symmetric MAE | Asymmetric MAE | Mean 5k fit time, symmetric |
+|---|---:|---:|---:|
+| LDSC | 0.0542 | 0.0608 | 0.033 s |
+| two univariate fits, `uni_gv` | 0.0190 | 0.0422 | 1.168 s |
+| two univariate fits, `uni_r2` | 0.0184 | 0.0420 | 1.168 s |
+| joint default | **0.0084** | **0.0174** | 0.172 s |
+| joint cross-sweep sensitivity | 0.0110 | 0.0240 | 0.173 s |
 
-The estimated shared fraction is **monotone and well-ordered** in the truth. The
-`rho` sweep recovers within-shared ρ_β up to a mild attenuation at high ρ_β, and
-the noise-inflation calibration (`noise_inflation=True`) pulls the
-reference-panel-mismatch count inflation (relative polygenicity rising to ~1.2)
-back toward 1. **Ratios are reliable; absolute counts are approximate** — anchor
-them with `res.mixer_calibrated(...)` for count-sensitive work.
+No estimator failed in these cells. The cross-sweep
+`rg_decorrelated=True` estimator did not improve on the default, including in
+the asymmetric setting. It remains a sensitivity analysis, not a preferred
+replacement.
 
-**Figure 5. MiXeR-style overlap results.**
+**Table 5. Single-core timing scan.**
 
-![MiXeR overlap](mixer_overlap.png)
+| Variants | Blocks | LDSC | Two univariate fits | Joint default | Joint cross-sweep |
+|---:|---:|---:|---:|---:|---:|
+| 5,000 | 25 | 0.028 s | 1.115 s | 0.172 s | 0.182 s |
+| 20,000 | 100 | 0.415 s | 4.105 s | 0.686 s | 0.686 s |
+| 50,000 | 250 | 2.193 s | 11.578 s | 1.640 s | 1.637 s |
 
-## 6. Sample overlap and `cross_corr`
+`uni_gv` and `uni_r2` reuse the same two univariate fits, so their recorded cost
+is identical.
 
-rg sensitivity to shared GWAS samples, and the `cross_corr` correction.
-`rg_cc0` leaves overlap uncorrected; `rg_cctrue` passes the true `cross_corr`.
+**Figure 3. Estimator accuracy and running time.**
 
-**Table 7. Idealized sample-overlap correction.**
+![Genetic-correlation estimators](rg_methods.png)
 
-| true rg | overlap ρ | rg (cross_corr=0) | rg (cross_corr set) | bias removed |
-|---:|---:|---:|---:|---:|
-| 0.0 | 0.0 | −0.001 | −0.001 | — |
-| 0.0 | 0.2 | 0.013 | −0.001 | 0.013 |
-| 0.0 | 0.4 | 0.026 | −0.001 | 0.026 |
-| 0.5 | 0.0 | 0.505 | 0.505 | — |
-| 0.5 | 0.2 | 0.517 | 0.506 | 0.012 |
-| 0.5 | 0.4 | 0.529 | 0.506 | 0.024 |
+## 4. Scaling
 
-Uncorrected sample overlap biases rg **upward** in proportion to the overlap;
-setting `cross_corr` removes it.
+Each size runs in a fresh subprocess and reports one realized draw.
 
-## 7. Environmental correlation on shared samples
+**Table 6. Scaling with variant count.**
 
-Stress test under an **environmental** correlation `re` on shared samples (real
-individual-level genotypes), comparing LDSC with a free vs constrained intercept
-and the bivariate fit with `cross_corr` off vs on. Every committed CSV row is
-shown, including the high-error `rg=0`, `re=0.6` cell.
-
-**Table 8. Environmental-overlap estimates, mean ± SD over retained replicates.**
-
-| true rg | re | LDSC free | LDSC constrained | biv cc=0 | biv cc set | LDSC intercept |
+| Variants | LDSC time | LDpred3 time | Peak RSS | Realized r_g | LDSC absolute error | LDpred3 absolute error |
 |---:|---:|---:|---:|---:|---:|---:|
-| 0.0 | 0.0 | −0.0192 ± 0.1325 | −0.0457 ± 0.0872 | 0.0290 ± 0.2329 | 0.0237 ± 0.2362 | −0.5903 |
-| 0.0 | 0.3 | −0.0047 ± 0.1299 | −0.0240 ± 0.0818 | −0.0545 ± 0.2293 | 0.0394 ± 0.2351 | −0.4254 |
-| 0.0 | 0.6 | −0.0181 ± 0.1182 | −0.0075 ± 0.0879 | −0.0957 ± 0.4420 | 0.7402 ± 0.4181 | 0.2541 |
-| 0.5 | 0.0 | 0.5223 ± 0.1005 | 0.5036 ± 0.1041 | −0.2697 ± 0.7256 | 0.1808 ± 0.5940 | −0.3967 |
-| 0.5 | 0.6 | 0.4841 ± 0.1243 | 0.5135 ± 0.1044 | −0.4208 ± 0.6954 | 0.3921 ± 0.5110 | 0.6771 |
+| 5,000 | 0.033 s | 0.146 s | 0.273 GB | 0.511 | 0.0399 | 0.0185 |
+| 10,000 | 0.120 s | 0.300 s | 0.336 GB | 0.519 | 0.0590 | 0.0031 |
+| 20,000 | 0.336 s | 0.591 s | 0.397 GB | 0.513 | 0.0332 | 0.0019 |
+| 40,000 | 1.383 s | 1.164 s | 0.466 GB | 0.518 | 0.0138 | 0.0021 |
+| 80,000 | 5.338 s | 2.119 s | 2.510 GB | 0.519 | 0.0632 | 0.0355 |
 
-The script's `agg()` function excludes non-finite estimates and estimates with
-`|rg| > 1.5` before computing each mean and SD. Table 8 is therefore conditional
-on that retained diagnostic window and can understate divergence; the committed
-CSV does not record how many replicates were excluded.
+The 80k memory jump is real for this end-to-end process and should not be
+smoothed into a linear-memory claim. This sweep measures the default dense/Q8
+path, not million-variant LR8 production behavior.
 
-The free-intercept LDSC means are near truth in this run. The bivariate
-`cross_corr` correction is not reliably recovered: it gives `0.7402 ± 0.4181`
-when truth is zero at `re=0.6`, and `0.1808 ± 0.5940` when truth is `0.5` at
-`re=0`. Supplying the mechanistically intended correction improves some cells,
-but this artifact does not support a general recovery claim.
+**Figure 4. Running time, memory, and single-draw recovery.**
 
----
+![Genetic-correlation scaling](rg_scaling.png)
 
-*Not regenerated here (require external datasets not present locally):*
-`bivariate_demo.py` (needs `ld_library.npz`) and `hapnest/run_bivariate.py`
-(needs a HAPNEST dataset). See [`README.md`](README.md) and
-[`hapnest/README.md`](hapnest/README.md).
+## 5. Polygenic overlap
+
+The overlap sweep fixes per-trait causal fraction at 0.1 and within-shared
+effect-correlation target at 0.8.
+
+**Table 7. MiXeR-style overlap sweep.**
+
+| Shared-fraction target | Estimated shared fraction ± SD | Realized r_g | Joint r_g / MAE | Overlap-derived r_g / MAE |
+|---:|---:|---:|---:|---:|
+| 0.00 | 0.041 ± 0.023 | -0.020 | -0.020 / 0.010 | -0.005 / 0.018 |
+| 0.25 | 0.343 ± 0.082 | 0.206 | 0.203 / 0.010 | 0.172 / 0.033 |
+| 0.50 | 0.595 ± 0.069 | 0.401 | 0.394 / 0.010 | 0.337 / 0.064 |
+| 0.75 | 0.854 ± 0.032 | 0.617 | 0.615 / 0.007 | 0.530 / 0.087 |
+| 1.00 | 0.988 ± 0.003 | 0.804 | 0.794 / 0.010 | 0.728 / 0.076 |
+
+The shared fraction is ordered but overestimates intermediate targets, while
+`rg_from_overlap` is attenuated. Absolute-count calibration is also
+power-dependent: `noise_inflation=True` moves relative polygenicity from
+1.182 to 1.070 at `N=20k`, but from 0.963 to 0.789 at `N=2.5k`.
+Univariate anchoring shows the same mixed pattern. These are diagnostics, not
+guaranteed corrections.
+
+**Figure 5. MiXeR-style overlap and count diagnostics.**
+
+![MiXeR-style overlap](mixer_overlap.png)
+
+## 6. Sample overlap
+
+In the higher-power idealized run, known `cross_corr` nearly removes the paired
+shift introduced by correlated sampling noise.
+
+**Table 8. Paired overlap shift relative to the no-overlap cell.**
+
+| Target | Noise correlation | Shift with `cross_corr=0` | Shift with known `cross_corr` | MAE, unset / set |
+|---:|---:|---:|---:|---:|
+| 0.0 | 0.2 | 0.0132 ± 0.0013 | 0.0003 ± 0.0015 | 0.0105 / 0.0080 |
+| 0.0 | 0.4 | 0.0263 ± 0.0036 | 0.0003 ± 0.0037 | 0.0212 / 0.0085 |
+| 0.5 | 0.2 | 0.0118 ± 0.0020 | 0.0013 ± 0.0019 | 0.0088 / 0.0069 |
+| 0.5 | 0.4 | 0.0245 ± 0.0035 | 0.0013 ± 0.0038 | 0.0198 / 0.0068 |
+
+At lower power (`N=15k/15k`, eight replicates), Monte Carlo variation dominates
+the expected shift and setting the correction is not uniformly closer.
+
+**Table 9. Lower-power sample-overlap MAE.**
+
+| Target | Realized r_g, mean ± SD | LDSC constrained / free | Joint unset / set |
+|---:|---:|---:|---:|
+| 0.0 | 0.034 ± 0.119 | 0.0481 / 0.0920 | 0.0160 / 0.0189 |
+| 0.3 | 0.328 ± 0.096 | 0.0664 / 0.0788 | 0.0123 / 0.0176 |
+| 0.6 | 0.615 ± 0.073 | 0.1026 / 0.0663 | 0.0092 / 0.0138 |
+
+The known-correction result does not validate LDSC-intercept inversion. That
+mapping remains assumption-dependent; see [`docs/rg.md`](../docs/rg.md).
+
+## 7. Environmental overlap stress test
+
+The individual-genotype stress test uses the same 20,000 people for both traits
+and correlates their residual environments.
+
+**Table 10. Paired MAE against realized genetic correlation.**
+
+| Target | Environmental correlation | Realized r_g | LDSC free / constrained | Joint unset / set |
+|---:|---:|---:|---:|---:|
+| 0.0 | 0.0 | -0.022 | 0.0666 / 0.0353 | 0.1733 / 0.0637 |
+| 0.0 | 0.3 | -0.003 | 0.0622 / 0.0331 | 0.0166 / 0.0336 |
+| 0.0 | 0.6 | -0.003 | 0.0639 / 0.0297 | 0.3101 / 0.3061 |
+| 0.5 | 0.0 | 0.487 | 0.0389 / 0.0620 | 0.8343 / 0.3027 |
+| 0.5 | 0.6 | 0.494 | 0.0377 / 0.0633 | 0.8603 / 0.1821 |
+
+There were no diagnostic-window failures, but the joint estimator was unstable
+in several cells. Supplying the mechanistic `cross_corr` helped some cells and
+harmed another. This artifact rejects a blanket robustness claim.
+
+## External runs
+
+The following were not regenerated:
+
+- `bivariate_demo.py`, which needs `ld_library.npz`;
+- `hapnest/run_bivariate.py`, which needs a HAPNEST dataset; and
+- standalone `infer_vs_ldsc_sbayes.py`, which needs GCTB and has no tracked
+  output artifact.
+
+The CSV files are the authoritative numeric record. See [`README.md`](README.md)
+for commands and artifact names.

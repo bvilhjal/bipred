@@ -44,6 +44,10 @@ User-visible changes to **bipred** are recorded here. The project is currently
   `LowRankLD` is imported from ldpred3's public API.
 - The tested ldpred3 dependency revision is
   `5436dcc8152531000b223c5088f726d588d8a8cd` (`ldpred3==0.4.3`).
+- Repository benchmark artifacts were regenerated against 0.2.0. They now
+  separate generating targets from realized LD-adjusted genetic correlation,
+  report paired errors and failures, and directly compare the default and
+  cross-sweep sensitivity estimators.
 
 ### Removed
 

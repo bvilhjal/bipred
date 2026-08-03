@@ -10,7 +10,7 @@ polygenic-overlap interpretation. See [`guide.md`](guide.md) for fitting.
 | Estimator | Use | Main caveat |
 |---|---|---|
 | `res.rg` | default joint LD estimate | needs well-matched LD |
-| `rg_decorrelated=True` | asymmetric-power sensitivity check | limited direct benchmarks; requires a full single-chain schedule |
+| `rg_decorrelated=True` | asymmetric-power sensitivity check | did not improve the 0.2.0 synthetic benchmark; requires a full single-chain schedule |
 | `bipred.ldsc_rg` | fast screen or independent check | unstable when marginal LDSC `h2` is near zero |
 | two univariate LDpred fits | additional diagnostic | often attenuated under power asymmetry |
 
@@ -38,8 +38,8 @@ contiguous ranges of the supplied row order; arbitrary order does not preserve
 local LD dependence.
 
 Use the joint fit by default and inspect LDSC as a cheap sensitivity check. The
-committed benchmark results are a dated snapshot, not current performance
-evidence; see the
+committed 0.2.0 benchmark records its simulation assumptions, paired
+realized-truth errors, failures, and runtime provenance; see the
 [benchmark results](https://github.com/bvilhjal/bipred/blob/main/benchmarks/RESULTS.md).
 
 ## Asymmetric-power sensitivity
@@ -57,11 +57,13 @@ res = ldpred3_auto_bivariate_blocks(
 The default sampled-quadratic ratio can attenuate the weak trait through its
 posterior-noise-inflated variance. The alternative averages cross-sweep
 quadratics while excluding same-sweep pairs. Thinning reduces, but does not
-eliminate, dependence between retained MCMC states. Direct benchmark coverage is
-limited, so treat the result as a sensitivity analysis rather than an automatic
-replacement for `res.rg`. It needs at least two retained effect samples and a
-full schedule; adaptive stopping is disabled. Undefined cross-sweep quadratics
-raise an error rather than silently returning the default estimator.
+eliminate, dependence between retained MCMC states. In the committed 0.2.0
+synthetic sweep, paired MAE was 0.0084 versus 0.0110 under symmetric power and
+0.0174 versus 0.0240 under asymmetric power for the default versus cross-sweep
+estimator. Treat it as a sensitivity analysis, not an automatic replacement for
+`res.rg`. It needs at least two retained effect samples and a full schedule;
+adaptive stopping is disabled. Undefined cross-sweep quadratics raise an error
+rather than silently returning the default estimator.
 
 ## Sample overlap
 
@@ -190,13 +192,16 @@ Start with `frac_shared`, `rho_beta`, and `rg_from_overlap`. Absolute
 `n_causal` and `n_shared` counts are approximate because LD can spread
 inclusion mass and reference mismatch can inflate it.
 
-For count-sensitive analyses:
+For count-sensitive analyses, compare rather than presume:
 
 - use `noise_inflation=True` when finite-reference mismatch is plausible;
 - compare `res.mixer_calibrated(infer1, infer2)` using two univariate ldpred3
   fits; and
 - report absolute counts as descriptive MiXeR-style summaries unless
   simulation validates them for the target architecture.
+
+The committed benchmark found that both adjustments helped some power settings
+and worsened others.
 
 `mixer_iterate_summary()` reports empirical retained-iterate intervals, not
 Bayesian credible intervals and not correction for reference mismatch.

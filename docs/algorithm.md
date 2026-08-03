@@ -132,7 +132,9 @@ ordinary pairs but can attenuate a weak trait under strongly asymmetric power.
 `rg_decorrelated=True` instead averages cross-sweep quadratics, excluding
 same-sweep pairs. Thinning reduces, but does not prove the absence of, dependence
 between retained MCMC states. Treat this as a sensitivity estimator for
-asymmetric-power pairs; its direct benchmark coverage is limited.
+asymmetric-power pairs. In the committed 0.2.0 synthetic sweep it had higher
+paired realized-rg MAE than the default under both symmetric and asymmetric
+power.
 
 `res.h2` reports the mean sampled quadratic `beta_t' R beta_t`, clamped to
 `h2_bounds`. Because sampled rather than Rao–Blackwellized effects are used, it
@@ -155,11 +157,12 @@ rho_beta        = s12 / sqrt(s1 s2)
 rg_from_overlap = rho_beta pi11 / sqrt(pi1 pi2)
 ```
 
-Ratios such as `frac_shared`, `rho_beta`, and `rg_from_overlap` are safer than
-absolute causal counts. A point-normal mixture can spread inclusion mass to LD
-neighbours, and finite-reference mismatch can add inflation. Noise inflation and
-univariate calibration mitigate parts of that bias but do not turn the counts
-into identified causal-variant totals.
+Ratios such as `frac_shared`, `rho_beta`, and `rg_from_overlap` avoid the literal
+causal-count interpretation, but still require calibration. A point-normal
+mixture can spread inclusion mass to LD neighbours, and finite-reference
+mismatch can add inflation. Noise inflation and univariate calibration are
+sensitivity variants; the committed sweep found power-dependent gains and
+losses. They do not turn the counts into identified causal-variant totals.
 
 ## Prediction
 

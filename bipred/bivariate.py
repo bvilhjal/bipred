@@ -1325,10 +1325,11 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
         more strongly toward independent traits.
     rg_decorrelated : bool, default False
         Sensitivity estimator based on effects sampled at different sweeps.
-        Consider for strongly asymmetric-power pairs; direct benchmark coverage
-        is limited. Requires ``num_iter > sample_every`` and raises rather than
-        substituting the default estimator if its cross-sweep quadratics are
-        non-finite or have non-positive variances.
+        Consider for strongly asymmetric-power pairs. The committed 0.2.0
+        synthetic sweep did not improve on the default. Requires
+        ``num_iter > sample_every`` and raises rather than substituting the
+        default estimator if its cross-sweep quadratics are non-finite or have
+        non-positive variances.
     noise_inflation : bool, default False
         Learn per-trait residual noise factors ``lambda_t >= 1`` and fit with
         effective sample size ``N_t / lambda_t``. Useful for finite reference-panel
