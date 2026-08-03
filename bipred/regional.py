@@ -46,16 +46,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import numpy as np
+from ldpred3 import LowRankLD
 
-from ldpred3.ldpred3 import (
-    LowRankLD,
+from ._ldpred3_compat import (
+    _Q8,
     _validate_blocks,
     _validate_boolean_controls,
 )
-# int8 LD quantisation step, locked to ldpred3's encoding (as in .bivariate).
-from ldpred3._kernels import _Q8
-
-from .bivariate import _prepare_lowrank_block
 
 __all__ = ["RegionalRgResult", "regional_rg"]
 
@@ -98,19 +95,19 @@ def _dense_quadratics(block, scale, sub, b1, b2):
     return float(x @ Rx), float(x @ Ry), float(y @ Ry)
 
 
-def _lowrank_quadratics(W, residual, sub, b1, b2):
+def _lowrank_quadratics(U, scale, residual, sub, b1, b2):
     """Three quadratic forms on a low-rank sub-block, without densifying it."""
-    Ws = W[sub]
+    Us = np.asarray(U[sub], dtype=np.float64)
     x, y = b1[sub], b2[sub]
-    px, py = Ws.T @ x, Ws.T @ y
+    px = scale * (Us.T @ x)
+    py = scale * (Us.T @ y)
     res = residual[sub]
     return (float(px @ px + np.sum(res * x * x)),
             float(px @ py + np.sum(res * x * y)),
             float(py @ py + np.sum(res * y * y)))
 
 
-def regional_rg(beta1, beta2, blocks, regions, *, min_variants=1,
-                allow_legacy_lowrank=False, clip=True):
+def regional_rg(beta1, beta2, blocks, regions, *, min_variants=1, clip=True):
     """Per-region genetic correlation from posterior-mean effects.
 
     Parameters
@@ -135,8 +132,6 @@ def regional_rg(beta1, beta2, blocks, regions, *, min_variants=1,
     min_variants : int, default 1
         Regions with fewer variants than this report NaN ``rg``. Small regions
         are noisy; raising this is a convenience, not a correction.
-    allow_legacy_lowrank : bool, default False
-        Forwarded to the low-rank adapter, matching the fit's own flag.
     clip : bool, default True
         Clip each finite raw ratio into ``[-1, 1]``. A raw ``|rg| > 1`` violates
         Cauchy--Schwarz for the evaluated quadratic form and usually indicates a
@@ -156,10 +151,7 @@ def regional_rg(beta1, beta2, blocks, regions, *, min_variants=1,
     region, and all regional estimates are shrunk toward the genome-wide
     correlation. Neither is corrected here.
     """
-    _validate_boolean_controls(
-        allow_legacy_lowrank=allow_legacy_lowrank,
-        clip=clip,
-    )
+    _validate_boolean_controls(clip=clip)
     b1 = np.asarray(beta1, dtype=np.float64)
     b2 = np.asarray(beta2, dtype=np.float64)
     if b1.ndim != 1 or b2.ndim != 1:
@@ -211,15 +203,16 @@ def regional_rg(beta1, beta2, blocks, regions, *, min_variants=1,
     for R, idx in _validate_blocks(blocks, m, contiguous=True):
         idx = np.asarray(idx, dtype=np.int64).ravel()
         if isinstance(R, LowRankLD):
-            U, row_scales, residual = _prepare_lowrank_block(
-                R, allow_legacy=bool(allow_legacy_lowrank))
-            W = row_scales[:, None] * np.asarray(U, dtype=np.float64)
+            U = np.asarray(R.U)
+            factor_scale = float(R.scale)
+            residual = np.asarray(R.residual_diag)
             dense = None
         else:
             arr = np.asarray(R)
             scale = _Q8_SCALE if arr.dtype == np.int8 else 1.0
             dense = (arr, scale)
-            W = residual = None
+            U = residual = None
+            factor_scale = 1.0
 
         blk_codes = code[idx]
         # Gather the block's effects once, not once per region within the block.
@@ -230,8 +223,10 @@ def regional_rg(beta1, beta2, blocks, regions, *, min_variants=1,
                 q11, q12, q22 = _dense_quadratics(dense[0], dense[1], sub,
                                                   b1_blk, b2_blk)
             else:
-                q11, q12, q22 = _lowrank_quadratics(W, residual, sub,
-                                                    b1_blk, b2_blk)
+                q11, q12, q22 = _lowrank_quadratics(
+                    U, factor_scale, residual, sub,
+                    b1_blk, b2_blk,
+                )
             gvar1[c] += q11
             gcov[c] += q12
             gvar2[c] += q22

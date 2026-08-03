@@ -19,14 +19,19 @@ Cross-trait LDSC fits the moment relation:
 **Equation 1. Cross-trait LD Score regression.**
 
 ```text
+z_tj = sqrt(N_tj) beta_hat_tj / sqrt(1 - beta_hat_tj^2)
+
 E[z1_j z2_j] =
-    intercept + sqrt(N1 N2) rho_g LD_score_j / M
+    intercept + sqrt(N_1j N_2j) rho_g LD_score_j / M
 ```
 
-The slope estimates genetic covariance under LDSC assumptions. The intercept
-captures correlated sampling noise and cross-trait confounding. `M` is the
-variant count defining the heritability and covariance; pass the full count as
-`m_snps` when summary statistics are a subset of that map.
+The first line is the exact signed conversion for effects returned by
+`ldpred3.standardize_betas`; all standardized effects must have absolute value
+below one. The simpler `z_tj ≈ sqrt(N_tj) beta_hat_tj` is only a weak-effect
+approximation. The slope estimates genetic covariance under LDSC assumptions.
+The intercept captures correlated sampling noise and cross-trait confounding.
+`M` is the variant count defining the heritability and covariance; pass the full
+count as `m_snps` when summary statistics are a subset of that map.
 
 For `rg_se`, order rows by chromosome and position. The block jackknife deletes
 contiguous ranges of the supplied row order; arbitrary order does not preserve

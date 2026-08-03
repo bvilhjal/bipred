@@ -90,7 +90,8 @@ def estimate_all(ref, ell, bh1, bh2, N1, N2, rep):
     cov = qform(ref, e1, e2)
     v1, v2 = qform(ref, e1, e1), qform(ref, e2, e2)
     rg["uni_gv"] = cov / np.sqrt(max(v1 * v2, 1e-30))
-    rg["uni_r2"] = cov / np.sqrt(max(i1.r2_est * i2.r2_est, 1e-30))
+    rg["uni_r2"] = (cov / np.sqrt(i1.r2_est * i2.r2_est)
+                    if i1.r2_est > 0 and i2.r2_est > 0 else np.nan)
     t["uni_gv"] = t["uni_r2"] = t_uni      # shared cost
 
     t0 = time.perf_counter()

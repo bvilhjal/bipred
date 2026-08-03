@@ -11,7 +11,8 @@ import numpy as np
 import pytest
 
 from bipred import ldsc_rg, LDSCRgResult, estimate_sample_overlap
-from ldpred3 import ld_scores
+from bipred.ldsc_rg import _z_from_standardized
+from ldpred3 import ld_scores, standardize_betas
 
 
 def _ar1(k, rho):
@@ -37,7 +38,8 @@ def _simple_inputs():
     ell = np.array([1.0, 2.0, 4.0, 7.0])
     n = 100.0
     x = n * ell / ell.size
-    beta = np.sqrt((1.0 + 0.2 * x) / n)
+    chisq = 1.0 + 0.2 * x
+    beta = np.sqrt(chisq / (n + chisq))
     return beta, ell, n
 
 
@@ -103,6 +105,9 @@ def test_estimate_sample_overlap_inversion():
     ("ld_scores", np.ones(3)),
     ("beta_hat1", np.array([1.0, 2.0, np.inf, 4.0])),
     ("beta_hat2", np.array([1.0, 2.0, np.nan, 4.0])),
+    ("beta_hat1", np.array([0.1, 0.2, 1.0, 0.4])),
+    ("beta_hat2", np.array([0.1, 0.2, -1.0, 0.4])),
+    ("beta_hat2", np.array([0.1, 0.2, 1.1, 0.4])),
     ("ld_scores", np.array([1.0, 2.0, np.nan, 4.0])),
     ("ld_scores", np.array([1.0, 2.0, 0.0, 4.0])),
     ("ld_scores", np.array([1.0, 2.0, -0.1, 4.0])),
@@ -164,6 +169,34 @@ def test_ldsc_rg_accepts_per_variant_sample_sizes_and_one_block():
     assert np.isnan(res.rg_se)
 
 
+@pytest.mark.parametrize("sign", [-1.0, 1.0])
+def test_ldsc_rg_uses_exact_signed_standardized_effect_to_z_relation(sign):
+    ell = np.array([1.0, 2.0, 4.0, 7.0])
+    n1, n2 = 10.0, 100.0
+    chisq = 1.0 + 2.0 * ell
+    z = np.sqrt(chisq)
+    beta1 = z / np.sqrt(n1 + chisq)
+    beta2 = sign * z / np.sqrt(n2 + chisq)
+
+    res = ldsc_rg(beta1, beta2, ell, n1, n2, n_blocks=1, n_iter=0)
+
+    assert res.h2 == pytest.approx((0.8, 0.08))
+    assert res.gcov == pytest.approx(sign * 8.0 / np.sqrt(n1 * n2))
+    assert res.gcov_intercept == pytest.approx(sign)
+    assert res.rg == pytest.approx(sign)
+
+
+def test_exact_z_conversion_round_trips_ldpred3_standardize_betas():
+    beta = np.array([-0.8, -0.03, 0.02, 1.2])
+    se = np.array([0.2, 0.01, 0.04, 0.3])
+    n = np.array([25.0, 1000.0, 250.0, 16.0])
+    beta_std, _scale = standardize_betas(beta, se, n)
+
+    observed = _z_from_standardized(beta_std, n, "beta_hat")
+
+    np.testing.assert_allclose(observed, beta / se, rtol=2e-15, atol=0.0)
+
+
 def test_ldsc_rg_common_permutation_changes_only_jackknife_grouping():
     # ldsc_rg has no genomic coordinates to sort or validate. A common
     # permutation therefore preserves the regressions but changes which
@@ -173,8 +206,9 @@ def test_ldsc_rg_common_permutation_changes_only_jackknife_grouping():
     ell = np.linspace(1.0, 10.0, m)
     chi1 = 1.0 + 0.30 * ell + rng.normal(0.0, 0.10, m)
     chi2 = 1.0 + 0.25 * ell + rng.normal(0.0, 0.15, m)
-    beta1 = np.sqrt(chi1 / n)
-    beta2 = np.sqrt(chi2 / n) * rng.choice([-1.0, 1.0], m, p=[0.08, 0.92])
+    beta1 = np.sqrt(chi1 / (n + chi1))
+    beta2 = np.sqrt(chi2 / (n + chi2))
+    beta2 *= rng.choice([-1.0, 1.0], m, p=[0.08, 0.92])
 
     ordered = ldsc_rg(beta1, beta2, ell, n, n, n_blocks=4, n_iter=0)
     perm = np.random.default_rng(5).permutation(m)
@@ -197,7 +231,8 @@ def test_ldsc_rg_singular_jackknife_replicate_makes_se_undefined():
     ell = np.array([1.0, 1.0, 2.0, 2.0])
     n = 100.0
     x = n * ell / ell.size
-    beta = np.sqrt((1.0 + 0.2 * x) / n)
+    chisq = 1.0 + 0.2 * x
+    beta = np.sqrt(chisq / (n + chisq))
     res = ldsc_rg(beta, beta, ell, n, n, n_blocks=2, n_iter=0)
     assert res.rg == pytest.approx(1.0)
     assert np.isnan(res.rg_se)
@@ -205,7 +240,8 @@ def test_ldsc_rg_singular_jackknife_replicate_makes_se_undefined():
 
 def test_ldsc_rg_nonpositive_h2_is_undefined():
     ell = np.array([1.0, 2.0, 3.0, 4.0])
-    beta = np.sqrt(np.array([4.0, 3.0, 2.0, 1.0]) / 100.0)
+    chisq = np.array([4.0, 3.0, 2.0, 1.0])
+    beta = np.sqrt(chisq / (100.0 + chisq))
     res = ldsc_rg(beta, beta, ell, 100.0, 100.0, n_blocks=2, n_iter=0)
     assert res.h2[0] < 0.0 and res.h2[1] < 0.0
     assert np.isnan(res.rg)
@@ -214,7 +250,8 @@ def test_ldsc_rg_nonpositive_h2_is_undefined():
 
 def test_ldsc_rg_invalid_jackknife_replicate_makes_se_undefined():
     ell = np.array([1.0, 2.0, 3.0, 4.0])
-    beta = np.sqrt(np.array([4.0, 3.0, 2.0, 20.0]) / 100.0)
+    chisq = np.array([4.0, 3.0, 2.0, 20.0])
+    beta = np.sqrt(chisq / (100.0 + chisq))
     # Deleting the final observation makes both h2 estimates negative.
     invalid = ldsc_rg(beta[:-1], beta[:-1], ell[:-1], 100.0, 100.0,
                       n_blocks=1, n_iter=0)
@@ -240,7 +277,7 @@ def test_estimate_sample_overlap_validation(n1, n2, rho, intercept):
 
 
 # --- bit-exact golden for the reference-formula cross-trait WLS weights ---
-_LDSC_RG = 1.1208147743678865
+_LDSC_RG = 1.1078743967665865
 
 
 def _golden_fixtures():

@@ -28,9 +28,12 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from benchmarks._benchmark_utils import peak_rss_bytes                      # noqa: E402
+from benchmarks.simulate import (                                           # noqa: E402
+    SIMULATOR_CACHE_TAG,
+    simulate_genotypes_by_mutation_rate,
+)
 from ldpred3 import ld_scores                                            # noqa: E402
 from bipred import ldsc_rg, ldpred3_auto_bivariate_blocks                # noqa: E402
-from ldpred3.simulate import simulate_genotypes_by_mutation_rate          # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CACHE = os.path.join(HERE, ".rg_cache")
@@ -64,17 +67,24 @@ ARCHS = {                             # name -> causal fraction (major_locus spe
 IDX = [np.arange(b * K, (b + 1) * K) for b in range(NB)]
 
 
+def _segment_cache_path(b):
+    """Cache path whose tag prevents reuse across simulator schemas."""
+    name = (f"seg{b + 1}_k{K}_npop{N_POP}_seg{int(SEG_LEN)}"
+            f"_mu{MUT_RATE:g}_{SIMULATOR_CACHE_TAG}.npz")
+    return os.path.join(CACHE, name)
+
+
 def _build_segment(b):
     """One coalescent block's population correlation ``R`` + Cholesky ``C``.
 
-    Cached on disk **per segment** (keyed by its seed, ``K``, ``N_POP``, segment
-    length and mutation rate), so the expensive msprime simulation runs once per
-    segment ever: a smaller ``NB`` just uses the first few cached segments and a
-    larger ``NB`` reuses those and simulates only the new ones. Raise ``MUT_RATE``
-    (denser segments) to afford a larger ``K`` per block -> larger ``m``.
+    Cached on disk **per segment** (keyed by simulator schema, seed, ``K``,
+    ``N_POP``, segment length and mutation rate), so the expensive msprime
+    simulation runs once per segment per schema: a smaller ``NB`` just uses the
+    first few cached segments and a larger ``NB`` reuses those and simulates only
+    the new ones. Raise ``MUT_RATE`` (denser segments) to afford a larger ``K``
+    per block -> larger ``m``.
     """
-    path = os.path.join(CACHE, f"seg{b + 1}_k{K}_npop{N_POP}_seg{int(SEG_LEN)}"
-                               f"_mu{MUT_RATE:g}.npz")
+    path = _segment_cache_path(b)
     if os.path.exists(path):
         d = np.load(path)
         return d["R"], d["C"]

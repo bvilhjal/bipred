@@ -4,11 +4,13 @@ The two-trait counterpart of ldpred3's univariate ``ldsc_h2``. Fitting
 
     E[z1_j z2_j] = intercept + (sqrt(N1 N2) * rho_g / M) * ell_j
 
-(with ``z_t = sqrt(N_t) beta_hat_t``) recovers the genetic covariance ``rho_g``
-from the slope; the intercept captures correlated sampling error from sample
-overlap as well as correlated confounding. The genetic correlation is
-``r_g = rho_g / sqrt(h2_1 h2_2)``
-with the marginal heritabilities from univariate LD Score regression.
+For standardized effects returned by ``ldpred3.standardize_betas``, the exact
+signed relation is
+``z_t = sqrt(N_t) beta_hat_t / sqrt(1 - beta_hat_t**2)``. The slope recovers the
+genetic covariance ``rho_g``; the intercept captures correlated sampling error
+from sample overlap as well as correlated confounding. The genetic correlation
+is ``r_g = rho_g / sqrt(h2_1 h2_2)`` with the marginal heritabilities from
+univariate LD Score regression.
 
 This is the fast, moment-based cross-check on the bivariate-LDpred joint fit
 (:func:`bipred.ldpred3_auto_bivariate`). It reuses ldpred3's univariate LDSC
@@ -23,10 +25,13 @@ from dataclasses import dataclass
 
 import numpy as np
 
-# Shared univariate-LDSC internals (also used by ldpred3's own ``ldsc_h2``).
-from ldpred3.ldsc import _wls, _weights
-# Shared scalar/vector validators from the ldpred3 compatibility seam.
-from ldpred3.ldpred3 import _as_n_vector, _finite_control, _integer_at_least
+from ._ldpred3_compat import (
+    _as_n_vector,
+    _finite_control,
+    _integer_at_least,
+    _weights,
+    _wls,
+)
 
 __all__ = ["ldsc_rg", "LDSCRgResult", "estimate_sample_overlap"]
 
@@ -83,6 +88,20 @@ def _as_sample_size(value, name, m):
     return _as_n_vector(value, m)
 
 
+def _z_from_standardized(beta_std, n_eff, name):
+    """Recover exact signed z scores from LDpred3-standardized effects."""
+    if np.any(np.abs(beta_std) >= 1.0):
+        raise ValueError(
+            f"{name} must contain standardized effects with absolute value < 1")
+    beta2 = beta_std * beta_std
+    np.subtract(1.0, beta2, out=beta2)
+    np.sqrt(beta2, out=beta2)
+    z = np.sqrt(n_eff)
+    z *= beta_std
+    z /= beta2
+    return z
+
+
 def _as_finite_scalar(value, name, *, positive=False):
     """Validate and return a finite scalar.
 
@@ -122,11 +141,13 @@ def ldsc_rg(beta_hat1, beta_hat2, ld_scores, n_eff1, n_eff2, *, m_snps=None,
             n_blocks=200, n_iter=2, constrain_intercept=None):
     """Genetic correlation by cross-trait LD Score regression.
 
-    Fits ``E[z1_j z2_j] = intercept + (sqrt(N1 N2) rho_g / M) ell_j`` (with
-    ``z_t = sqrt(N_t) beta_hat_t``), giving the genetic covariance ``rho_g`` from
-    the slope; the intercept captures sample overlap and correlated confounding.
-    The genetic correlation is
-    ``r_g = rho_g / sqrt(h2_1 h2_2)`` with the marginal heritabilities from
+    Fits ``E[z1_j z2_j] = intercept + (sqrt(N1 N2) rho_g / M) ell_j``. For
+    standardized effects returned by ``ldpred3.standardize_betas``, this uses the
+    exact signed conversion
+    ``z_t = sqrt(N_t) beta_hat_t / sqrt(1 - beta_hat_t**2)``. The slope gives the
+    genetic covariance ``rho_g``; the intercept captures sample overlap and
+    correlated confounding. The genetic correlation is
+    ``r_g = rho_g / sqrt(h2_1 h2_2)`` with marginal heritabilities from
     univariate LD Score regression. Standard errors are by block jackknife.
 
     All per-variant inputs must be aligned to the same variants in genomic
@@ -138,7 +159,8 @@ def ldsc_rg(beta_hat1, beta_hat2, ld_scores, n_eff1, n_eff2, *, m_snps=None,
     Parameters
     ----------
     beta_hat1, beta_hat2 : array_like (m,)
-        Standardized marginal effects for the two traits.
+        Standardized marginal effects for the two traits, with absolute values
+        strictly below one.
     ld_scores : array_like (m,)
         Strictly positive LD scores from ``ldpred3.ld_scores``.
     n_eff1, n_eff2 : float or array_like
@@ -181,10 +203,13 @@ def ldsc_rg(beta_hat1, beta_hat2, ld_scores, n_eff1, n_eff2, *, m_snps=None,
         constrain_intercept = _finite_control(
             "constrain_intercept", constrain_intercept)
 
-    chi1 = N1 * b1 * b1
-    chi2 = N2 * b2 * b2
+    z1 = _z_from_standardized(b1, N1, "beta_hat1")
+    chi1 = z1 * z1
+    z2 = _z_from_standardized(b2, N2, "beta_hat2")
+    chi2 = z2 * z2
+    cross = z1 * z2
+    del z1, z2
     sqrt_n1n2 = np.sqrt(N1) * np.sqrt(N2)
-    cross = sqrt_n1n2 * b1 * b2
     x1 = N1 * ell / M
     x2 = N2 * ell / M
     xc = sqrt_n1n2 * ell / M

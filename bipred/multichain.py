@@ -293,10 +293,9 @@ def ldpred3_auto_bivariate_chains(
     deterministic seed, so a threaded run is bit-identical to a serial one.
 
     chain_ncores > 1 cannot be combined with the per-chain block threading of
-    ncores > 1: nesting them would oversubscribe the machine, and each chain
-    would race the others setting Numba's process-wide thread count. Pick one
-    axis. For n_chains >= the core count, chain_ncores is usually the better one,
-    since it has no per-sweep synchronisation at all.
+    ncores > 1 because nested parallelism would oversubscribe the machine. Pick
+    one axis. For n_chains >= the core count, chain_ncores is usually the better
+    one, since it has no per-sweep synchronisation at all.
     """
     chain_ncores = _integer_at_least("chain_ncores", chain_ncores, 1)
     n_chains = _integer_at_least("n_chains", n_chains, 2)
@@ -327,10 +326,9 @@ def ldpred3_auto_bivariate_chains(
     if chain_ncores > 1 and options.ncores > 1:
         raise ValueError(
             "chain_ncores > 1 cannot be combined with ncores > 1: the two "
-            "would oversubscribe the machine and every chain would race the "
-            "others setting Numba's process-wide thread count. Choose either "
-            "chain-level threading (chain_ncores) or within-chain block "
-            "threading (ncores)."
+            "would create nested parallelism and oversubscribe the machine. "
+            "Choose either chain-level threading (chain_ncores) or "
+            "within-chain block threading (ncores)."
         )
 
     retained = options.num_iter

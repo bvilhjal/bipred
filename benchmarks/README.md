@@ -4,9 +4,10 @@ The **bivariate-LDpred** benchmarks, split out of the `ldpred3` repository. They
 exercise the genetic-correlation / polygenic-overlap functionality now provided
 by the [`bipred`](../) package — the joint fit (`ldpred3_auto_bivariate`,
 `ldpred3_auto_bivariate_blocks`, `BivariateResult`) and cross-trait LDSC
-(`ldsc_rg`) — while still importing the *univariate* pieces they build on
-(LD scores, `ldpred3_auto_infer` / `ldpred3_by_blocks`, simulation helpers) from
-`ldpred3`. Both `bipred` and `ldpred3` must be installed to run them.
+(`ldsc_rg`) — while still importing the *univariate* LD scores and
+`ldpred3_auto_infer` / `ldpred3_by_blocks` from `ldpred3`. Coalescent scripts
+use the repository's small msprime helper. Both packages must be installed to
+run the benchmarks.
 
 [`RESULTS.md`](RESULTS.md) is a 2026-07-06 historical snapshot generated before
 the current sampler and LD paths. Use the scripts and committed CSV files as the

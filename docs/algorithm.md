@@ -29,6 +29,11 @@ GWAS samples are sufficient, but not necessary, for that condition. The SNPwise
 conditional update uses this two-trait covariance but otherwise makes LDpred's
 diagonal sampling-noise approximation across variants.
 
+The `1 / N` sampler variance is a weak-effect approximation. Cross-trait LDSC is
+a separate estimator: it reconstructs exact signed z scores from
+LDpred3-standardized effects as described in [`rg.md`](rg.md). This correction
+does not change the Gibbs likelihood.
+
 ## Four-state effect prior
 
 Each variant has one latent state.

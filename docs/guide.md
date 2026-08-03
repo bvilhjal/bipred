@@ -54,11 +54,12 @@ res = ldpred3_auto_bivariate_blocks(
 )
 ```
 
-With Numba, `ncores>1` groups prepared blocks by representation, dtype, and
-dequantization scale, then sweeps each group in parallel. Mixed panels therefore
-remain parallel; groups with few or imbalanced blocks may scale poorly. Seeded
-results match `ncores=1`, but every sweep still waits for all blocks before
-updating global parameters.
+With Numba, dense blocks are grouped by dtype and dequantization scale; low-rank
+blocks are grouped by dtype and keep their scalar scales per block. `ncores=1`
+sweeps each group in one fused serial call; `ncores>1` parallelizes blocks
+within each group, while groups remain sequential. Groups with few or imbalanced
+blocks may scale poorly. Seeded results agree across the two paths, and every
+sweep still waits for all blocks before updating global parameters.
 
 ## Fit multiple chains
 
@@ -79,10 +80,9 @@ degeneracy flags. It neither filters chains nor certifies convergence, and it
 does not cover variant-level effects.
 
 `chain_ncores>1` runs independent chains concurrently. Do not combine it with
-`ncores>1`: nested threading is rejected because it oversubscribes cores and
-races on Numba's process-wide thread count. The multi-chain driver also rejects
-`tol>0` and `rg_decorrelated=True`, both of which require different trace
-contracts. The pooled posterior records
+`ncores>1`: nested threading is rejected because it oversubscribes cores. The
+multi-chain driver also rejects `tol>0` and `rg_decorrelated=True`, both of which
+require different trace contracts. The pooled posterior records
 `retained_iterations = n_chains * retained_per_chain` and
 `stopped_early=False`.
 

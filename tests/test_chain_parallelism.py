@@ -12,7 +12,7 @@ from bipred.bivariate import _bivar_one_sweep_jit, _bivar_one_sweep_lowrank_jit
 from bipred.multichain import ldpred3_auto_bivariate_chains
 
 try:
-    from ldpred3.ldpred3 import HAVE_NUMBA
+    from bipred._ldpred3_compat import HAVE_NUMBA
 except ImportError:                                # pragma: no cover
     HAVE_NUMBA = False
 
@@ -102,7 +102,7 @@ class TestChainThreading:
                                       serial.posterior.beta1_est)
 
     def test_rejects_nesting_with_block_threading(self, problem):
-        """Nesting would oversubscribe and race on Numba's global thread count."""
+        """Nesting would oversubscribe the machine."""
         blocks, b1, b2, n = problem
         with pytest.raises(ValueError, match="cannot be combined with ncores"):
             ldpred3_auto_bivariate_chains(blocks, b1, b2, n, n,

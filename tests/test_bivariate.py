@@ -458,8 +458,8 @@ def test_lowrank_matmul_includes_diagonal_residual_and_zero_factor_row():
     supplied_residual = np.r_[np.full(8, 0.40001), 1.0]
     R = SimpleNamespace(U=U, scale=1.0,
                         residual_diag=supplied_residual)
-    payload, scales, residual = bivariate._prepare_lowrank_block(R)
-    fblocks = [(bivariate._LOWRANK, payload, 0, 9, scales, residual,
+    payload, scale, residual = bivariate._prepare_bivariate_lowrank_block(R)
+    fblocks = [(bivariate._LOWRANK, payload, 0, 9, scale, residual,
                 np.zeros(4), np.zeros(4))]
     V = rng.standard_normal((5, 9)).astype(np.float32)
 
@@ -467,7 +467,8 @@ def test_lowrank_matmul_includes_diagonal_residual_and_zero_factor_row():
     expected_R = U @ U.T + np.diag(supplied_residual)
     expected = V @ expected_R.astype(np.float32)
     assert residual[-1] == 1.0
-    np.testing.assert_array_equal(residual, supplied_residual)
+    assert residual.dtype == np.float32
+    np.testing.assert_allclose(residual, supplied_residual, rtol=0, atol=2e-8)
     np.testing.assert_allclose(observed, expected, rtol=2e-6, atol=2e-6)
 
 
@@ -475,16 +476,16 @@ def test_prepared_lowrank_payload_is_shared_but_chain_scratch_is_not():
     from types import SimpleNamespace
 
     data = np.ones((5, 2), dtype=np.float32)
-    scales = np.ones(5)
-    residual = np.zeros(5)
+    scale = 1.0
+    residual = np.zeros(5, dtype=np.float32)
     prepared = SimpleNamespace(
-        blocks=((bivariate._LOWRANK, data, 0, 5, scales, residual),)
+        blocks=((bivariate._LOWRANK, data, 0, 5, scale, residual),)
     )
 
     first = bivariate._instantiate_chain_blocks(prepared)[0]
     second = bivariate._instantiate_chain_blocks(prepared)[0]
     assert first[1] is second[1]
-    assert first[4] is second[4]
+    assert first[4] == second[4] == 1.0
     assert first[5] is second[5]
     assert first[6] is not second[6]
     assert first[7] is not second[7]
@@ -492,18 +493,21 @@ def test_prepared_lowrank_payload_is_shared_but_chain_scratch_is_not():
     assert second[6][0] == 0.0
 
 
-def test_legacy_lowrank_requires_explicit_opt_in():
-    from types import SimpleNamespace
+def test_bivariate_lowrank_keeps_scalar_scale_and_float32_residual():
+    from ldpred3 import lowrank_ld
 
-    legacy = SimpleNamespace(U=np.eye(3, dtype=np.float32), scale=1.0)
-    with pytest.raises(ValueError, match="legacy row-normalised LowRankLD"):
-        bivariate._prepare_lowrank_block(legacy)
-    payload, scales, residual = bivariate._prepare_lowrank_block(
-        legacy, allow_legacy=True
+    k = 12
+    corr = 0.5 ** np.abs(np.subtract.outer(np.arange(k), np.arange(k)))
+    compact = lowrank_ld(corr, variance=0.7, max_rank=4, quantize=True)
+    payload, scale, residual = bivariate._prepare_bivariate_lowrank_block(
+        compact
     )
-    np.testing.assert_array_equal(payload, legacy.U)
-    np.testing.assert_array_equal(scales, np.ones(3))
-    np.testing.assert_array_equal(residual, np.zeros(3))
+
+    assert payload.dtype == np.int8
+    assert isinstance(scale, float)
+    assert scale == compact.scale
+    assert residual.dtype == np.float32
+    assert np.shares_memory(residual, compact.residual_diag)
 
 
 def test_lowrank_kernel_diagonal_residual_matches_dense_sweep():
@@ -511,8 +515,10 @@ def test_lowrank_kernel_diagonal_residual_matches_dense_sweep():
     k, rank = 7, 3
     U = rng.standard_normal((k, rank)).astype(np.float32)
     U *= np.sqrt(0.6) / np.linalg.norm(U, axis=1)[:, None]
-    row_scales = np.ones(k)
-    residual = 1.0 - np.einsum("ij,ij->i", U, U, dtype=np.float64)
+    factor_scale = 1.0
+    residual = (1.0 - np.einsum(
+        "ij,ij->i", U, U, dtype=np.float64
+    )).astype(np.float32)
     dense = (U @ U.T + np.diag(residual)).astype(np.float32)
     bh1 = rng.standard_normal(k) * 0.01
     bh2 = rng.standard_normal(k) * 0.01
@@ -536,7 +542,7 @@ def test_lowrank_kernel_diagonal_residual_matches_dense_sweep():
         drbs2, unif, z1, z2, *lpi, 8e-5, 9e-5, 2e-5, 0.1,
         1.0, True, True)
     lowrank_result = bivariate._bivar_one_sweep_lowrank(
-        U, row_scales, residual, bh1, bh2, n1, n2, lcurr1, lcurr2,
+        U, factor_scale, residual, bh1, bh2, n1, n2, lcurr1, lcurr2,
         np.zeros(rank), np.zeros(rank), lrb1, lrb2, lrbs1, lrbs2,
         unif, z1, z2, *lpi, 8e-5, 9e-5, 2e-5, 0.1,
         True, True, True)
@@ -565,8 +571,7 @@ def test_truncated_float_lowrank_matches_its_effective_dense_matrix():
         [(dense, np.arange(k))], bh1, bh2, 30000, 25000, **kwargs)
     observed = ldpred3_auto_bivariate_blocks(
         [(R, np.arange(k))], bh1, bh2, 30000, 25000,
-        **{**kwargs, "ld_int8": True,
-           "allow_legacy_lowrank": not hasattr(R, "residual_diag")})
+        **{**kwargs, "ld_int8": True})
 
     np.testing.assert_allclose(observed.beta1_est, expected.beta1_est,
                                rtol=3e-5, atol=3e-7)
@@ -597,12 +602,10 @@ def test_lr8_matches_effective_dense_and_ignores_dense_storage_policy():
         ld_int8=False, **kwargs)
     observed = ldpred3_auto_bivariate_blocks(
         [(R, np.arange(k))], bh1, bh2, 20000, 18000,
-        ld_int8=True, allow_legacy_lowrank=not hasattr(R, "residual_diag"),
-        **kwargs)
+        ld_int8=True, **kwargs)
     automatic = ldpred3_auto_bivariate_blocks(
         [(R, np.arange(k))], bh1, bh2, 20000, 18000,
-        ld_int8=None, allow_legacy_lowrank=not hasattr(R, "residual_diag"),
-        **kwargs)
+        ld_int8=None, **kwargs)
 
     np.testing.assert_allclose(observed.beta1_est, expected.beta1_est,
                                rtol=2e-5, atol=2e-7)
@@ -627,8 +630,7 @@ def test_mixed_lowrank_dense_supports_optional_estimators():
 
     result = ldpred3_auto_bivariate_blocks(
         blocks, bh1, bh2, 25000, 15000, burn_in=8, num_iter=12, seed=7,
-        rg_decorrelated=True, sample_every=2, noise_inflation=True,
-        allow_legacy_lowrank=not hasattr(lowrank, "residual_diag"))
+        rg_decorrelated=True, sample_every=2, noise_inflation=True)
 
     assert np.all(np.isfinite(result.beta1_est))
     assert np.all(np.isfinite(result.beta2_est))
@@ -677,6 +679,99 @@ def test_ncores_two_matches_one_for_readonly_variable_size_d8_blocks():
 
 
 @pytest.mark.skipif(not bivariate.HAVE_NUMBA, reason="Numba is required")
+def test_ncores_one_fuses_homogeneous_blocks(monkeypatch):
+    k = 6
+    corr = 0.3 ** np.abs(np.subtract.outer(np.arange(k), np.arange(k)))
+    payload = np.rint(corr * 127.0).astype(np.int8)
+    blocks = [
+        (payload.copy(), np.arange(i * k, (i + 1) * k))
+        for i in range(4)
+    ]
+    rng = np.random.default_rng(214)
+    bh1 = rng.standard_normal(4 * k) * 0.02
+    bh2 = rng.standard_normal(4 * k) * 0.02
+    calls = 0
+    fused = bivariate._bivar_dense_sweep_all_jit
+
+    def counting_fused(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return fused(*args, **kwargs)
+
+    monkeypatch.setattr(
+        bivariate, "_bivar_dense_sweep_all_jit", counting_fused
+    )
+    fused_result = ldpred3_auto_bivariate_blocks(
+        blocks, bh1, bh2, 20_000, 18_000,
+        burn_in=3, num_iter=5, ncores=1, seed=215,
+    )
+
+    assert calls == 8
+    monkeypatch.setattr(bivariate, "HAVE_NUMBA", False)
+    per_block_result = ldpred3_auto_bivariate_blocks(
+        blocks, bh1, bh2, 20_000, 18_000,
+        burn_in=3, num_iter=5, ncores=1, seed=215,
+    )
+    _assert_bivariate_result_array_equal(fused_result, per_block_result)
+
+
+@pytest.mark.skipif(not bivariate.HAVE_NUMBA, reason="Numba is required")
+def test_all_lowrank_fit_skips_genome_length_rb_buffers(monkeypatch):
+    from ldpred3 import lowrank_ld
+
+    k = 12
+    corr = 0.4 ** np.abs(np.subtract.outer(np.arange(k), np.arange(k)))
+    compact = lowrank_ld(corr, variance=0.7, max_rank=4, quantize=True)
+    rng = np.random.default_rng(216)
+    bh1 = rng.standard_normal(k) * 0.02
+    bh2 = rng.standard_normal(k) * 0.02
+    observed_sizes = []
+    fused = bivariate._bivar_lowrank_sweep_all_jit
+
+    def recording_fused(*args, **kwargs):
+        observed_sizes.append((args[13].size, args[14].size))
+        return fused(*args, **kwargs)
+
+    monkeypatch.setattr(
+        bivariate, "_bivar_lowrank_sweep_all_jit", recording_fused
+    )
+    ldpred3_auto_bivariate_blocks(
+        [(compact, np.arange(k))], bh1, bh2, 20_000, 18_000,
+        burn_in=2, num_iter=3, ncores=1, seed=217,
+    )
+
+    assert observed_sizes == [(0, 0)] * 5
+
+
+@pytest.mark.skipif(not bivariate.HAVE_NUMBA, reason="Numba is required")
+def test_ncores_restores_numba_thread_mask_after_exception(monkeypatch):
+    from numba import config, get_num_threads, set_num_threads
+
+    if config.NUMBA_NUM_THREADS < 2:
+        pytest.skip("Numba thread pool has only one thread")
+    original = get_num_threads()
+    set_num_threads(1)
+
+    def fail_sweep(*_args, **_kwargs):
+        raise RuntimeError("deliberate sweep failure")
+
+    monkeypatch.setattr(
+        bivariate, "_bivar_dense_sweep_all_par_jit", fail_sweep
+    )
+    beta_hat = np.full(4, 0.02)
+    try:
+        with pytest.raises(RuntimeError, match="deliberate sweep failure"):
+            ldpred3_auto_bivariate(
+                np.eye(4), beta_hat, beta_hat, 1000, 1000,
+                ld_int8=False, burn_in=0, num_iter=1,
+                ncores=2, seed=218,
+            )
+        assert get_num_threads() == 1
+    finally:
+        set_num_threads(original)
+
+
+@pytest.mark.skipif(not bivariate.HAVE_NUMBA, reason="Numba is required")
 def test_ncores_two_matches_one_for_float32_blocks_with_per_variant_n():
     sizes = (8, 11)
     blocks = []
@@ -719,7 +814,6 @@ def test_ncores_two_matches_one_for_variable_rank_lowrank_blocks(quantize):
     bh2 = 0.5 * bh1 + rng.standard_normal(start) * 0.012
     kwargs = dict(
         burn_in=5, num_iter=8, seed=24, noise_inflation=True,
-        allow_legacy_lowrank=not hasattr(blocks[0][0], "residual_diag"),
     )
 
     serial = ldpred3_auto_bivariate_blocks(
@@ -747,7 +841,6 @@ def test_ncores_mixed_blocks_bucket_into_parallel_calls(monkeypatch):
     bh2 = rng.standard_normal(3 * k) * 0.02
     kwargs = dict(
         burn_in=3, num_iter=5, seed=26, ld_int8=False,
-        allow_legacy_lowrank=not hasattr(lr8, "residual_diag"),
     )
     serial = ldpred3_auto_bivariate_blocks(
         blocks, bh1, bh2, 16_000, 14_000, ncores=1, **kwargs)
@@ -785,6 +878,11 @@ def test_ncores_mixed_blocks_bucket_into_parallel_calls(monkeypatch):
         # by the serial driver, which is what ncores > 1 falls back to.
         assert calls == {"dense": 0, "lowrank": 0}
     _assert_bivariate_result_array_equal(requested, serial)
+    monkeypatch.setattr(bivariate, "HAVE_NUMBA", False)
+    per_block = ldpred3_auto_bivariate_blocks(
+        blocks, bh1, bh2, 16_000, 14_000, ncores=1, **kwargs
+    )
+    _assert_bivariate_result_array_equal(serial, per_block)
 
 
 @pytest.mark.parametrize(
@@ -792,7 +890,6 @@ def test_ncores_mixed_blocks_bucket_into_parallel_calls(monkeypatch):
     [
         ({"ld_int8": 1}, "ld_int8.*boolean"),
         ({"ld_int8": "auto"}, "ld_int8.*boolean"),
-        ({"allow_legacy_lowrank": 1}, "allow_legacy_lowrank.*boolean"),
         ({"h2_init": 0.0}, "h2"),
         ({"h2_init": np.nan}, "h2"),
         ({"h2_init": (0.1,)}, "h2_init"),
@@ -922,16 +1019,17 @@ def test_per_variant_n_controls_variant_specific_shrinkage():
     assert res.beta1_est[1] > 5.0 * res.beta1_est[0]
 
 
-def test_decorrelated_rg_buffers_are_opt_in_and_path_is_used(monkeypatch):
-    assert bivariate._effect_sample_buffers(False, 10, 2, 10_000_000) == (None, None)
-    s1, s2 = bivariate._effect_sample_buffers(True, 3, 2, 4)
-    assert s1.shape == s2.shape == (2, 4)
-    assert s1.dtype == s2.dtype == np.float32
+def test_decorrelated_rg_accumulator_is_opt_in_and_path_is_used(monkeypatch):
+    assert bivariate._decorrelated_accumulator(False, 10_000_000) is None
+    accumulator = bivariate._decorrelated_accumulator(True, 4)
+    assert accumulator.sum1.shape == accumulator.sum2.shape == (4,)
+    assert accumulator.sum1.dtype == accumulator.sum2.dtype == np.float64
+    assert accumulator.diagonal.shape == (3,)
 
     calls = []
 
-    def fake_decorrelated(_blocks, samples1, samples2):
-        calls.append((samples1.shape, samples2.shape))
+    def fake_decorrelated(_blocks, moments):
+        calls.append((moments.count, moments.sum1.shape, moments.sum2.shape))
         return 0.25, 1.0, 1.0
 
     monkeypatch.setattr(bivariate, "_decorrelated_cov", fake_decorrelated)
@@ -946,8 +1044,77 @@ def test_decorrelated_rg_buffers_are_opt_in_and_path_is_used(monkeypatch):
         np.eye(4), beta_hat, beta_hat, 1000, 1000,
         rg_decorrelated=True, **kwargs,
     )
-    assert calls == [((2, 4), (2, 4))]
+    assert calls == [(2, (4,), (4,))]
     assert res.rg == 0.25
+
+
+def test_online_decorrelated_moments_match_materialised_formula():
+    rng = np.random.default_rng(123)
+    k = 9
+    corr = (0.4 ** np.abs(
+        np.subtract.outer(np.arange(k), np.arange(k))
+    )).astype(np.float32)
+    fblocks = [
+        (bivariate._DENSE, corr, 0, k, 1.0, None, None, None)
+    ]
+    samples1 = rng.standard_normal((7, k))
+    samples2 = rng.standard_normal((7, k))
+
+    moments = bivariate._decorrelated_accumulator(True, k)
+    for beta1, beta2 in zip(samples1, samples2):
+        Rbeta1, Rbeta2 = bivariate._apply_R_rows(
+            fblocks, np.vstack([beta1, beta2])
+        )
+        bivariate._accumulate_decorrelated(
+            moments, beta1, beta2,
+            (beta1 @ Rbeta1, beta1 @ Rbeta2, beta2 @ Rbeta2),
+        )
+    observed = bivariate._decorrelated_cov(fblocks, moments)
+
+    sum1 = samples1.sum(axis=0, keepdims=True)
+    sum2 = samples2.sum(axis=0, keepdims=True)
+    Rsum1, Rsum2 = bivariate._apply_R_rows(
+        fblocks, np.vstack([sum1, sum2])
+    )
+    all11 = float(sum1[0] @ Rsum1)
+    all12 = float(sum1[0] @ Rsum2)
+    all22 = float(sum2[0] @ Rsum2)
+    Rs1 = bivariate._apply_R_rows(fblocks, samples1)
+    Rs2 = bivariate._apply_R_rows(fblocks, samples2)
+    diagonal = (
+        float(np.einsum("ij,ij->", samples1, Rs1)),
+        float(np.einsum("ij,ij->", samples1, Rs2)),
+        float(np.einsum("ij,ij->", samples2, Rs2)),
+    )
+    npairs = len(samples1) * (len(samples1) - 1)
+    expected = (
+        (all12 - diagonal[1]) / npairs,
+        (all11 - diagonal[0]) / npairs,
+        (all22 - diagonal[2]) / npairs,
+    )
+    np.testing.assert_allclose(observed, expected, rtol=2e-14, atol=2e-14)
+
+
+def test_decorrelated_rg_applies_ld_only_once_at_finalization(monkeypatch):
+    apply_R_rows = bivariate._apply_R_rows
+    calls = 0
+
+    def counting_apply(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return apply_R_rows(*args, **kwargs)
+
+    monkeypatch.setattr(bivariate, "_apply_R_rows", counting_apply)
+    beta_hat = np.full(20, 0.02)
+    result = ldpred3_auto_bivariate(
+        np.eye(20), beta_hat, beta_hat, 10_000, 10_000,
+        ld_int8=False, h2_init=0.2, p_init=0.5, burn_in=5,
+        num_iter=12, sample_every=2, h2_cap=(0.5, 0.5),
+        rg_decorrelated=True, seed=2,
+    )
+
+    assert np.isfinite(result.rg)
+    assert calls == 1
 
 
 @pytest.mark.parametrize(

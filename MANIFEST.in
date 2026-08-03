@@ -2,4 +2,5 @@ include CHANGELOG.md
 include LICENSE
 recursive-include docs *.md
 recursive-include examples *.py
+exclude tests/test_benchmark_simulate.py
 global-exclude __pycache__ *.py[cod]

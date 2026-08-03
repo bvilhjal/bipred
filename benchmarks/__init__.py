@@ -1,0 +1,1 @@
+"""Repository-only bipred benchmarks."""

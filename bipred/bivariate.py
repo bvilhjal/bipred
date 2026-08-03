@@ -25,24 +25,25 @@ so it is not automatically interchangeable with this correlation.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Optional
 import warnings
 
 import numpy as np
+from ldpred3 import LowRankLD
 
-# bipred builds on ldpred3's shared internals: the Numba JIT shim (``_jit``), the
-# per-variant-N helper (``_as_n_vector``) and the compact-LD sentinel
-# (``LowRankLD``). They are re-exported from ``ldpred3.ldpred3`` -- the internal
-# seam ldpred3 keeps stable for its own infer / annot / finemap modules.
-from ldpred3.ldpred3 import (
+# Keep the pinned private ldpred3 seam in one compatibility module; LowRankLD
+# itself is public and imported directly above.
+from ._ldpred3_compat import (
     HAVE_NUMBA,
-    LowRankLD,
+    _Q8,
     _as_n_vector,
     _check_h2_p,
     _finite_control,
     _integer_at_least,
     _jit,
+    _jit_nogil,
     _jit_parallel,
     _set_threads,
     _validate_beta_hat,
@@ -57,21 +58,6 @@ from ldpred3.ldpred3 import (
 # ``round(R * 127)`` int8 -- a quarter of the float32 memory -- and the sampler
 # reads ``R[i, j] * (1 / 127)``. Imported from ldpred3 so bipred's encoding stays
 # locked to the blocks ``ldpred3.compute_ld_blocks(quantize=True)`` produces.
-from ldpred3._kernels import _Q8
-
-# nogil variant of the JIT shim. ldpred3 defines an equivalent internally but
-# does not re-export it on the seam bipred consumes, and reaching past that seam
-# would tie bipred to an unreleased ldpred3, so the two-line definition lives
-# here instead. Releasing the GIL is what lets several chains sweep at once:
-# without it, threading the chain driver is slower than running it serially,
-# because every chain contends for the interpreter lock.
-if HAVE_NUMBA:                                   # pragma: no branch
-    from numba import njit as _njit
-
-    def _jit_nogil(func):
-        return _njit(cache=True, nogil=True)(func)
-else:
-    _jit_nogil = _jit
 
 __all__ = ["BivariateResult", "ldpred3_auto_bivariate",
            "ldpred3_auto_bivariate_blocks"]
@@ -93,7 +79,6 @@ class _BivariateOptions:
     """Validated controls shared by every chain in one fit."""
 
     ld_int8: Optional[bool]
-    allow_legacy_lowrank: bool
     h2_init: tuple
     rg_init: float
     cross_corr: float
@@ -254,15 +239,14 @@ def _initial_hyperparameters(m, h2_init, p_init, rg_init, pi_init=None):
 def _apply_R_rows(fblocks, V):
     """Right-multiply each row of ``V`` (n, m) by the block-diagonal LD ``R``
     (rows are ``R @ v`` since ``R`` is symmetric), block by block. Dense int8
-    blocks carry a dequantisation scale. Low-rank blocks use the same factor
-    ``W = diag(row_scales) @ U`` and optional diagonal residual as the Gibbs
-    sweep, so diagnostics never silently evaluate a different effective LD
-    matrix."""
+    blocks carry a dequantisation scale. Low-rank blocks use the same globally
+    scaled factor and diagonal residual as the Gibbs sweep, so diagnostics never
+    silently evaluate a different effective LD matrix."""
     out = np.zeros_like(V)
     for kind, data, start, k, aux, residual, _score1, _score2 in fblocks:
         sl = slice(start, start + k)
         if kind == _LOWRANK:
-            W = data.astype(V.dtype) * aux.astype(V.dtype)[:, None]
+            W = data.astype(V.dtype) * aux
             out[:, sl] = ((V[:, sl] @ W) @ W.T
                           + V[:, sl] * residual.astype(V.dtype))
         else:
@@ -292,65 +276,24 @@ def _prepare_block(R, ld_int8):
     return np.ascontiguousarray(arr, dtype=np.float32), 1.0
 
 
-def _prepare_lowrank_block(R, *, allow_legacy=False):
-    """Canonicalise one compact LD factor across ldpred3 contracts.
+def _prepare_bivariate_lowrank_block(R):
+    """Return the current compact-LD payload without expanding per-row state.
 
-    Released ldpred3 factors encode a unit diagonal by normalising every row of
-    ``U``; they have no ``residual_diag`` attribute. Newer factors retain their
-    global scale and encode discarded diagonal mass explicitly. Return the
-    effective factor payload, per-row multipliers, and diagonal residual without
-    materialising the dense block.
+    ``_validate_blocks`` has already checked the public ``LowRankLD`` contract:
+    one global factor scale and a float32 diagonal residual. Keeping those
+    native representations avoids two float64 length-m copies per prepared
+    panel.
     """
     raw = np.asarray(R.U)
-    if raw.dtype == np.int8:
-        U = np.ascontiguousarray(raw, dtype=np.int8)
-    else:
-        U = np.ascontiguousarray(raw, dtype=np.float32)
-    norm2 = np.einsum("ij,ij->i", U, U, dtype=np.float64)
-    if np.any(~np.isfinite(norm2)):
-        raise ValueError("LowRankLD U must contain only finite values")
-
-    if not hasattr(R, "residual_diag"):
-        if not allow_legacy:
-            raise ValueError(
-                "legacy row-normalised LowRankLD can exaggerate weak-row LD; "
-                "rebuild it with ldpred3 revision 382fb90 or newer, or set "
-                "allow_legacy_lowrank=True only to reproduce legacy semantics"
-            )
-        # Historical contract: the global LR8 scale cancels, and each row is
-        # normalised after float32 canonicalisation so diag(W W.T) is exactly 1.
-        if np.any(norm2 <= 0.0):
-            raise ValueError("LowRankLD U must not contain zero rows")
-        row_scales = 1.0 / np.sqrt(norm2)
-        residual = np.zeros(U.shape[0], dtype=np.float64)
-    else:
-        # Low-rank-plus-diagonal contract: preserve factor geometry with one
-        # global scale and use the supplied discarded diagonal mass verbatim.
-        scale = float(R.scale)
-        if not np.isfinite(scale) or scale <= 0.0:
-            raise ValueError("LowRankLD scale must be a finite value > 0")
-        factor_diag = scale * scale * norm2
-        residual = np.asarray(R.residual_diag, dtype=np.float64)
-        if (residual.shape != (U.shape[0],)
-                or not np.all(np.isfinite(residual))
-                or np.any(residual < -2e-5)):
-            raise ValueError(
-                "LowRankLD residual_diag must be a finite non-negative vector"
-            )
-        if not np.allclose(
-            factor_diag + residual, 1.0, rtol=2e-5, atol=2e-5
-        ):
-            raise ValueError(
-                "LowRankLD factor and residual_diag must sum to unit diagonal"
-            )
-        row_scales = np.full(U.shape[0], scale, dtype=np.float64)
-        residual = np.maximum(residual, 0.0)
-
-    return (U, np.ascontiguousarray(row_scales, dtype=np.float64),
-            np.ascontiguousarray(residual, dtype=np.float64))
+    dtype = np.int8 if raw.dtype == np.int8 else np.float32
+    return (
+        np.ascontiguousarray(raw, dtype=dtype),
+        float(R.scale),
+        np.ascontiguousarray(R.residual_diag, dtype=np.float32),
+    )
 
 
-def _validate_bivariate_options(*, ld_int8, allow_legacy_lowrank, h2_init,
+def _validate_bivariate_options(*, ld_int8, h2_init,
                                 rg_init, cross_corr, burn_in, num_iter,
                                 h2_bounds, h2_cap, iw_df, rg_decorrelated,
                                 noise_inflation, ni_damp, pi_prior,
@@ -367,11 +310,8 @@ def _validate_bivariate_options(*, ld_int8, allow_legacy_lowrank, h2_init,
     if ld_int8 is not None:
         _validate_boolean_controls(ld_int8=ld_int8)
         ld_int8 = bool(ld_int8)
-    _validate_boolean_controls(
-        allow_legacy_lowrank=allow_legacy_lowrank,
-        rg_decorrelated=rg_decorrelated,
-        noise_inflation=noise_inflation,
-    )
+    _validate_boolean_controls(rg_decorrelated=rg_decorrelated,
+                               noise_inflation=noise_inflation)
     iw_df = _finite_control("iw_df", iw_df)
     if iw_df <= 0.0:
         raise ValueError("iw_df must be positive")
@@ -405,7 +345,6 @@ def _validate_bivariate_options(*, ld_int8, allow_legacy_lowrank, h2_init,
 
     return _BivariateOptions(
         ld_int8=ld_int8,
-        allow_legacy_lowrank=bool(allow_legacy_lowrank),
         h2_init=h2_init,
         rg_init=rg_init,
         cross_corr=cross_corr,
@@ -427,7 +366,6 @@ def _validate_bivariate_options(*, ld_int8, allow_legacy_lowrank, h2_init,
 
 _BIVARIATE_OPTION_DEFAULTS = {
     "ld_int8": None,
-    "allow_legacy_lowrank": False,
     "h2_init": 0.1,
     "rg_init": 0.0,
     "cross_corr": 0.0,
@@ -490,16 +428,14 @@ def _prepare_bivariate_inputs(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2,
         start = int(idx[0])
         size = int(idx.shape[0])
         if isinstance(R, LowRankLD):
-            U, row_scales, residual = _prepare_lowrank_block(
-                R, allow_legacy=options.allow_legacy_lowrank
-            )
+            U, scale, residual = _prepare_bivariate_lowrank_block(R)
             prepared_blocks.append(
                 (
                     _LOWRANK,
                     _readonly_view(U),
                     start,
                     size,
-                    _readonly_view(row_scales),
+                    scale,
                     _readonly_view(residual),
                 )
             )
@@ -637,46 +573,72 @@ def _warn_if_implausible_fit(h2, p, h2_bounds, m):
         )
 
 
-def _effect_sample_buffers(enabled, num_iter, sample_every, m):
-    """Allocate decorrelated-rg effect traces only when explicitly enabled."""
+@dataclass
+class _DecorrelatedAccumulator:
+    """O(m) sufficient statistics for cross-sweep genetic quadratics."""
+
+    sum1: np.ndarray
+    sum2: np.ndarray
+    diagonal: np.ndarray
+    count: int = 0
+
+
+def _decorrelated_accumulator(enabled, m):
+    """Allocate only the two effect sums needed by decorrelated ``rg``."""
     if not enabled:
-        return None, None
-    n_saved = (num_iter - 1) // sample_every + 1
-    return (np.zeros((n_saved, m), dtype=np.float32),
-            np.zeros((n_saved, m), dtype=np.float32))
+        return None
+    return _DecorrelatedAccumulator(
+        np.zeros(m, dtype=np.float64),
+        np.zeros(m, dtype=np.float64),
+        np.zeros(3, dtype=np.float64),
+    )
 
 
-def _decorrelated_cov(fblocks, samp1, samp2):
-    """Genetic (co)variances from cross-sweep effect samples.
+def _accumulate_decorrelated(accumulator, beta1, beta2, quadratics):
+    """Add one effect pair and its already-computed LD quadratics."""
+    accumulator.sum1 += beta1
+    accumulator.sum2 += beta2
+    accumulator.diagonal += quadratics
+    accumulator.count += 1
 
-    Uses effect vectors from *different* post-burn-in sweeps (thinned, so their
-    sampling noise is approximately independent) -- the LDpred2-auto
-    out-of-sample trick applied to two traits -- so same-sweep cross-noise is
-    excluded and the covariance of an under-powered trait is estimated from its
-    posterior mean rather than its thresholded samples. For
-    each of ``b1' R b2`` / ``b1' R b1`` / ``b2' R b2`` returns the mean over
-    ordered pairs ``a != b`` (all-pairs sum minus the ``a == b`` diagonal):
-    ``(gcov, var1, var2)``. Returns ``None`` when there are too few samples."""
-    n = samp1.shape[0]
+
+def _decorrelated_cov(fblocks, accumulator):
+    """Genetic (co)variances from online cross-sweep sufficient statistics.
+
+    For each quadratic, the ordered-pair sum is the quadratic of the sample sum
+    minus the sum of same-sweep quadratics. Thus two length-m float64 sums and
+    three scalar accumulators exactly replace the former two
+    ``(n_saved, m)`` effect traces. Reusing the sweep's same-sample quadratics
+    also avoids any extra LD multiplication while sampling. Returns ``None``
+    with fewer than two samples.
+    """
+    n = accumulator.count
     if n < 2:
         return None
-    S1 = samp1.sum(0, keepdims=True)
-    S2 = samp2.sum(0, keepdims=True)
-    RS = _apply_R_rows(fblocks, np.vstack([S1, S2]))
-    RS1, RS2 = RS[0], RS[1]
-    all11 = float(S1[0] @ RS1); all12 = float(S1[0] @ RS2); all22 = float(S2[0] @ RS2)
-    # Take the two ``R @ samples`` products one at a time: each is (n_saved, m),
-    # so holding both alongside samp1/samp2 puts four such arrays in memory at
-    # once. The einsums are unchanged, so the quadratics are bit-identical.
-    Rs1 = _apply_R_rows(fblocks, samp1)
-    d11 = float(np.einsum("ij,ij->", samp1, Rs1))
-    del Rs1
-    Rs2 = _apply_R_rows(fblocks, samp2)
-    d12 = float(np.einsum("ij,ij->", samp1, Rs2))
-    d22 = float(np.einsum("ij,ij->", samp2, Rs2))
-    del Rs2
+    sums = np.vstack([accumulator.sum1, accumulator.sum2])
+    RS1, RS2 = _apply_R_rows(fblocks, sums)
+    all11 = float(sums[0] @ RS1)
+    all12 = float(sums[0] @ RS2)
+    all22 = float(sums[1] @ RS2)
+    d11, d12, d22 = accumulator.diagonal
     npairs = n * (n - 1)
     return (all12 - d12) / npairs, (all11 - d11) / npairs, (all22 - d22) / npairs
+
+
+@contextmanager
+def _pinned_numba_threads(ncores):
+    """Temporarily pin Numba's caller-local thread mask."""
+    if not (HAVE_NUMBA and ncores and int(ncores) > 1):
+        yield
+        return
+    from numba import get_num_threads, set_num_threads
+
+    previous = get_num_threads()
+    _set_threads(ncores)
+    try:
+        yield
+    finally:
+        set_num_threads(previous)
 
 
 def _bivar_const(nn1, nn2, s1, s2, s12, cross_corr):
@@ -887,16 +849,15 @@ _bivar_one_sweep_jit = _jit_nogil(_bivar_one_sweep)
 
 
 def _bivar_one_sweep_lowrank(
-        U, row_scales, residual, bh1, bh2, n1, n2, curr1, curr2, proj1, proj2,
+        U, factor_scale, residual, bh1, bh2, n1, n2, curr1, curr2, proj1, proj2,
         rb1, rb2, rbsum1, rbsum2, unif, z1, z2,
         lpi00, lpi10, lpi01, lpi11, s1, s2, s12, cross_corr,
         n_const, resync, write_rb):
     """Sweep over ``R = W W.T + diag(residual)`` without materialising it.
 
-    ``W[j, c] = U[j, c] * row_scales[j]`` and ``proj1/2 = W.T @ beta1/2``.
-    Released row-normalised factors use a zero residual; newer ldpred3 factors
-    preserve a global factor scale and carry the missing unit-diagonal mass in
-    ``residual``. A SNP update costs O(rank). ``rb1/2`` are written only when
+    ``W = factor_scale * U`` and ``proj1/2 = W.T @ beta1/2``. Current ldpred3
+    factors preserve this global scale and carry the missing unit-diagonal mass
+    in ``residual``. A SNP update costs O(rank). ``rb1/2`` are written only when
     the caller's noise-inflation update needs the final ``R @ beta`` vectors.
     """
     k = bh1.shape[0]
@@ -909,11 +870,12 @@ def _bivar_one_sweep_lowrank(
             b1 = curr1[j]
             b2 = curr2[j]
             if b1 != 0.0 or b2 != 0.0:
-                row_scale = row_scales[j]
+                fb1 = factor_scale * b1
+                fb2 = factor_scale * b2
                 for c in range(rank):
-                    wjc = U[j, c] * row_scale
-                    proj1[c] += wjc * b1
-                    proj2[c] += wjc * b2
+                    ujc = U[j, c]
+                    proj1[c] += ujc * fb1
+                    proj2[c] += ujc * fb2
 
     if n_const:                                  # hoist the per-sweep constants
         (E11, E22, E12, det0, ldet0, a11, det1, ldet1, a22, det2, ldet2,
@@ -930,13 +892,14 @@ def _bivar_one_sweep_lowrank(
     for j in range(k):
         b1 = curr1[j]
         b2 = curr2[j]
-        row_scale = row_scales[j]
         rbj1 = 0.0
         rbj2 = 0.0
         for c in range(rank):
-            wjc = U[j, c] * row_scale
-            rbj1 += wjc * proj1[c]
-            rbj2 += wjc * proj2[c]
+            ujc = U[j, c]
+            rbj1 += ujc * proj1[c]
+            rbj2 += ujc * proj2[c]
+        rbj1 *= factor_scale
+        rbj2 *= factor_scale
         rbj1 += residual[j] * b1
         rbj2 += residual[j] * b2
         d1 = bh1[j] - rbj1 + b1                 # diag(R) == 1
@@ -1010,24 +973,25 @@ def _bivar_one_sweep_lowrank(
         dlt1 = new1 - b1
         dlt2 = new2 - b2
         if dlt1 != 0.0 or dlt2 != 0.0:
+            fd1 = factor_scale * dlt1
+            fd2 = factor_scale * dlt2
             for c in range(rank):
-                wjc = U[j, c] * row_scale
-                proj1[c] += wjc * dlt1
-                proj2[c] += wjc * dlt2
+                ujc = U[j, c]
+                proj1[c] += ujc * fd1
+                proj2[c] += ujc * fd2
             curr1[j] = new1
             curr2[j] = new2
 
     if write_rb:
         for j in range(k):
-            row_scale = row_scales[j]
             r1j = 0.0
             r2j = 0.0
             for c in range(rank):
-                wjc = U[j, c] * row_scale
-                r1j += wjc * proj1[c]
-                r2j += wjc * proj2[c]
-            rb1[j] = r1j + residual[j] * curr1[j]
-            rb2[j] = r2j + residual[j] * curr2[j]
+                ujc = U[j, c]
+                r1j += ujc * proj1[c]
+                r2j += ujc * proj2[c]
+            rb1[j] = factor_scale * r1j + residual[j] * curr1[j]
+            rb2[j] = factor_scale * r2j + residual[j] * curr2[j]
 
     gv11 = 0.0
     gv12 = 0.0
@@ -1075,10 +1039,11 @@ def _bivar_dense_sweep_all(
 
 
 _bivar_dense_sweep_all_par_jit = _jit_parallel(_bivar_dense_sweep_all)
+_bivar_dense_sweep_all_jit = _jit_nogil(_bivar_dense_sweep_all)
 
 
 def _bivar_lowrank_sweep_all(
-        factors, row_scales, residuals, proj1s, proj2s, starts, sizes,
+        factors, factor_scales, residuals, proj1s, proj2s, starts, sizes,
         bh1, bh2, n1, n2, curr1, curr2, rb1, rb2, rbsum1, rbsum2,
         unif, z1, z2, lpi00, lpi10, lpi01, lpi11,
         s1, s2, s12, cross_corr, n_const, resync, write_rb, counts, stats):
@@ -1090,7 +1055,7 @@ def _bivar_lowrank_sweep_all(
         sl = slice(start, stop)
         (a10, a01, a11, s1sq, s2sq, s12s,
          g11, g12, g22) = _bivar_one_sweep_lowrank_jit(
-            factors[b], row_scales[b], residuals[b], bh1[sl], bh2[sl],
+            factors[b], factor_scales[b], residuals[b], bh1[sl], bh2[sl],
             n1[sl], n2[sl], curr1[sl], curr2[sl], proj1s[b], proj2s[b],
             rb1[sl], rb2[sl], rbsum1[sl], rbsum2[sl], unif[sl], z1[sl],
             z2[sl], lpi00, lpi10, lpi01, lpi11, s1, s2, s12,
@@ -1107,6 +1072,7 @@ def _bivar_lowrank_sweep_all(
 
 
 _bivar_lowrank_sweep_all_par_jit = _jit_parallel(_bivar_lowrank_sweep_all)
+_bivar_lowrank_sweep_all_jit = _jit_nogil(_bivar_lowrank_sweep_all)
 
 
 def _rg_from_quadratics(g12, g1, g2):
@@ -1286,7 +1252,7 @@ class BivariateResult:
 
 
 def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, *,
-                                  ld_int8=None, allow_legacy_lowrank=False,
+                                  ld_int8=None,
                                   h2_init=0.1, p_init=0.02, rg_init=0.0,
                                   pi_init=None, sigma_prior_scale=None,
                                   cross_corr=0.0, burn_in=200, num_iter=200,
@@ -1302,10 +1268,7 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     block while ``pi`` and ``Sigma`` are pooled globally, so the genome-wide LD is
     never materialised. Blocks may be dense or ldpred3 ``LowRankLD`` objects;
     mixed representations are supported. Low-rank blocks retain their compact
-    factor (including LR8 int8 factors) and optional diagonal residual. Both the
-    released row-normalised contract and newer low-rank-plus-diagonal contract
-    are supported, but the legacy contract requires explicit opt-in because it
-    can exaggerate correlations for weak factor rows.
+    factor (including LR8 int8 factors) and diagonal residual.
 
     By default, supplied int8 blocks stay int8, float blocks with at most 1500
     variants are int8-quantised, and larger float blocks stay float32. This
@@ -1331,9 +1294,6 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
         calibrated on bivariate real data. ``True`` quantises every float block;
         ``False`` keeps every float block float32. Supplied int8 blocks stay int8
         under all three settings. This option does not alter ``LowRankLD`` factors.
-    allow_legacy_lowrank : bool, default False
-        Permit ldpred3's older row-normalised ``LowRankLD`` contract. Keep this
-        disabled for new analyses; it exists only to reproduce legacy fits.
     h2_init : float or pair
         Initial per-trait heritability. A scalar applies to both traits.
     p_init : float, default 0.02
@@ -1377,22 +1337,18 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
         Damping for the per-sweep ``lambda`` update (only used with
         ``noise_inflation``); smaller is more stable, larger adapts faster.
     sample_every : int, default 5
-        Thinning for the retained effect samples used by the decorrelated ``rg``.
+        Thinning for the retained effect states used by the decorrelated ``rg``.
     pi_prior : float, default 1.0
         Symmetric Dirichlet concentration for the four-state mixture prior.
     ncores : int, default 1
-        Threads used for fused block-parallel sweeps when Numba is available.
-        Prepared blocks are bucketed by representation -- ``(dense/low-rank,
-        dtype, dequantisation scale)`` -- and each bucket is swept by one fused
-        parallel call, so a mixed panel (which the default ``ld_int8=None``
-        policy produces, int8 at or below 1500 variants and float32 above) is
-        still parallelised rather than falling back to a serial sweep. SNP
-        updates remain sequential within each block, and the result is
-        bit-identical to ``ncores=1``. These are persistent threads, not
+        Prepared dense blocks are bucketed by dtype and dequantisation scale;
+        low-rank blocks are bucketed by dtype and keep a scalar scale per block.
+        Each bucket is swept by one fused call. At one core this is serial;
+        larger values parallelise blocks within each bucket, while buckets
+        remain sequential. SNP updates stay sequential within each block, and
+        seeded results match ``ncores=1``. These are persistent threads, not
         subprocesses, but each sweep waits for every block before updating
-        global parameters; imbalanced blocks can therefore limit speed-up, and
-        a panel split across many small buckets parallelises less well than one
-        homogeneous panel.
+        global parameters; imbalanced blocks can therefore limit speed-up.
     tol : float, default 0
         Optional stabilization threshold for the running posterior means and
         genetic correlation. A positive value may stop retained sampling early;
@@ -1407,7 +1363,6 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     """
     options = _validate_bivariate_options(
         ld_int8=ld_int8,
-        allow_legacy_lowrank=allow_legacy_lowrank,
         h2_init=h2_init,
         rg_init=rg_init,
         cross_corr=cross_corr,
@@ -1441,6 +1396,12 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
 
 
 def _ldpred3_auto_bivariate_prepared(prepared, options, start):
+    """Run one chain while preserving the caller's Numba thread mask."""
+    with _pinned_numba_threads(options.ncores):
+        return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start)
+
+
+def _ldpred3_auto_bivariate_prepared_inner(prepared, options, start):
     """Run one chain from canonical shared data and fresh mutable workspaces."""
     bh1 = prepared.beta_hat1
     bh2 = prepared.beta_hat2
@@ -1465,15 +1426,15 @@ def _ldpred3_auto_bivariate_prepared(prepared, options, start):
     check_every = options.check_every
     cross_corr = options.cross_corr
 
-    # One fused native call is worthwhile only for ncores > 1. A typed.List needs
-    # one element type, so blocks are bucketed by representation -- (kind, dtype,
-    # dequantisation scale) -- and each bucket gets its own fused parallel call.
-    # Prepared payloads are always C-contiguous. Bucketing keeps each block's
-    # arithmetic and the global reduction order unchanged, so results stay
-    # bit-identical to the serial path.
-    parallel_groups = []
-    parallel_counts = parallel_stats = None
-    if HAVE_NUMBA and ncores > 1 and fblocks:
+    # A typed.List needs one element type, so dense blocks are bucketed by dtype
+    # and dequantisation scale; low-rank blocks are bucketed by dtype and carry
+    # scalar factor scales separately. Each bucket gets one fused native call.
+    # At ncores=1 the same source is compiled without parallel=True: prange
+    # becomes range and avoids one Python->Numba crossing per block without
+    # starting a parallel runtime.
+    sweep_groups = []
+    block_counts = block_stats = None
+    if HAVE_NUMBA and fblocks:
         buckets = {}
         for pos, (kind, data, _start, _k, aux, _res, _p1, _p2) in enumerate(
                 fblocks):
@@ -1483,8 +1444,8 @@ def _ldpred3_auto_bivariate_prepared(prepared, options, start):
 
         from numba.typed import List as NumbaList
 
-        parallel_counts = np.empty((len(fblocks), 3), dtype=np.int64)
-        parallel_stats = np.empty((len(fblocks), 6), dtype=np.float64)
+        block_counts = np.empty((len(fblocks), 3), dtype=np.int64)
+        block_stats = np.empty((len(fblocks), 6), dtype=np.float64)
         for (kind, _dtype, scale), positions in buckets.items():
             payloads = NumbaList()
             for pos in positions:
@@ -1504,22 +1465,29 @@ def _ldpred3_auto_bivariate_prepared(prepared, options, start):
                 "stats": np.empty((len(positions), 6), dtype=np.float64),
             }
             if kind == _LOWRANK:
-                aux_list = NumbaList()
                 residual_list = NumbaList()
                 proj1_list = NumbaList()
                 proj2_list = NumbaList()
-                for pos in positions:
+                factor_scales = np.empty(len(positions), dtype=np.float64)
+                for i, pos in enumerate(positions):
                     _k2, _d, _s, _n, aux, residual, proj1, proj2 = fblocks[pos]
-                    aux_list.append(aux)
+                    factor_scales[i] = aux
                     residual_list.append(residual)
                     proj1_list.append(proj1)
                     proj2_list.append(proj2)
-                group["aux"] = aux_list
+                group["factor_scales"] = factor_scales
                 group["residuals"] = residual_list
                 group["proj1s"] = proj1_list
                 group["proj2s"] = proj2_list
-            parallel_groups.append(group)
-        _set_threads(ncores)
+            sweep_groups.append(group)
+    dense_sweep_all = (
+        _bivar_dense_sweep_all_par_jit if ncores > 1
+        else _bivar_dense_sweep_all_jit
+    )
+    lowrank_sweep_all = (
+        _bivar_lowrank_sweep_all_par_jit if ncores > 1
+        else _bivar_lowrank_sweep_all_jit
+    )
 
     pi = start.pi.copy()
     s1, s2, s12 = start.s1, start.s2, start.s12
@@ -1538,7 +1506,12 @@ def _ldpred3_auto_bivariate_prepared(prepared, options, start):
 
     rng = np.random.default_rng(start.seed)
     curr1 = np.zeros(m); curr2 = np.zeros(m)
-    rb1 = np.zeros(m); rb2 = np.zeros(m)
+    # Dense sweeps carry R@beta incrementally. Compact sweeps carry only their
+    # rank-length projections and write R@beta solely for noise inflation, so an
+    # all-low-rank default fit needs no genome-length residual buffers.
+    needs_rb = noise_inflation or any(b[0] == _DENSE for b in fblocks)
+    rb1 = np.zeros(m) if needs_rb else np.empty(0)
+    rb2 = np.zeros(m) if needs_rb else np.empty(0)
     avg1 = np.zeros(m); avg2 = np.zeros(m)
     count = 0
     gv_acc = np.zeros(3)
@@ -1556,11 +1529,7 @@ def _ldpred3_auto_bivariate_prepared(prepared, options, start):
     sig_samples = np.zeros((num_iter, 3))
     genetic_samples = np.zeros((num_iter, 3))
     noise_scale_samples = np.zeros((num_iter, 2))
-    # These two O(num_iter * m) buffers are needed only by the optional
-    # decorrelated-rg estimator. Default runs should not pay their memory cost.
-    samp1, samp2 = _effect_sample_buffers(
-        rg_decorrelated, num_iter, sample_every, m)
-    n_saved = 0
+    decorrelated = _decorrelated_accumulator(rg_decorrelated, m)
 
     # ``pi`` and the slab covariance were calibrated together above: their
     # implied marginal h2 and genetic rg equal the documented starting values.
@@ -1594,9 +1563,9 @@ def _ldpred3_auto_bivariate_prepared(prepared, options, start):
         if noise_inflation:
             np.divide(n1, lam1, out=n1e)
             np.divide(n2, lam2, out=n2e)
-        for group in parallel_groups:
+        for group in sweep_groups:
             if group["kind"] == _DENSE:
-                _bivar_dense_sweep_all_par_jit(
+                dense_sweep_all(
                     group["payloads"], group["starts"], group["sizes"],
                     bh1, bh2, n1e, n2e, curr1, curr2, rb1, rb2, rbs1, rbs2,
                     unif, z1, z2, float(lpi[0]), float(lpi[1]), float(lpi[2]),
@@ -1604,8 +1573,8 @@ def _ldpred3_auto_bivariate_prepared(prepared, options, start):
                     float(cross_corr), float(group["scale"]), n_const, resync,
                     group["counts"], group["stats"])
             else:
-                _bivar_lowrank_sweep_all_par_jit(
-                    group["payloads"], group["aux"], group["residuals"],
+                lowrank_sweep_all(
+                    group["payloads"], group["factor_scales"], group["residuals"],
                     group["proj1s"], group["proj2s"], group["starts"],
                     group["sizes"], bh1, bh2, n1e, n2e, curr1, curr2, rb1,
                     rb2, rbs1, rbs2, unif, z1, z2, float(lpi[0]),
@@ -1614,21 +1583,21 @@ def _ldpred3_auto_bivariate_prepared(prepared, options, start):
                     bool(noise_inflation), group["counts"], group["stats"])
             # Scatter back to genome-block order so the reduction below is
             # unchanged whether one bucket or several were used.
-            parallel_counts[group["index"]] = group["counts"]
-            parallel_stats[group["index"]] = group["stats"]
+            block_counts[group["index"]] = group["counts"]
+            block_stats[group["index"]] = group["stats"]
 
-        if parallel_groups:
+        if sweep_groups:
             # Match the serial driver's exact block and floating reduction order.
             for b in range(len(fblocks)):
-                c10 += int(parallel_counts[b, 0])
-                c01 += int(parallel_counts[b, 1])
-                c11 += int(parallel_counts[b, 2])
-                S1 += float(parallel_stats[b, 0])
-                S2 += float(parallel_stats[b, 1])
-                S12 += float(parallel_stats[b, 2])
-                gv11 += float(parallel_stats[b, 3])
-                gv12 += float(parallel_stats[b, 4])
-                gv22 += float(parallel_stats[b, 5])
+                c10 += int(block_counts[b, 0])
+                c01 += int(block_counts[b, 1])
+                c11 += int(block_counts[b, 2])
+                S1 += float(block_stats[b, 0])
+                S2 += float(block_stats[b, 1])
+                S12 += float(block_stats[b, 2])
+                gv11 += float(block_stats[b, 3])
+                gv12 += float(block_stats[b, 4])
+                gv22 += float(block_stats[b, 5])
         else:
             for kind, data, start, k, aux, residual, proj1, proj2 in fblocks:
                 sl = slice(start, start + k)
@@ -1698,9 +1667,9 @@ def _ldpred3_auto_bivariate_prepared(prepared, options, start):
             genetic_samples[count] = (gv11, gv12, gv22)
             noise_scale_samples[count] = (lam1, lam2)
             if (rg_decorrelated and (it - burn_in) % sample_every == 0):
-                samp1[n_saved] = curr1
-                samp2[n_saved] = curr2
-                n_saved += 1
+                _accumulate_decorrelated(
+                    decorrelated, curr1, curr2, (gv11, gv12, gv22)
+                )
             count += 1
 
             # Adaptive stopping. Only after two snapshots exist, so the first
@@ -1741,7 +1710,7 @@ def _ldpred3_auto_bivariate_prepared(prepared, options, start):
     # covariance and estimates a weak trait's covariance from its posterior mean
     # (which the sampled-quadratic ratio attenuates).
     if rg_decorrelated:
-        cov = _decorrelated_cov(fblocks, samp1[:n_saved], samp2[:n_saved])
+        cov = _decorrelated_cov(fblocks, decorrelated)
         if cov is None:  # defensive: the public validator guarantees >=2 samples
             raise RuntimeError(
                 "internal error: decorrelated rg retained fewer than two effect "

@@ -36,7 +36,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ldpred3.genotype_io import VariantTable, SampleTable, write_plink   # noqa: E402
-from ldpred3.simulate import simulate_genotypes_by_mutation_rate         # noqa: E402
+from benchmarks.simulate import simulate_genotypes_by_mutation_rate      # noqa: E402
 from ldpred3 import (ld_scores, ldsc_h2, ldpred3_auto_infer,             # noqa: E402
                      standardize_betas)
 from ldpred3.ld import compute_ld_blocks                                 # noqa: E402
@@ -159,10 +159,11 @@ def simulate(arch, h2, rep, pheno_seed):
     se_allele = np.sqrt(np.maximum(1e-12, (y.var() - b_allele ** 2 * vG)
                                    / (N_GWAS * vG)))
     z = b_allele / se_allele
+    chisq = z * z
     pval = np.clip(2 * (1 - 0.5 * (1 + _ERF(np.abs(z) / 2 ** 0.5))), 1e-300, 1.0)
     bhat_std, _ = standardize_betas(b_allele, se_allele, np.full(m, float(N_GWAS)))
     return dict(m=m, f=f, sd=sd, Gref=gg["Gref"], b_allele=b_allele,
-                se_allele=se_allele, pval=pval, bhat_std=bhat_std,
+                se_allele=se_allele, pval=pval, chisq=chisq, bhat_std=bhat_std,
                 ld=gg["ld"], ell=gg["ell"], p_true=true_p(arch, m, good))
 
 
@@ -172,7 +173,7 @@ def simulate(arch, h2, rep, pheno_seed):
 def est_ldsc(sim):
     n = float(N_GWAS)
     t0 = time.perf_counter()
-    r = ldsc_h2(n * sim["bhat_std"] ** 2, sim["ell"], n, n_blocks=100)
+    r = ldsc_h2(sim["chisq"], sim["ell"], n, n_blocks=100)
     return dict(h2=r.h2, p=float("nan"), h2_lo=r.h2_ci[0], h2_hi=r.h2_ci[1],
                 p_lo=float("nan"), p_hi=float("nan"), t=time.perf_counter() - t0)
 

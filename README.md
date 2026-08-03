@@ -10,11 +10,12 @@ LD representations and sampler utilities.
 
 ## Installation
 
-Python 3.9–3.14 is supported. Numba is strongly recommended. Until ldpred3 is
-published, install bipred with the exact ldpred3 revision tested here:
+Python 3.9–3.14 is supported. Numba is strongly recommended. ldpred3 is private
+and not on PyPI, so its Git install requires authenticated GitHub read access.
+Install the exact revision tested here:
 
 ```bash
-python -m pip install "ldpred3[fast] @ git+https://github.com/bvilhjal/ldpred3.git@db3ebd2385b7e3f347712f8761682c0eb49df3e4"
+python -m pip install "ldpred3[fast] @ git+https://github.com/bvilhjal/ldpred3.git@5436dcc8152531000b223c5088f726d588d8a8cd"
 python -m pip install "bipred[fast] @ git+https://github.com/bvilhjal/bipred.git"
 ```
 
