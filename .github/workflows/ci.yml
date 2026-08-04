@@ -5,6 +5,10 @@ on:
     branches: [main, "claude/**"]
   pull_request:
     branches: [main]
+  # Weekly drift early-warning (the ldpred3-head leg below), plus manual runs.
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
 
 env:
   # ldpred3 is not published yet and bipred consumes an internal compatibility
@@ -131,6 +135,43 @@ jobs:
 
       - name: Smoke-test Windows peak RSS
         run: python -c "import sys; sys.path.insert(0, 'benchmarks'); from _benchmark_utils import peak_rss_bytes; assert peak_rss_bytes() > 0"
+
+  ldpred3-head:
+    # Drift early-warning: run the suite against ldpred3's master instead of the
+    # pinned LDPRED3_REV. Informational (continue-on-error): a failure means the
+    # private seam drifted upstream and the next pin bump needs its audit, not
+    # that this repo is broken at its pin. Scheduled weekly (see `on.schedule`)
+    # and on demand; it does not run on pushes.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    name: drift watch · ldpred3@master
+    env:
+      OPENBLAS_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Authenticate to private ldpred3
+        if: env.LDPRED3_TOKEN != ''
+        shell: bash
+        run: |
+          git config --global \
+            url."https://x-access-token:${LDPRED3_TOKEN}@github.com/".insteadOf \
+            "https://github.com/"
+
+      - name: Install ldpred3 from master (not the pin)
+        run: pip install "ldpred3[fast] @ git+https://github.com/bvilhjal/ldpred3.git@master"
+
+      - name: Install bipred
+        run: pip install -e ".[test,fast]"
+
+      - name: Run tests against ldpred3@master
+        run: pytest -q
 
   build:
     runs-on: ubuntu-latest

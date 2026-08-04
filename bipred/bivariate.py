@@ -21,6 +21,13 @@ overlap can be passed via ``cross_corr`` (the cross-trait correlation of the
 sampling errors); the default 0 assumes uncorrelated cross-trait sampling errors.
 A cross-trait LDSC intercept can reflect overlap but also correlated confounding,
 so it is not automatically interchangeable with this correlation.
+
+A distinct failure mode sits with this parameter: a strong **environmental**
+correlation between the traits (shared non-genetic effects) can dominate the
+fit — the 0.2.0 environmental-overlap stress test measured joint-fit MAE up to
+0.86 in that regime (``benchmarks/RESULTS.md``, Table 10). If the traits
+plausibly share environmental correlation, set ``cross_corr`` from external
+evidence rather than leaving it at the default 0.
 """
 
 from __future__ import annotations
@@ -1324,12 +1331,15 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
         Shrinkage strength on the effect covariance ``Sigma``. Larger values pull
         more strongly toward independent traits.
     rg_decorrelated : bool, default False
-        Sensitivity estimator based on effects sampled at different sweeps.
-        Consider for strongly asymmetric-power pairs. The committed 0.2.0
-        synthetic sweep did not improve on the default. Requires
-        ``num_iter > sample_every`` and raises rather than substituting the
-        default estimator if its cross-sweep quadratics are non-finite or have
-        non-positive variances.
+        **Sensitivity diagnostic only — do not use for production estimates.**
+        Estimator based on effects sampled at different sweeps, kept for
+        strongly asymmetric-power pairs. The committed 0.2.0 synthetic sweep
+        measured the **default** estimator more accurate in both power regimes
+        (RESULTS.md Table 4: 0.0084 vs 0.0110 symmetric, 0.0174 vs 0.0240
+        asymmetric), and this option is incompatible with multichain pooling
+        and adaptive stopping. Requires ``num_iter > sample_every`` and raises
+        rather than substituting the default estimator if its cross-sweep
+        quadratics are non-finite or have non-positive variances.
     noise_inflation : bool, default False
         Learn per-trait residual noise factors ``lambda_t >= 1`` and fit with
         effective sample size ``N_t / lambda_t``. Useful for finite reference-panel

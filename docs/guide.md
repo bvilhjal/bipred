@@ -155,7 +155,7 @@ shrinks local estimates toward the genome-wide correlation.
 | `h2_init`, `p_init`, `rg_init` | `0.1`, `0.02`, `0` | coherent genetic-moment start; `p_init` is union-causal |
 | `pi_init` | `None` | explicit four-state overlap start |
 | `sigma_prior_scale` | `None` | fixed covariance shrinkage target across starts |
-| `cross_corr` | `0` | correlation of cross-trait sampling noise |
+| `cross_corr` | `0` | correlation of cross-trait sampling noise (set from external evidence when traits share environmental effects — see `docs/rg.md`) |
 | `rg_decorrelated` | `False` | cross-sweep sensitivity estimator for asymmetric power |
 | `noise_inflation`, `ni_damp` | `False`, `0.1` | learn and damp residual-noise inflation |
 | `pi_prior` | `1` | symmetric Dirichlet mixture concentration |

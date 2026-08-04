@@ -26,6 +26,12 @@ python -m pip install -e "../ldpred3[fast]"
 python -m pip install -e ".[fast,test]"
 ```
 
+Bumping the pinned ldpred3 (the seam in `bipred/_ldpred3_compat.py` is
+private and unversioned): run the weekly `ldpred3-head` CI leg (or trigger it
+manually — it runs the suite against ldpred3@master), audit the seam for any
+drift it flags, then update `LDPRED3_REV` / `LDPRED3_VERSION` in
+`.github/workflows/ci.yml` and the git revision in the install command above.
+
 The `[sim]` extra adds msprime. `[bench]` adds msprime and Matplotlib; benchmarks
 that use HAPNEST or cached LD require their separately documented inputs.
 

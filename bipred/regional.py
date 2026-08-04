@@ -44,7 +44,9 @@ regions than as calibrated absolute values.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
+
 import numpy as np
 from ldpred3 import LowRankLD
 
@@ -165,6 +167,27 @@ def regional_rg(beta1, beta2, blocks, regions, *, min_variants=1, clip=True):
     if not (np.all(np.isfinite(b1)) and np.all(np.isfinite(b2))):
         raise ValueError("beta1 and beta2 must contain only finite values")
     m = b1.size
+
+    # Representation guard: a default bivariate fit auto-quantises *float*
+    # blocks of at most _AUTO_INT8_MAX_BLOCK variants, so evaluating the
+    # original float blocks here would use different LD than the fit did.
+    # LowRankLD blocks are always consumed natively, so they cannot mismatch.
+    from .bivariate import _AUTO_INT8_MAX_BLOCK
+    for R, _idx in blocks:
+        if isinstance(R, LowRankLD):
+            continue
+        arr = np.asarray(R)
+        if arr.dtype != np.int8 and arr.shape[0] <= _AUTO_INT8_MAX_BLOCK:
+            warnings.warn(
+                "regional_rg evaluates the blocks as given, but a default "
+                "ldpred3_auto_bivariate(_blocks) fit auto-quantises float "
+                f"blocks of {_AUTO_INT8_MAX_BLOCK} variants or fewer: this "
+                "call would use different LD than such a fit did. Pass the "
+                "fit's prepared (quantised) blocks, pre-quantise the same "
+                "blocks for both calls, or fit with ld_int8=False to keep "
+                "them aligned.",
+                stacklevel=2)
+            break
 
     if (isinstance(min_variants, (bool, np.bool_))
             or not isinstance(min_variants, (int, np.integer))):

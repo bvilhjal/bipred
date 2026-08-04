@@ -111,3 +111,39 @@ def test_as_n_vector_broadcast_contract():
     )
     with pytest.raises((ValueError, IndexError)):
         _as_n_vector(np.array([1.0, 2.0]), 4)
+
+
+def test_private_ldpred3_imports_stay_centralised():
+    """Every underscore-private ldpred3 import must live in ``_ldpred3_compat``.
+
+    The seam only guards what it centralises: a new private import elsewhere in
+    the package would drift silently until the next bump. Mirrors the gate
+    ``gwfm`` runs for the same reason (gwfm/tests/test_gwfm_public_api.py).
+    """
+    import pathlib
+    import re
+
+    import bipred
+
+    package = pathlib.Path(bipred.__file__).parent
+    offenders = []
+    for module in sorted(package.glob("*.py")):
+        if module.name == "_ldpred3_compat.py":
+            continue
+        for lineno, line in enumerate(module.read_text().splitlines(), 1):
+            stripped = line.strip()
+            if not stripped.startswith(("import ", "from ")):
+                continue
+            if "ldpred3._" in stripped:
+                offenders.append(f"{module.name}:{lineno}: {stripped}")
+                continue
+            match = re.match(r"from ldpred3\.[\w.]+ import\s*\(?\s*([\w\s,]+)",
+                             stripped)
+            if match:
+                names = match.group(1).replace("\n", " ").split(",")
+                private = [n.strip() for n in names if n.strip().startswith("_")]
+                if private:
+                    offenders.append(f"{module.name}:{lineno}: {stripped}")
+    assert offenders == [], (
+        "private ldpred3 imports must be centralised in "
+        "bipred/_ldpred3_compat.py: " + "; ".join(offenders))

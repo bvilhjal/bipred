@@ -203,3 +203,54 @@ def test_clip_flag_exposes_out_of_range_values():
     raw = regional_rg(b1, b2, [(R, np.arange(3))], [0, 0, 0], clip=False)
     assert -1.0 <= clipped.rg[0] <= 1.0
     assert abs(raw.rg[0]) > 1.0
+
+
+def test_warns_on_float_blocks_a_default_fit_would_quantise():
+    import warnings as _w
+
+    rng = np.random.default_rng(0)
+    k = 200
+    R = np.eye(k, dtype=np.float32) * 0.5
+    np.fill_diagonal(R, 1.0)
+    b1 = rng.standard_normal(k) * 0.01
+    b2 = rng.standard_normal(k) * 0.01
+    regions = np.ones(k, dtype=int)
+
+    # A float block at or below the fit's auto-quantise cutoff: warn, because a
+    # default fit used its quantised private copy instead.
+    with _w.catch_warnings(record=True) as caught:
+        _w.simplefilter("always")
+        regional_rg(b1, b2, [(R, np.arange(k))], regions)
+    assert any("auto-quantises" in str(w.message) for w in caught)
+
+    # Pre-quantised int8 blocks are aligned by construction: silent.
+    R8 = np.rint(R * 127).astype(np.int8)
+    with _w.catch_warnings(record=True) as caught:
+        _w.simplefilter("always")
+        regional_rg(b1, b2, [(R8, np.arange(k))], regions)
+    assert not any("auto-quantises" in str(w.message) for w in caught)
+
+    # A float block above the cutoff stays float in the fit too: silent.
+    kb = 1600
+    Rb = np.eye(kb, dtype=np.float32)
+    b1b = rng.standard_normal(kb) * 0.01
+    b2b = rng.standard_normal(kb) * 0.01
+    with _w.catch_warnings(record=True) as caught:
+        _w.simplefilter("always")
+        regional_rg(b1b, b2b, [(Rb, np.arange(kb))], np.ones(kb, dtype=int))
+    assert not any("auto-quantises" in str(w.message) for w in caught)
+
+
+def test_no_warn_on_lowrank_blocks():
+    import warnings as _w
+
+    k, r = 100, 5
+    rng = np.random.default_rng(0)
+    U = rng.standard_normal((k, r)).astype(np.float32) * 0.1
+    lr = LowRankLD(U=U, m=k, residual_diag=1.0 - np.einsum("ij,ij->i", U, U))
+    b1 = rng.standard_normal(k) * 0.01
+    b2 = rng.standard_normal(k) * 0.01
+    with _w.catch_warnings(record=True) as caught:
+        _w.simplefilter("always")
+        regional_rg(b1, b2, [(lr, np.arange(k))], np.ones(k, dtype=int))
+    assert not any("auto-quantises" in str(w.message) for w in caught)

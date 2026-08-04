@@ -113,7 +113,10 @@ shared-sample count compatible with `0 < rho_pheno <= 1`, not an upper bound.
 
 Environmental correlation among shared samples belongs in `cross_corr`, not in
 genetic covariance. Small-panel intercepts are noisy; use them as diagnostics,
-not precise overlap detectors.
+not precise overlap detectors. The failure mode is not hypothetical: the 0.2.0
+stress test measured joint-fit MAE up to 0.86 under strong shared-environmental
+correlation (`benchmarks/RESULTS.md`, Table 10), so in that regime `cross_corr`
+needs external evidence rather than a default-zero assumption.
 
 With `noise_inflation=True`, bipred replaces each `N_t` by `N_t / lambda_t` in
 both the diagonal variances and off-diagonal covariance while holding
