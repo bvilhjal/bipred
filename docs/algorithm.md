@@ -131,10 +131,12 @@ shares some posterior-noise inflation with the numerator, which is useful for
 ordinary pairs but can attenuate a weak trait under strongly asymmetric power.
 `rg_decorrelated=True` instead averages cross-sweep quadratics, excluding
 same-sweep pairs. Thinning reduces, but does not prove the absence of, dependence
-between retained MCMC states. Treat this as a sensitivity estimator for
-asymmetric-power pairs. In the committed 0.2.0 synthetic sweep it had higher
-paired realized-rg MAE than the default under both symmetric and asymmetric
-power.
+between retained MCMC states. Treat this as a sensitivity diagnostic only. In
+the committed synthetic sweep the default estimator had lower paired
+realized-rg MAE under both symmetric (0.0084 vs 0.0110) and asymmetric
+(0.0174 vs 0.0240) power, so the default is the recommended estimator; this
+option exists for sensitivity analysis and is incompatible with multichain
+pooling and adaptive stopping.
 
 `res.h2` reports the mean sampled quadratic `beta_t' R beta_t`, clamped to
 `h2_bounds`. Because sampled rather than Rao–Blackwellized effects are used, it

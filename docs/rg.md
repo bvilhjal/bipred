@@ -10,7 +10,7 @@ polygenic-overlap interpretation. See [`guide.md`](guide.md) for fitting.
 | Estimator | Use | Main caveat |
 |---|---|---|
 | `res.rg` | default joint LD estimate | needs well-matched LD |
-| `rg_decorrelated=True` | asymmetric-power sensitivity check | did not improve the 0.2.0 synthetic benchmark; requires a full single-chain schedule |
+| `rg_decorrelated=True` | **sensitivity diagnostic only** — the default estimator measured more accurate in both power regimes (0.0084 vs 0.0110, 0.0174 vs 0.0240); incompatible with multichain and adaptive stopping |
 | `bipred.ldsc_rg` | fast screen or independent check | unstable when marginal LDSC `h2` is near zero |
 | two univariate LDpred fits | additional diagnostic | often attenuated under power asymmetry |
 
@@ -61,8 +61,9 @@ eliminate, dependence between retained MCMC states. In the committed 0.2.0
 synthetic sweep, paired MAE was 0.0084 versus 0.0110 under symmetric power and
 0.0174 versus 0.0240 under asymmetric power for the default versus cross-sweep
 estimator. Treat it as a sensitivity analysis, not an automatic replacement for
-`res.rg`. It needs at least two retained effect samples and a full schedule;
-adaptive stopping is disabled. Undefined cross-sweep quadratics raise an error
+`res.rg` — and not as a production estimator at all. It needs at least two
+retained effect samples and a full schedule; adaptive stopping is disabled.
+Undefined cross-sweep quadratics raise an error
 rather than silently returning the default estimator.
 
 ## Sample overlap
@@ -149,9 +150,11 @@ summed under the block-diagonal LD assumption.
 `regional_rg` evaluates the representation encoded by the LD objects passed to
 it. A default fit can internally Q8-quantize float blocks of at most 1,500
 variants without mutating the originals. Passing those originals therefore
-evaluates float LD, not the fit's internal Q8 representation. To use the same
-matrix, pass matching int8 blocks to both calls, or use the same float32 blocks
-and set `ld_int8=False` during fitting.
+evaluates float LD, not the fit's internal Q8 representation — so
+`regional_rg` **warns** when it is handed float blocks in that range, naming
+the remedies: pass matching int8 blocks to both calls, use the same float32
+blocks and set `ld_int8=False` during fitting, or pass the fit's prepared
+(quantised) blocks.
 
 **Table 2. `RegionalRgResult` fields.**
 

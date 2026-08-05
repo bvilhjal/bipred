@@ -32,7 +32,11 @@ manually — it runs the suite against ldpred3@master), audit the seam for any
 drift it flags, then update `LDPRED3_REV` / `LDPRED3_VERSION` in
 `.github/workflows/ci.yml` and the git revision in the install command above.
 
-The `[sim]` extra adds msprime. `[bench]` adds msprime and Matplotlib; benchmarks
+The `[sim]` extra adds msprime, the default simulation backend for benchmarks
+(fastest: 0.80 s per 10,000-sample segment); without it, benchmark scripts fall
+back to a bundled Numba coalescent (`benchmarks/_coalescent.py`,
+dependency-free, about 2x msprime's per-segment time). `[bench]` adds msprime
+and Matplotlib; benchmarks
 that use HAPNEST or cached LD require their separately documented inputs.
 
 ## Runnable example
@@ -59,7 +63,8 @@ guide. Summary statistics must already be ancestry-matched and harmonized.
 - [Benchmark guide](https://github.com/bvilhjal/bipred/blob/main/benchmarks/README.md):
   scripts and reproducibility.
 - [Benchmark results](https://github.com/bvilhjal/bipred/blob/main/benchmarks/RESULTS.md):
-  the reproducible bipred 0.2.0 snapshot, including limitations and provenance.
+  the reproducible benchmark snapshot (0.2.0, with the accuracy-identical 0.2.1
+  refresh), including limitations and provenance.
 
 ## License
 

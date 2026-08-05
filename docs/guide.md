@@ -121,12 +121,13 @@ guaranteed to improve calibration at every power setting.
 
 ## Genetic correlation
 
-Use `res.rg` by default. For strongly asymmetric-power pairs,
-`rg_decorrelated=True` is an optional sensitivity estimator. It had higher
-paired error than the default in the committed 0.2.0 symmetric and asymmetric
-synthetic sweeps, so compare it with the default rather than replacing the
-default automatically. `ldsc_rg` is a fast independent screen. Interpretation,
-sample overlap, and overlap-interval semantics are covered in [`rg.md`](rg.md).
+Use `res.rg` by default. `rg_decorrelated=True` is a **sensitivity diagnostic
+only — do not use it for production estimates**: it had higher paired error
+than the default in both the symmetric and asymmetric synthetic sweeps (0.0084
+versus 0.0110, 0.0174 versus 0.0240), and it is incompatible with multichain
+pooling and adaptive stopping. `ldsc_rg` is a fast independent screen.
+Interpretation, sample overlap, and overlap-interval semantics are covered in
+[`rg.md`](rg.md).
 
 For per-region exploratory estimates:
 
@@ -138,6 +139,12 @@ local = regional_rg(
     min_variants=50,
 )
 ```
+
+Pass the fit's prepared (quantised) blocks, pre-quantise the same blocks for
+both calls, or fit with `ld_int8=False`: a default fit auto-quantises float
+blocks of at most 1,500 variants internally, and `regional_rg` warns when it
+is handed float blocks in that range, because evaluating them uses different
+LD than the fit did.
 
 `region_labels` has one label per variant; labels need not be contiguous.
 Regional estimates use posterior-mean effects and expose `rg`, `gcov`, `gvar1`,
@@ -156,7 +163,7 @@ shrinks local estimates toward the genome-wide correlation.
 | `pi_init` | `None` | explicit four-state overlap start |
 | `sigma_prior_scale` | `None` | fixed covariance shrinkage target across starts |
 | `cross_corr` | `0` | correlation of cross-trait sampling noise (set from external evidence when traits share environmental effects — see `docs/rg.md`) |
-| `rg_decorrelated` | `False` | cross-sweep sensitivity estimator for asymmetric power |
+| `rg_decorrelated` | `False` | sensitivity diagnostic only; the default estimator measured more accurate in both power regimes |
 | `noise_inflation`, `ni_damp` | `False`, `0.1` | learn and damp residual-noise inflation |
 | `pi_prior` | `1` | symmetric Dirichlet mixture concentration |
 | `h2_bounds`, `h2_cap` | `(1e-4, 1)`, `None` | ordinary bounds and optional expert ceiling |
