@@ -1,14 +1,21 @@
-# Benchmarks for bipred 0.2.0
+# Benchmarks for bipred 0.2.x
 
 These artifacts were regenerated on 2026-08-03 from benchmark source revision
 `17d6ae2`. They replace the 2026-07-06 snapshot.
+
+> **2026-08-04 (0.2.1) refresh.** The self-contained suite was rerun at 0.2.1
+> against the same cached truths: every accuracy column is byte-identical to
+> the 0.2.0 snapshot; only the timing/memory columns (`*_t`, `peak_gb`,
+> `t_ldpred3_s`, `t_ldsc_s`) and the figures moved. The simulator now falls
+> back to a bundled Numba coalescent (`benchmarks/_coalescent.py`) when
+> msprime is absent; msprime remains the default backend here.
 
 **Table 1. Recorded environment.**
 
 | Component | Value |
 |---|---|
 | Python | 3.14.6 |
-| bipred | 0.2.0 |
+| bipred | 0.2.0 (0.2.1 refresh) |
 | ldpred3 | 0.4.3 |
 | NumPy / Numba | 2.4.6 / 0.66.0 |
 | msprime / Matplotlib | 1.4.2 / 3.11.1 |

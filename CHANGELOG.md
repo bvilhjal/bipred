@@ -1,9 +1,46 @@
 # Changelog
 
 User-visible changes to **bipred** are recorded here. The project is currently
-`0.2.0`.
+`0.2.1`.
 
 ## [Unreleased]
+
+## [0.2.1] - 2026-08-04
+
+Review-hardening release: no estimator changes, no public-API changes.
+
+### Added
+
+- A seam-centralisation gate: `test_private_ldpred3_imports_stay_centralised`
+  fails if any underscore-private `ldpred3` import lives outside
+  `bipred/_ldpred3_compat.py` (previously uncovered modules such as
+  `multichain.py` are now scanned).
+- A weekly `ldpred3-head` CI leg (also manually dispatchable) that runs the
+  suite against `ldpred3@master` as an informational drift early-warning, plus
+  a pin-bump checklist in the README.
+- `regional_rg` now warns once when handed a float dense block at or below the
+  fit's auto-quantise cutoff — the common call pattern that evaluates different
+  LD than a default fit used — naming the three ways to keep the
+  representations aligned. Silent for int8, larger float blocks, and
+  `LowRankLD`.
+- A dependency-free fallback for benchmark simulation: ldpred3's bundled
+  Numba coalescent, vendored as `benchmarks/_coalescent.py`, used when
+  msprime is absent. msprime stays the default where installed (measured
+  0.80 s against 1.64 s for a 10,000-sample, 5 Mb segment), and cached
+  segments are tagged per backend so the two never mix.
+
+### Changed
+
+- `rg_decorrelated`'s documentation now leads with "sensitivity diagnostic
+  only — do not use for production estimates", carries the measured MAE from
+  `RESULTS.md` Table 4, and states the multichain/adaptive-stopping
+  incompatibility.
+- The environmental-overlap failure mode (joint-fit MAE up to 0.86 in the 0.2.0
+  stress test, `RESULTS.md` Table 10) is cross-referenced wherever
+  `cross_corr` is documented, with the set-from-external-evidence instruction.
+- `test_public_api.py` asserts the exact 13-name public surface instead of
+  non-None resolution.
+- Benchmark evidence regenerated against ldpred3 0.4.3 with this release.
 
 ## [0.2.0] - 2026-08-03
 

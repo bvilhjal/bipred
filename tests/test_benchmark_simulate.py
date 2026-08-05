@@ -1,4 +1,4 @@
-"""The repository benchmark simulator stays independent of ldpred3 internals."""
+"""The repository benchmark simulator: both backends, and cache separation."""
 
 import subprocess
 import sys
@@ -6,10 +6,12 @@ from types import SimpleNamespace
 
 import numpy as np
 
+import benchmarks.simulate as simulate
 from benchmarks.simulate import simulate_genotypes_by_mutation_rate
 
 
-def test_msprime_helper_returns_filtered_diploid_dosages(monkeypatch):
+def test_msprime_backend_returns_filtered_diploid_dosages(monkeypatch):
+    # Stub msprime; the helper's call contract is what this pins.
     haplotypes = np.array([
         [0, 0, 0, 0, 0, 0],
         [1, 0, 0, 0, 0, 0],
@@ -56,6 +58,27 @@ def test_msprime_helper_returns_filtered_diploid_dosages(monkeypatch):
         "random_seed": 7,
         "model": "binary",
     }
+
+
+def test_numba_backend_returns_filtered_diploid_dosages(monkeypatch):
+    monkeypatch.setattr(simulate, "_backend", lambda: "numba")
+    a = simulate_genotypes_by_mutation_rate(
+        40, 200_000, mut_rate=1e-7, min_maf=0.05, seed=3)
+    b = simulate_genotypes_by_mutation_rate(
+        40, 200_000, mut_rate=1e-7, min_maf=0.05, seed=3)
+    c = simulate_genotypes_by_mutation_rate(
+        40, 200_000, mut_rate=1e-7, min_maf=0.05, seed=4)
+    np.testing.assert_array_equal(a, b)          # same seed, same segment
+    assert not np.array_equal(a, c)              # different seed, different draw
+    assert a.shape[0] == 40 and a.dtype == np.int8 and a.flags.c_contiguous
+    af = a.mean(axis=0) / 2.0
+    assert af.min() > 0.05 and af.max() < 0.95   # the MAF filter is applied
+
+
+def test_cache_tag_matches_the_resolved_backend():
+    expected = {"numba": "numba-v1", "msprime": "msprime-v1"}[
+        simulate._backend()]
+    assert simulate.SIMULATOR_CACHE_TAG == expected
 
 
 def test_architecture_cache_key_names_the_simulator_schema():
