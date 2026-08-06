@@ -130,7 +130,8 @@ def test_private_ldpred3_imports_stay_centralised():
     for module in sorted(package.glob("*.py")):
         if module.name == "_ldpred3_compat.py":
             continue
-        for lineno, line in enumerate(module.read_text().splitlines(), 1):
+        for lineno, line in enumerate(
+                module.read_text(encoding="utf-8").splitlines(), 1):
             stripped = line.strip()
             if not stripped.startswith(("import ", "from ")):
                 continue

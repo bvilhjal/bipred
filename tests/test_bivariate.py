@@ -1113,8 +1113,13 @@ def test_decorrelated_rg_applies_ld_only_once_at_finalization(monkeypatch):
         rg_decorrelated=True, seed=2,
     )
 
-    assert np.isfinite(result.rg)
+    # calls == 1 is the invariant under test: the LD is applied exactly once at
+    # finalization. This deliberately tiny config produces degenerate sparse
+    # support on some platforms' float ordering, where the decorrelated rg is
+    # NaN via the documented degrade path; that is acceptable here, so allow
+    # either a finite estimate or NaN (but never an infinity).
     assert calls == 1
+    assert not np.isinf(result.rg)
 
 
 @pytest.mark.parametrize(
@@ -1136,25 +1141,37 @@ def test_decorrelated_rg_requires_two_retained_effect_samples(
         )
 
 
-@pytest.mark.parametrize(
-    "cov,match",
-    [
-        ((0.25, 0.0, 1.0), "non-positive cross-sweep genetic variance"),
-        ((0.25, 1.0, -0.1), "non-positive cross-sweep genetic variance"),
-        ((np.nan, 1.0, 1.0), "non-finite cross-sweep quadratic forms"),
-    ],
-)
-def test_decorrelated_rg_rejects_invalid_cross_sweep_quadratics(
-        monkeypatch, cov, match):
-    monkeypatch.setattr(bivariate, "_decorrelated_cov", lambda *_args: cov)
+def test_decorrelated_rg_raises_on_non_finite_cross_sweep_quadratics(monkeypatch):
+    # Non-finite quadratics signal a broken computation and still hard-raise.
+    monkeypatch.setattr(bivariate, "_decorrelated_cov",
+                        lambda *_args: (np.nan, 1.0, 1.0))
     beta_hat = np.full(4, 0.02)
-    with pytest.raises(ValueError, match=match):
+    with pytest.raises(ValueError,
+                       match="non-finite cross-sweep quadratic forms"):
         ldpred3_auto_bivariate(
             np.eye(4), beta_hat, beta_hat, 1000, 1000,
             ld_int8=False, h2_init=0.1, p_init=0.5, burn_in=0,
             num_iter=3, sample_every=2, h2_cap=(0.2, 0.2),
             rg_decorrelated=True, seed=1,
         )
+
+
+@pytest.mark.parametrize("cov", [(0.25, 0.0, 1.0), (0.25, 1.0, -0.1)])
+def test_decorrelated_rg_degrades_to_nan_on_non_positive_variance(
+        monkeypatch, cov):
+    # A non-positive cross-sweep genetic variance leaves the decorrelated rg
+    # undefined; the fit warns and reports rg as NaN rather than aborting.
+    monkeypatch.setattr(bivariate, "_decorrelated_cov", lambda *_args: cov)
+    beta_hat = np.full(4, 0.02)
+    with pytest.warns(RuntimeWarning,
+                      match="non-positive cross-sweep genetic variance"):
+        result = ldpred3_auto_bivariate(
+            np.eye(4), beta_hat, beta_hat, 1000, 1000,
+            ld_int8=False, h2_init=0.1, p_init=0.5, burn_in=0,
+            num_iter=3, sample_every=2, h2_cap=(0.2, 0.2),
+            rg_decorrelated=True, seed=1,
+        )
+    assert np.isnan(result.rg)
 
 
 def test_cross_corr_explains_correlated_sampling_signal():

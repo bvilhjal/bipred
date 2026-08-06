@@ -165,6 +165,7 @@ def test_nonpositive_regional_variances_give_nan():
     (dict(regions=[0, 0, 1]), "one label per variant"),
     (dict(regions=np.array([[0, 0], [1, 1]])), "one-dimensional"),
     (dict(regions=[0, 0, None, 1]), "None labels"),
+    (dict(regions=[0.0, np.nan, 1.0, 1.0]), "non-finite labels"),
     (dict(beta1=np.ones((2, 2))), "one-dimensional"),
     (dict(beta2=np.ones((2, 2))), "one-dimensional"),
     (dict(min_variants=0), "min_variants must be >= 1"),

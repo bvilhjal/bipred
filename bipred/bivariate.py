@@ -1337,9 +1337,11 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
         measured the **default** estimator more accurate in both power regimes
         (RESULTS.md Table 4: 0.0084 vs 0.0110 symmetric, 0.0174 vs 0.0240
         asymmetric), and this option is incompatible with multichain pooling
-        and adaptive stopping. Requires ``num_iter > sample_every`` and raises
-        rather than substituting the default estimator if its cross-sweep
-        quadratics are non-finite or have non-positive variances.
+        and adaptive stopping. Requires ``num_iter > sample_every``. If the
+        cross-sweep quadratics are non-finite it raises; if a variance is
+        non-positive (a degenerate, undefined decorrelated rg -- e.g. a sparse,
+        weakly powered fit) it warns and reports ``rg`` as ``NaN`` rather than
+        aborting the otherwise usable fit.
     noise_inflation : bool, default False
         Learn per-trait residual noise factors ``lambda_t >= 1`` and fit with
         effective sample size ``N_t / lambda_t``. Useful for finite reference-panel
@@ -1363,7 +1365,10 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     tol : float, default 0
         Optional stabilization threshold for the running posterior means and
         genetic correlation. A positive value may stop retained sampling early;
-        this is a computational heuristic, not a convergence diagnostic.
+        this is a computational heuristic, not a convergence diagnostic. It is
+        ignored when ``rg_decorrelated=True`` (which needs the full thinned
+        schedule); passing both here emits a warning, whereas
+        :func:`ldpred3_auto_bivariate_chains` rejects the pairing.
     check_every : int, default 50
         Retained sweeps between stabilization checks when ``tol > 0``.
     seed : int or None
@@ -1436,6 +1441,19 @@ def _ldpred3_auto_bivariate_prepared_inner(prepared, options, start):
     tol = options.tol
     check_every = options.check_every
     cross_corr = options.cross_corr
+
+    # Thinned decorrelated-rg needs the full retained schedule, so the adaptive-
+    # stopping gate below is disabled when rg_decorrelated=True. Warn rather than
+    # silently ignore a positive tol; the multichain entry point rejects this
+    # pairing outright, so this branch only ever fires on the single-chain path.
+    if tol > 0.0 and rg_decorrelated:
+        warnings.warn(
+            "tol is ignored when rg_decorrelated=True: the thinned "
+            "decorrelated-rg estimator requires the full retained schedule, so "
+            "no early stopping is performed",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
     # A typed.List needs one element type, so dense blocks are bucketed by dtype
     # and dequantisation scale; low-rank blocks are bucketed by dtype and carry
@@ -1734,11 +1752,23 @@ def _ldpred3_auto_bivariate_prepared_inner(prepared, options, start):
                 "forms"
             )
         if v1 <= 0.0 or v2 <= 0.0:
-            raise ValueError(
+            # A degenerate cross-sweep genetic-variance estimate (exactly 0 in
+            # finite samples, or slightly negative) leaves the decorrelated rg
+            # undefined -- e.g. a sparse, weakly powered fit whose retained
+            # states share no causal support. That is not a broken run, so warn
+            # and report rg as NaN rather than aborting an otherwise usable fit.
+            # (Non-finite quadratics above still raise: those signal a broken
+            # computation, not a degenerate-but-valid fit.)
+            warnings.warn(
                 "rg_decorrelated=True produced non-positive cross-sweep genetic "
-                "variance"
+                "variance (degenerate decorrelated denominator); reporting rg as "
+                "NaN for this fit",
+                RuntimeWarning,
+                stacklevel=2,
             )
-        rg = _rg_from_quadratics(num, v1, v2)
+            rg = float("nan")
+        else:
+            rg = _rg_from_quadratics(num, v1, v2)
     else:
         # Use the reported (clamped) h2 scale for the denominator: raw sampled
         # quadratics can go non-positive on non-PD (int8-quantised) blocks,

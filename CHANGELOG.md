@@ -5,6 +5,33 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 ## [Unreleased]
 
+### Fixed
+
+- `rg_decorrelated=True` no longer aborts an otherwise usable fit when the
+  cross-sweep genetic-variance estimate is degenerate. A non-positive variance
+  (exactly zero in finite samples, or slightly negative — e.g. a sparse, weakly
+  powered fit whose retained states share no causal support) now warns and
+  reports `rg` as `NaN` rather than raising `ValueError`; only non-finite
+  cross-sweep quadratics still raise. This removes a platform-dependent crash:
+  the degenerate case is reachable through floating-point ordering differences
+  (observed on Windows for a `seed` that is fine on the Linux CI).
+- The seam gate `test_private_ldpred3_imports_stay_centralised` now reads each
+  module as UTF-8 instead of the platform default, so it no longer raises
+  `UnicodeDecodeError` on a cp1252 (Windows) checkout over the Greek letters in
+  `ldsc_rg.py`.
+- `regional_rg` rejects a float `regions` array containing non-finite labels
+  (`NaN`/`inf`) instead of silently pooling every `NaN`-marked variant into one
+  spurious cross-genome region — matching the existing rejection of `None`
+  labels in object arrays.
+
+### Changed
+
+- Passing `tol > 0` together with `rg_decorrelated=True` to the single-chain
+  `ldpred3_auto_bivariate[_blocks]` now emits a `RuntimeWarning` and is
+  documented as a no-op (the thinned decorrelated-rg estimator needs the full
+  retained schedule). Previously the positive `tol` was silently ignored, while
+  the multichain driver already rejects the pairing.
+
 ## [0.2.1] - 2026-08-04
 
 Review-hardening release: no estimator changes, no public-API changes.

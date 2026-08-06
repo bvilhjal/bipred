@@ -205,6 +205,11 @@ def regional_rg(beta1, beta2, blocks, regions, *, min_variants=1, clip=True):
             f"{m} variants")
     if labels.dtype == object and any(label is None for label in labels):
         raise ValueError("regions must not contain None labels")
+    # A float ``regions`` array using NaN as a missing sentinel would otherwise
+    # slip past the None check (float dtype, not object) and be pooled by
+    # np.unique into one spurious cross-genome region. Reject it like None.
+    if labels.dtype.kind == "f" and not np.all(np.isfinite(labels)):
+        raise ValueError("regions must not contain non-finite labels")
 
     # ``return_index`` already gives each unique label's first occurrence, so the
     # first-appearance order is one stable argsort -- no per-variant Python loop.
