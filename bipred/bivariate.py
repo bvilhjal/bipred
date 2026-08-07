@@ -302,8 +302,9 @@ def _prepare_block(R, ld_int8):
 
     ``True`` quantises every float block and ``None`` quantises those with at
     most 1500 variants -- both allocate a fresh int8 array per block *inside the
-    fit*, while the caller's panel is still alive. That measured 78.4 MB of peak
-    against 13.1 MB at m=100,000 with 500-variant blocks, and the extra payload
+    fit*, while the caller's panel is still alive. That measured 62.1 MB of peak
+    against 12.1 MB at m=100,000 with 500-variant blocks
+    (``benchmarks/fit_memory.csv``), and the extra payload
     is k bytes per variant -- measured 121 bytes/variant by default against 621
     with ``ld_int8=True`` -- so ~500 MB at m=1,000,000. Quantise when the LD is
     built (``compute_ld_blocks(quantize=True)``), where the float source is
@@ -1515,7 +1516,8 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     Quantise when the LD is *built*, with
     ``ldpred3.compute_ld_blocks(quantize=True)``, rather than in the fit --
     quantising here allocates a second genome-scale payload while the caller's
-    panel is still alive (78.4 MB of peak against 13.1 MB at m=100,000, k=500).
+    panel is still alive (62.1 MB of peak against 12.1 MB at m=100,000, k=500;
+    ``benchmarks/fit_memory.csv``).
     ``ld_int8=True`` and ``None`` are retained for that older behaviour.
     This option does not alter ``LowRankLD`` factors.
 
@@ -1571,7 +1573,7 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     rg_decorrelated : bool, default False
         **Sensitivity diagnostic only — do not use for production estimates.**
         Estimator based on effects sampled at different sweeps, kept for
-        strongly asymmetric-power pairs. The committed 0.2.0 synthetic sweep
+        strongly asymmetric-power pairs. The committed synthetic sweep
         measured the **default** estimator more accurate in both power regimes
         (RESULTS.md Table 4: 0.0086 vs 0.0108 symmetric, 0.0174 vs 0.0242
         asymmetric), and this option is incompatible with multichain pooling
@@ -2052,9 +2054,10 @@ def ldpred3_auto_bivariate(corr, beta_hat1, beta_hat2, n_eff1, n_eff2, **kwargs)
     Convenience wrapper over :func:`ldpred3_auto_bivariate_blocks` for one block
     (or a block-diagonal genome packed into one matrix). See that function and
     :class:`BivariateResult` for the parameters and output. ``corr`` may be a
-    dense matrix or an ldpred3 ``LowRankLD`` object. Dense matrices use
-    size-aware automatic storage by default; pass ``ld_int8=True`` to quantise
-    all dense float blocks or ``ld_int8=False`` to keep them float32.
+    dense matrix or an ldpred3 ``LowRankLD`` object. Dense matrices are consumed
+    in the representation they arrive in (``ld_int8=False``, the default);
+    ``ld_int8=True`` quantises every float block and ``None`` those of at most
+    1500 variants, both building a second payload inside the fit.
     """
     # Derive the logical LD size from the effect vector. The block validator then
     # checks that ``corr`` is exactly square with this shape before quantisation.

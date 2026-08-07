@@ -1,15 +1,20 @@
 # Changelog
 
 User-visible changes to **bipred** are recorded here. The project is currently
-`0.2.2`.
+`0.3.0`.
 
-## [0.2.2] - 2026-08-07
+## [0.3.0] - 2026-08-07
 
-Performance and benchmark-evidence release. The sampler's estimates are
-unchanged except where a defect made them wrong; the one deliberate behaviour
-change is the `ld_int8` default, which also retires the package's worst
-documented failure mode. Every benchmark artifact in `benchmarks/` was
-regenerated for this version from a single sweep.
+Performance and benchmark-evidence release. **The minor version moves because
+two changes are not backward compatible**: the `ld_int8` default now consumes
+dense blocks as given rather than quantising them inside the fit, which changes
+results for callers who passed float blocks, and the `ldpred3` floor rises to
+`>=0.4.5`. The sampler's estimates are otherwise unchanged except where a defect
+made them wrong. Every benchmark artifact in `benchmarks/` was regenerated for
+this version from a single sweep.
+
+The `ld_int8` change also retires the package's worst documented failure mode;
+see the environmental-overlap note below and `benchmarks/RESULTS.md` Table 10.
 
 ### Performance
 
@@ -87,7 +92,7 @@ regenerated for this version from a single sweep.
   in. The previous default quantised float blocks
   of at most 1,500 variants *inside the fit*, allocating a second genome-scale
   int8 payload while the caller's panel was still alive. Measured peak inside
-  the call at m=100,000 / k=500: **78.4 MB before, 13.1 MB after** — the extra
+  the call at m=100,000 / k=500: **62.1 MB before, 12.1 MB after** — the extra
   payload is `k` bytes per variant -- measured 121 bytes/variant by default
   against 621 with `ld_int8=True` at k=500 -- so roughly 500 MB at m=1,000,000. This
   follows ldpred3, whose fit-time default is also `False` and which quantises at
@@ -105,6 +110,24 @@ regenerated for this version from a single sweep.
   quantised them into a private copy; with the default consuming blocks as
   given, the pattern it flagged — the same float blocks to both calls — is now
   the aligned one, and the warning was firing on the correct usage.
+- Documentation corrections: `docs/rg.md` said a degenerate `rg_decorrelated`
+  fit raises (it warns and returns NaN); `docs/guide.md` and `docs/rg.md`
+  offered "pass the fit's prepared blocks" as a remedy with no public API
+  behind it; `docs/guide.md` Table 2 now marks which options the chains driver
+  accepts, rejects, or renames, documents `sample_every`, and gives the chains
+  `seed` contract; `ldsc_rg` documents that it is one-step and unfiltered (no
+  chi-square cap, so single large-effect loci keep full leverage) and that
+  `m_snps` and `ld_scores` must describe the same variant map;
+  `RegionalRgResult` no longer claims regions can be aggregated by summing
+  (that drops cross-region LD within a block).
+- `benchmarks/RESULTS.md` Tables 4–6 were still printing 0.2.0 timing and
+  peak-memory numbers against regenerated CSVs, including a 2.51 GB memory
+  spike at 80k variants that the current data does not reproduce. Accuracy
+  columns were correct and unchanged. A test now re-derives Table 6 from
+  `rg_scaling.csv` cell by cell; Tables 4 and 5 were corrected by hand and
+  remain unguarded.
+- The README gained a citation section pointing at LDpred/LDpred2, cross-trait
+  LDSC, and MiXeR.
 
 ### Fixed
 
@@ -166,39 +189,11 @@ regenerated for this version from a single sweep.
   (`NaN`/`inf`) instead of silently pooling every `NaN`-marked variant into one
   spurious cross-genome region — matching the existing rejection of `None`
   labels in object arrays.
-
-### Changed
-
-- The `ldpred3` dependency is now the range `>=0.4.3,<0.5` rather than
-  `==0.4.3`. ldpred3 is on no package index, so the exact specifier sent pip
-  looking for a distribution it can never find whenever the installed version
-  differed — breaking the README's own sibling-checkout development recipe
-  against an ldpred3 tree past the pin. The exact tested revision still lives
-  in the README install command and in CI's `LDPRED3_REV` plus its version
-  assertion.
 - The weekly `ldpred3-head` drift-watch CI leg installs bipred with
   `--no-deps`. It deliberately runs an ldpred3 whose version differs from
   bipred's declared range, so letting pip re-resolve the dependency failed at
   resolution and the leg never reached `pytest` — silently, because it is
   `continue-on-error`.
-- Documentation corrections: `docs/rg.md` said a degenerate `rg_decorrelated`
-  fit raises (it warns and returns NaN); `docs/guide.md` and `docs/rg.md`
-  offered "pass the fit's prepared blocks" as a remedy with no public API
-  behind it; `docs/guide.md` Table 2 now marks which options the chains driver
-  accepts, rejects, or renames, documents `sample_every`, and gives the chains
-  `seed` contract; `ldsc_rg` documents that it is one-step and unfiltered (no
-  chi-square cap, so single large-effect loci keep full leverage) and that
-  `m_snps` and `ld_scores` must describe the same variant map;
-  `RegionalRgResult` no longer claims regions can be aggregated by summing
-  (that drops cross-region LD within a block).
-- `benchmarks/RESULTS.md` Tables 4–6 were still printing 0.2.0 timing and
-  peak-memory numbers against regenerated CSVs, including a 2.51 GB memory
-  spike at 80k variants that the current data does not reproduce. Accuracy
-  columns were correct and unchanged. A test now re-derives Table 6 from
-  `rg_scaling.csv` cell by cell; Tables 4 and 5 were corrected by hand and
-  remain unguarded.
-- The README gained a citation section pointing at LDpred/LDpred2, cross-trait
-  LDSC, and MiXeR.
 - Passing `tol > 0` together with `rg_decorrelated=True` to the single-chain
   `ldpred3_auto_bivariate[_blocks]` now emits a `RuntimeWarning` and is
   documented as a no-op (the thinned decorrelated-rg estimator needs the full

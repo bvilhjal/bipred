@@ -1,4 +1,4 @@
-# Benchmarks for bipred 0.2.2
+# Benchmarks for bipred 0.3.0
 
 Every self-contained script was re-run end to end for this record, against the
 same cached coalescent truths as the 2026-08-03 snapshot (revision `17d6ae2`),
@@ -31,7 +31,7 @@ segments are tagged per backend and never mix.
 | Component | Value |
 |---|---|
 | Python | 3.14.6 |
-| bipred | 0.2.2 |
+| bipred | 0.3.0 |
 | ldpred3 | 0.4.5 |
 | NumPy / Numba | 2.4.6 / 0.66.0 |
 | msprime / Matplotlib | 1.4.2 / 3.11.1 |
@@ -129,11 +129,11 @@ The comparison uses five target points and six replicates at symmetric
 
 | Estimator | Symmetric MAE | Asymmetric MAE | Mean 5k fit time, symmetric |
 |---|---:|---:|---:|
-| LDSC | 0.0542 | 0.0608 | 0.031 s |
-| two univariate fits, `uni_gv` | 0.0190 | 0.0422 | 1.090 s |
-| two univariate fits, `uni_r2` | 0.0184 | 0.0420 | 1.090 s |
-| joint default | **0.0086** | **0.0174** | 0.139 s |
-| joint cross-sweep sensitivity | 0.0108 | 0.0242 | 0.136 s |
+| LDSC | 0.0542 | 0.0608 | 0.028 s |
+| two univariate fits, `uni_gv` | 0.0190 | 0.0422 | 0.968 s |
+| two univariate fits, `uni_r2` | 0.0184 | 0.0420 | 0.968 s |
+| joint default | **0.0086** | **0.0174** | 0.133 s |
+| joint cross-sweep sensitivity | 0.0108 | 0.0242 | 0.133 s |
 
 No estimator failed in these cells. The cross-sweep
 `rg_decorrelated=True` estimator did not improve on the default, including in
@@ -144,9 +144,9 @@ replacement.
 
 | Variants | Blocks | LDSC | Two univariate fits | Joint default | Joint cross-sweep |
 |---:|---:|---:|---:|---:|---:|
-| 5,000 | 25 | 0.031 s | 1.092 s | 0.139 s | 0.133 s |
-| 20,000 | 100 | 0.344 s | 3.908 s | 0.566 s | 0.559 s |
-| 50,000 | 250 | 2.070 s | 10.606 s | 1.508 s | 1.547 s |
+| 5,000 | 25 | 0.021 s | 0.903 s | 0.129 s | 0.129 s |
+| 20,000 | 100 | 0.296 s | 3.350 s | 0.518 s | 0.521 s |
+| 50,000 | 250 | 1.839 s | 9.060 s | 1.359 s | 1.375 s |
 
 `uni_gv` and `uni_r2` reuse the same two univariate fits, so their recorded cost
 is identical.
@@ -163,13 +163,13 @@ Each size runs in a fresh subprocess and reports one realized draw.
 
 | Variants | LDSC time | LDpred3 time | Peak RSS | Realized r_g | LDSC absolute error | LDpred3 absolute error |
 |---:|---:|---:|---:|---:|---:|---:|
-| 5,000 | 0.048 s | 0.132 s | 0.290 GB | 0.511 | 0.0399 | 0.0172 |
-| 10,000 | 0.103 s | 0.264 s | 0.321 GB | 0.519 | 0.0590 | 0.0024 |
-| 20,000 | 0.384 s | 0.538 s | 0.404 GB | 0.513 | 0.0332 | 0.0005 |
-| 40,000 | 1.308 s | 1.182 s | 0.462 GB | 0.517 | 0.0138 | 0.0016 |
-| 80,000 | 5.094 s | 2.297 s | 0.654 GB | 0.519 | 0.0632 | 0.0322 |
+| 5,000 | 0.025 s | 0.116 s | 0.228 GB | 0.511 | 0.0399 | 0.0172 |
+| 10,000 | 0.070 s | 0.235 s | 0.229 GB | 0.519 | 0.0590 | 0.0024 |
+| 20,000 | 0.316 s | 0.466 s | 0.359 GB | 0.513 | 0.0332 | 0.0005 |
+| 40,000 | 1.256 s | 0.956 s | 0.416 GB | 0.517 | 0.0138 | 0.0016 |
+| 80,000 | 4.425 s | 2.064 s | 0.633 GB | 0.519 | 0.0632 | 0.0322 |
 
-Peak RSS grows sublinearly across this range (0.29 GB to 0.65 GB for a 16x
+Peak RSS grows sublinearly across this range (0.23 GB to 0.63 GB for a 16x
 variant count). LDSC time grows faster than the joint fit's and overtakes it
 between 20k and 40k variants. An earlier record showed a 2.51 GB spike at 80k;
 no run since has reproduced it, so treat single-run memory figures as machine-
@@ -198,7 +198,7 @@ effect-correlation target at 0.8.
 The shared fraction is ordered but overestimates intermediate targets, while
 `rg_from_overlap` is attenuated. Absolute-count calibration is also
 power-dependent: `noise_inflation=True` moves relative polygenicity from
-1.182 to 1.070 at `N=20k`, but from 0.963 to 0.789 at `N=2.5k`.
+1.174 to 1.062 at `N=20k`, but from 0.974 to 0.808 at `N=2.5k`.
 Univariate anchoring shows the same mixed pattern. These are diagnostics, not
 guaranteed corrections.
 
@@ -227,9 +227,9 @@ the expected shift and setting the correction is not uniformly closer.
 
 | Target | Realized r_g, mean ± SD | LDSC constrained / free | Joint unset / set |
 |---:|---:|---:|---:|
-| 0.0 | 0.034 ± 0.119 | 0.0481 / 0.0920 | 0.0160 / 0.0189 |
-| 0.3 | 0.328 ± 0.096 | 0.0664 / 0.0788 | 0.0123 / 0.0176 |
-| 0.6 | 0.615 ± 0.073 | 0.1026 / 0.0663 | 0.0092 / 0.0138 |
+| 0.0 | 0.034 ± 0.119 | 0.0481 / 0.0920 | 0.0149 / 0.0187 |
+| 0.3 | 0.328 ± 0.096 | 0.0664 / 0.0788 | 0.0134 / 0.0179 |
+| 0.6 | 0.615 ± 0.073 | 0.1026 / 0.0663 | 0.0093 / 0.0140 |
 
 The known-correction result does not validate LDSC-intercept inversion. That
 mapping remains assumption-dependent; see [`docs/rg.md`](../docs/rg.md).
@@ -246,8 +246,8 @@ and correlates their residual environments.
 | 0.0 | 0.0 | -0.022 | 0.0666 / 0.0353 | 0.0126 / 0.0118 |
 | 0.0 | 0.3 | -0.003 | 0.0622 / 0.0331 | 0.0146 / 0.0105 |
 | 0.0 | 0.6 | -0.003 | 0.0639 / 0.0297 | 0.0185 / 0.0090 |
-| 0.5 | 0.487 | 0.487 | 0.0389 / 0.0620 | 0.0147 / 0.0082 |
-| 0.5 | 0.494 | 0.494 | 0.0377 / 0.0633 | 0.0242 / 0.0072 |
+| 0.5 | 0.0 | 0.487 | 0.0389 / 0.0620 | 0.0147 / 0.0082 |
+| 0.5 | 0.6 | 0.494 | 0.0377 / 0.0633 | 0.0242 / 0.0072 |
 
 **This table previously recorded the package's worst failure mode, and it was
 an artifact of in-fit LD quantization rather than of the model.** Through 0.2.1
@@ -270,7 +270,7 @@ environmental correlation.
 
 ## External runs
 
-Not regenerated for 0.2.2; these remain 0.2.1 measurements:
+Not regenerated for 0.3.0; these remain 0.2.1 measurements:
 
 - `bivariate_demo.py` — rerun with an `ld_library.npz` generated from the
   repository simulator (12 blocks of 500 variants, 5% spectral shrinkage).

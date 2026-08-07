@@ -29,8 +29,8 @@ The default `ld_int8=False` consumes every dense block in the representation it
 arrives in — int8 stays int8, float32 stays float32 — and copies nothing.
 Quantize when the LD is *built*, with `ldpred3.compute_ld_blocks(quantize=True)`,
 rather than in the fit: quantizing here allocates a second genome-scale payload
-while your panel is still alive (78.4 MB of peak against 13.1 MB at m=100,000
-with 500-variant blocks). `ld_int8=True` and `None` are retained for that older
+while your panel is still alive (62.1 MB of peak against 12.1 MB at m=100,000
+with 500-variant blocks, from [`benchmarks/fit_memory.csv`](../benchmarks/fit_memory.csv)). `ld_int8=True` and `None` are retained for that older
 behaviour. This option does not change low-rank factors.
 
 **Table 1. Choosing a dense or low-rank representation.** Per-sweep cost at
@@ -40,10 +40,10 @@ m=20,000 with 500-variant blocks, one core, fitting a sparse causal model
 
 | Representation | ms/sweep | Bytes per variant |
 |---|---:|---|
-| dense float32 (D32) | 0.80 | `4k` = 2,000 |
-| dense int8 (D8) | 0.83 | `k` = 500 |
-| low-rank float32, rank 481 | 2.60 | `4·rank` = 1,924 |
-| low-rank int8, rank 481 (LR8) | 3.12 | `rank` = 481 |
+| dense int8 (D8) | 0.82 | `k` = 500 |
+| dense float32 (D32) | 0.83 | `4k` = 2,000 |
+| low-rank float32, rank 481 | 2.49 | `4·rank` = 1,924 |
+| low-rank int8, rank 481 (LR8) | 2.95 | `rank` = 481 |
 
 Dense int8 and float32 sweep within a few per cent of each other, so **int8 is
 a memory choice and costs nothing meaningful in time**. The dequantization sits in the

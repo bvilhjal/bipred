@@ -46,7 +46,7 @@ contiguous ranges of the supplied row order; arbitrary order does not preserve
 local LD dependence.
 
 Use the joint fit by default and inspect LDSC as a cheap sensitivity check. The
-committed 0.2.0 benchmark records its simulation assumptions, paired
+committed benchmark record states its simulation assumptions, paired
 realized-truth errors, failures, and runtime provenance; see the
 [benchmark results](https://github.com/bvilhjal/bipred/blob/main/benchmarks/RESULTS.md).
 
@@ -65,8 +65,8 @@ res = ldpred3_auto_bivariate_blocks(
 The default sampled-quadratic ratio can attenuate the weak trait through its
 posterior-noise-inflated variance. The alternative averages cross-sweep
 quadratics while excluding same-sweep pairs. Thinning reduces, but does not
-eliminate, dependence between retained MCMC states. In the committed 0.2.0
-synthetic sweep, paired MAE was 0.0086 versus 0.0108 under symmetric power and
+eliminate, dependence between retained MCMC states. In the committed synthetic
+sweep (`benchmarks/RESULTS.md`, Table 4), paired MAE was 0.0086 versus 0.0108 under symmetric power and
 0.0174 versus 0.0242 under asymmetric power for the default versus cross-sweep
 estimator. Treat it as a sensitivity analysis, not an automatic replacement for
 `res.rg` — and not as a production estimator at all. It needs at least two

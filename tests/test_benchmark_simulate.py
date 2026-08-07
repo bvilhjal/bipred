@@ -162,6 +162,46 @@ def test_results_scaling_table_matches_its_csv():
                 f"{column}: table says {cell!r}, CSV says {record[column]!r}")
 
 
+def test_results_environmental_overlap_table_matches_its_csv():
+    """Table 10 carries this release's central claim, so transcribe it exactly.
+
+    It asserts that the environmental-overlap failure mode was an artifact of
+    in-fit LD quantization, and a hand-edit had silently duplicated the realized
+    r_g into the environmental-correlation column of both `rg_target=0.5` rows
+    -- the two rows the claim rests on.
+    """
+    import csv
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parent.parent / "benchmarks"
+    rows = list(csv.DictReader((root / "rg_env_overlap.csv").open()))
+    table = _markdown_table_after(
+        (root / "RESULTS.md").read_text(encoding="utf-8"),
+        "**Table 10. Paired MAE against realized genetic correlation.**",
+    )
+    assert len(table) == len(rows)
+
+    for printed, record in zip(table, rows):
+        target, env, realized, ldsc, joint = printed
+        ldsc_free, ldsc_con = (c.strip() for c in ldsc.split("/"))
+        joint_unset, joint_set = (c.strip() for c in joint.split("/"))
+        for cell, column in (
+            (target, "rg_target"), (env, "re"), (realized, "rg_realized"),
+            (ldsc_free, "ldsc_free_mae_realized"),
+            (ldsc_con, "ldsc_con_mae_realized"),
+            (joint_unset, "biv_cc0_mae_realized"),
+            (joint_set, "biv_cc_mae_realized"),
+        ):
+            digits = len(cell.partition(".")[2])
+            half_ulp = 0.5 * 10.0 ** -digits * (1.0 + 1e-9)
+            assert abs(float(cell) - float(record[column])) <= half_ulp, (
+                f"{column}: table says {cell!r}, CSV says {record[column]!r}")
+
+    # The claim itself: no cell may exceed the bound the prose states.
+    worst = max(float(r["biv_cc0_mae_realized"]) for r in rows)
+    assert worst <= 0.0242 + 1e-9, worst
+
+
 def test_architecture_cache_key_names_the_simulator_schema():
     code = """
 import os
