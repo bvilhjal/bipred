@@ -15,7 +15,7 @@ and not on PyPI, so its Git install requires authenticated GitHub read access.
 Install the exact revision tested here:
 
 ```bash
-python -m pip install "ldpred3[fast] @ git+https://github.com/bvilhjal/ldpred3.git@5436dcc8152531000b223c5088f726d588d8a8cd"
+python -m pip install "ldpred3[fast] @ git+https://github.com/bvilhjal/ldpred3.git@5d86ac9d97e42c57fa31d84ff093d3bf637dc0e6"
 python -m pip install "bipred[fast] @ git+https://github.com/bvilhjal/bipred.git"
 ```
 

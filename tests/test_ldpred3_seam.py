@@ -24,6 +24,7 @@ def test_seam_imports_resolve():
         _as_n_vector,
         _check_h2_p,
         _finite_control,
+        _get_thread_id,
         _integer_at_least,
         _jit,
         _jit_nogil,

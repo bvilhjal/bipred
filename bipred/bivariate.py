@@ -48,6 +48,7 @@ from ._ldpred3_compat import (
     _as_n_vector,
     _check_h2_p,
     _finite_control,
+    _get_thread_id,
     _integer_at_least,
     _jit,
     _jit_fastmath_nogil,
@@ -720,13 +721,25 @@ def _decorrelated_cov(fblocks, accumulator):
 
 @contextmanager
 def _pinned_numba_threads(ncores):
-    """Temporarily pin Numba's caller-local thread mask."""
-    if not (HAVE_NUMBA and ncores and int(ncores) > 1):
+    """Temporarily pin Numba's caller-local thread mask.
+
+    ``get_num_threads`` is called even at ``ncores == 1``, where there is no
+    mask to pin, because it also forces Numba's threading layer to load. The
+    low-rank sweep references ``_get_thread_id``, and loading that kernel from
+    the on-disk cache before the threading layer exists segfaults the
+    interpreter (reproduced on numba 0.66: a warm cache plus a serial-only run
+    exits 139). Touching the layer here costs one call per fit and keeps the
+    serial kernel cacheable.
+    """
+    if not HAVE_NUMBA:
         yield
         return
     from numba import get_num_threads, set_num_threads
 
     previous = get_num_threads()
+    if not (ncores and int(ncores) > 1):
+        yield
+        return
     _set_threads(ncores)
     try:
         yield
@@ -1165,24 +1178,106 @@ _bivar_dense_sweep_all_par_jit = _jit_parallel_uncached(_bivar_dense_sweep_all)
 _bivar_dense_sweep_all_jit = _jit_nogil(_bivar_dense_sweep_all)
 
 
+def _dequantise_lr8_factor(U, out):
+    """Widen an int8 block factor into a float32 scratch buffer, exactly.
+
+    Every int8 value is representable in float32, and ``float32 * float64``
+    promotes exactly as ``int8 * float64`` does, so the arithmetic the sweep
+    performs is unchanged element for element. ``factor_scale`` is deliberately
+    *not* folded in: that would round every element once here, where keeping it
+    a kernel argument costs one scalar multiply per variant instead.
+    """
+    flat_in = U.ravel()
+    flat_out = out.ravel()
+    for i in range(flat_in.shape[0]):
+        flat_out[i] = flat_in[i]
+
+
+_dequantise_lr8_factor_jit = _jit_nogil(_dequantise_lr8_factor)
+
+#: Rank below which widening is not worth its own O(k x rank) streaming pass.
+#: Measured for *this* sweep rather than inherited from ldpred3, and the answer
+#: differs: ldpred3 gates at 64 because rank 32 measured a small loss for its
+#: kernel, whereas here widening won at every rank tested (k=500, 20 blocks,
+#: serial, off/on ms per sweep): rank 16 0.611/0.572 = 1.07x, 32 0.725/0.623 =
+#: 1.16x, 64 0.959/0.812 = 1.18x, 128 1.393/1.065 = 1.31x, 256 2.250/1.577 =
+#: 1.43x. The gate sits at 32 -- the smallest rank whose win is clearly outside
+#: the noise -- rather than at 16, where the margin is thin and a sweep that
+#: small costs little either way.
+_LR8_DEQUANTISE_MIN_RANK = 32
+
+
+def _lr8_dequant_scratch(payloads, sizes, ncores):
+    """Per-thread float32 scratch for widening int8 low-rank factors.
+
+    Returns ``(scratch, stride, min_rank)``. ``min_rank`` is 0 -- which disables
+    the branch inside the kernel -- unless Numba is present and some block in
+    this bucket is an int8 factor of at least ``_LR8_DEQUANTISE_MIN_RANK``. One
+    stride per thread, not per block: the widened factor lives only for the
+    duration of one block's sweep, so the cost is the largest block times the
+    thread count rather than the genome.
+    """
+    if not HAVE_NUMBA:
+        return np.empty(0, dtype=np.float32), 0, 0
+    stride = 0
+    for i in range(len(payloads)):
+        U = payloads[i]
+        if np.asarray(U).dtype == np.int8 and U.shape[1] >= _LR8_DEQUANTISE_MIN_RANK:
+            stride = max(stride, int(sizes[i]) * int(U.shape[1]))
+    if stride == 0:
+        return np.empty(0, dtype=np.float32), 0, 0
+    from numba import get_num_threads
+    threads = get_num_threads() if ncores > 1 else 1
+    return (np.empty(threads * stride, dtype=np.float32), stride,
+            _LR8_DEQUANTISE_MIN_RANK)
+
+
 def _bivar_lowrank_sweep_all(
         factors, factor_scales, residuals, proj1s, proj2s, starts, sizes,
         bh1, bh2, n1, n2, curr1, curr2, rb1, rb2, rbsum1, rbsum2,
         unif, z1, z2, lpi00, lpi10, lpi01, lpi11,
-        s1, s2, s12, cross_corr, n_const, resync, write_rb, counts, stats):
-    """Sweep homogeneous independent low-rank blocks under block-level prange."""
+        s1, s2, s12, cross_corr, n_const, resync, write_rb, counts, stats,
+        dequant_scratch, dequant_stride, dequant_min_rank):
+    """Sweep homogeneous independent low-rank blocks under block-level prange.
+
+    A qualifying int8 factor is widened into this thread's stride of
+    ``dequant_scratch`` once per sweep and swept through the kernel's float32
+    specialisation. The scratch is one stride per *thread*, not per block, so it
+    stays O(k x rank) and int8 remains the storage format. ``dequant_min_rank``
+    of 0 disables the branch entirely, and the call is then the one it always
+    was.
+    """
     for bb in prange(len(factors)):
         b = np.int64(bb)
         start = starts[b]
         stop = start + sizes[b]
         sl = slice(start, stop)
-        (a10, a01, a11, s1sq, s2sq, s12s,
-         g11, g12, g22) = _bivar_one_sweep_lowrank_jit(
-            factors[b], factor_scales[b], residuals[b], bh1[sl], bh2[sl],
-            n1[sl], n2[sl], curr1[sl], curr2[sl], proj1s[b], proj2s[b],
-            rb1[sl], rb2[sl], rbsum1[sl], rbsum2[sl], unif[sl], z1[sl],
-            z2[sl], lpi00, lpi10, lpi01, lpi11, s1, s2, s12,
-            cross_corr, n_const, resync, write_rb)
+        rank = factors[b].shape[1]
+        if 0 < dequant_min_rank <= rank:
+            # Block-level branch: the gate is loop-invariant, so the widening
+            # is paid once per block per sweep and amortised over the block's
+            # k x rank projection dots -- of which the bivariate sweep runs two,
+            # one per trait, off each loaded element.
+            rows = factors[b].shape[0]
+            base = _get_thread_id() * dequant_stride
+            widened = dequant_scratch[base:base + rows * rank].reshape(
+                rows, rank)
+            _dequantise_lr8_factor_jit(factors[b], widened)
+            (a10, a01, a11, s1sq, s2sq, s12s,
+             g11, g12, g22) = _bivar_one_sweep_lowrank_jit(
+                widened, factor_scales[b], residuals[b], bh1[sl], bh2[sl],
+                n1[sl], n2[sl], curr1[sl], curr2[sl], proj1s[b], proj2s[b],
+                rb1[sl], rb2[sl], rbsum1[sl], rbsum2[sl], unif[sl], z1[sl],
+                z2[sl], lpi00, lpi10, lpi01, lpi11, s1, s2, s12,
+                cross_corr, n_const, resync, write_rb)
+        else:
+            (a10, a01, a11, s1sq, s2sq, s12s,
+             g11, g12, g22) = _bivar_one_sweep_lowrank_jit(
+                factors[b], factor_scales[b], residuals[b], bh1[sl], bh2[sl],
+                n1[sl], n2[sl], curr1[sl], curr2[sl], proj1s[b], proj2s[b],
+                rb1[sl], rb2[sl], rbsum1[sl], rbsum2[sl], unif[sl], z1[sl],
+                z2[sl], lpi00, lpi10, lpi01, lpi11, s1, s2, s12,
+                cross_corr, n_const, resync, write_rb)
         counts[b, 0] = a10
         counts[b, 1] = a01
         counts[b, 2] = a11
@@ -1649,6 +1744,12 @@ def _ldpred3_auto_bivariate_prepared_inner(prepared, options, start):
                 group["residuals"] = residual_list
                 group["proj1s"] = proj1_list
                 group["proj2s"] = proj2_list
+                # One scratch per bucket, allocated once per fit rather than
+                # once per sweep; sized by this bucket's largest qualifying
+                # block and by the thread count that will sweep it.
+                (group["dequant_scratch"], group["dequant_stride"],
+                 group["dequant_min_rank"]) = _lr8_dequant_scratch(
+                     payloads, group["sizes"], ncores)
             sweep_groups.append(group)
     dense_sweep_all = (
         _bivar_dense_sweep_all_par_jit if ncores > 1
@@ -1750,7 +1851,9 @@ def _ldpred3_auto_bivariate_prepared_inner(prepared, options, start):
                     rb2, rbs1, rbs2, unif, z1, z2, float(lpi[0]),
                     float(lpi[1]), float(lpi[2]), float(lpi[3]), float(s1),
                     float(s2), float(s12), float(cross_corr), n_const, resync,
-                    bool(noise_inflation), group["counts"], group["stats"])
+                    bool(noise_inflation), group["counts"], group["stats"],
+                    group["dequant_scratch"], group["dequant_stride"],
+                    group["dequant_min_rank"])
             # Scatter back to genome-block order so the reduction below is
             # unchanged whether one bucket or several were used.
             block_counts[group["index"]] = group["counts"]

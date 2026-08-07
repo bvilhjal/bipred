@@ -83,6 +83,98 @@ def test_recovers_rg_and_h2():
     assert abs(np.mean(h2s) - 0.5) < 0.12
 
 
+def _lr8_blocks(k=200, nb=3, rank=64, rho=0.6):
+    """int8 low-rank blocks whose rank clears the widening gate."""
+    from ldpred3 import lowrank_ld
+
+    pos = np.arange(k)
+    dense = (rho ** np.abs(np.subtract.outer(pos, pos))).astype(np.float64)
+    factor = lowrank_ld(dense, variance=0.999, max_rank=rank, quantize=True)
+    blocks = [(factor, np.arange(b * k, (b + 1) * k)) for b in range(nb)]
+    return blocks, factor, k * nb
+
+
+@pytest.mark.skipif(not bivariate.HAVE_NUMBA, reason="widening is Numba-only")
+def test_lr8_widening_fires_and_preserves_the_fit():
+    """The int8 low-rank factor is widened once per sweep, above the gate.
+
+    Every other low-rank test in this suite uses rank <= 4, far below
+    ``_LR8_DEQUANTISE_MIN_RANK``, so without this the widening branch would
+    ship untested.
+    """
+    blocks, factor, m = _lr8_blocks(rank=64)
+    rank = factor.U.shape[1]
+    assert factor.U.dtype == np.int8
+    assert rank >= bivariate._LR8_DEQUANTISE_MIN_RANK, rank
+
+    # The gate is reached, and the scratch is sized per thread, not per block.
+    payloads = [factor.U] * len(blocks)
+    sizes = np.array([len(idx) for _, idx in blocks])
+    scratch, stride, min_rank = bivariate._lr8_dequant_scratch(payloads, sizes, 1)
+    assert min_rank == bivariate._LR8_DEQUANTISE_MIN_RANK
+    assert stride == sizes[0] * rank
+    assert scratch.size == stride and scratch.dtype == np.float32
+
+    rng = np.random.default_rng(0)
+    bh1 = rng.normal(scale=0.01, size=m)
+    bh2 = 0.6 * bh1 + 0.8 * rng.normal(scale=0.01, size=m)
+    kw = dict(burn_in=8, num_iter=12, seed=3)
+
+    widened = ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, 50_000, 50_000, **kw)
+
+    # Widening is an exact int8 -> float32 conversion, so the fit may move only
+    # at the level fastmath reassociates the reduction -- not at the int8
+    # quantisation resolution, which would mean the factor itself had changed.
+    monkey = bivariate._LR8_DEQUANTISE_MIN_RANK
+    try:
+        bivariate._LR8_DEQUANTISE_MIN_RANK = 10 ** 9      # disables the branch
+        plain = ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, 50_000, 50_000,
+                                              **kw)
+    finally:
+        bivariate._LR8_DEQUANTISE_MIN_RANK = monkey
+    scale = max(float(np.max(np.abs(plain.beta1_est))), 1e-300)
+    assert abs(widened.rg - plain.rg) < 1e-12
+    assert np.max(np.abs(widened.beta1_est - plain.beta1_est)) / scale < 1e-10
+    np.testing.assert_allclose(widened.h2, plain.h2, rtol=1e-12)
+
+
+@pytest.mark.skipif(not bivariate.HAVE_NUMBA, reason="widening is Numba-only")
+def test_lr8_widening_keeps_ncores_results_identical():
+    """Both drivers widen, so the seeded ncores contract still holds above the
+    gate. A serial-only widening would reassociate one path and not the other.
+    """
+    blocks, _factor, m = _lr8_blocks(rank=64)
+    rng = np.random.default_rng(1)
+    bh1 = rng.normal(scale=0.01, size=m)
+    bh2 = 0.6 * bh1 + 0.8 * rng.normal(scale=0.01, size=m)
+    kw = dict(burn_in=6, num_iter=10, seed=5)
+
+    one = ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, 50_000, 50_000,
+                                        ncores=1, **kw)
+    four = ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, 50_000, 50_000,
+                                         ncores=4, **kw)
+    assert one.rg == four.rg
+    np.testing.assert_array_equal(one.beta1_est, four.beta1_est)
+    np.testing.assert_array_equal(one.beta2_est, four.beta2_est)
+
+
+def test_lr8_widening_gate_ignores_float_and_low_rank_factors():
+    """The branch stays off where it cannot pay: float factors and small ranks."""
+    from ldpred3 import lowrank_ld
+
+    pos = np.arange(120)
+    dense = (0.6 ** np.abs(np.subtract.outer(pos, pos))).astype(np.float64)
+    sizes = np.array([120])
+
+    f32 = lowrank_ld(dense, variance=0.999, max_rank=64, quantize=False)
+    _, _, min_rank = bivariate._lr8_dequant_scratch([f32.U], sizes, 1)
+    assert min_rank == 0, "float32 factors are already the fast specialisation"
+
+    small = lowrank_ld(dense, variance=0.5, max_rank=4, quantize=True)
+    scratch, stride, min_rank = bivariate._lr8_dequant_scratch([small.U], sizes, 1)
+    assert (min_rank, stride, scratch.size) == (0, 0, 0)
+
+
 def test_vectorised_rg_matches_the_scalar_elementwise():
     """The split-Rhat trace and the reported rg must use one convention.
 
