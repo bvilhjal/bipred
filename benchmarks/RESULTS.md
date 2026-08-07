@@ -239,12 +239,26 @@ harmed another. This artifact rejects a blanket robustness claim.
 
 ## External runs
 
-The following were not regenerated:
+Regenerated at 0.2.1:
 
-- `bivariate_demo.py`, which needs `ld_library.npz`;
-- `hapnest/run_bivariate.py`, which needs a HAPNEST dataset; and
-- standalone `infer_vs_ldsc_sbayes.py`, which needs GCTB and has no tracked
-  output artifact.
+- `bivariate_demo.py` — rerun with an `ld_library.npz` generated from the
+  repository simulator (12 blocks of 500 variants, 5% spectral shrinkage).
+  The shrinkage turned out to be load-bearing: an unshrunk coalescent
+  correlation library is near-singular (244-320 of 500 eigenvalues below
+  1e-4 per block), on which the joint sampler inflates the causal fraction
+  and collapses h² to zero — the fit's own `RuntimeWarning` names exactly
+  this failure mode. With the conditioned library the demo's narrative
+  reproduces: joint-fit gain rises with true `rg` (+0.006 / +0.014 / +0.034 /
+  +0.082 at true rg 0.0 / 0.3 / 0.6 / 0.9, `rg_est` −0.02 / +0.23 / +0.49 /
+  +0.79) with no harm at rg 0.0 or on disjoint causal variants.
+
+Not regenerated (inputs unavailable on this host):
+
+- `hapnest/run_bivariate.py`, which needs a HAPNEST dataset (containerized
+  Julia tool plus a multi-GB reference download; no container runtime here); and
+- standalone `infer_vs_ldsc_sbayes.py`, which needs GCTB (Linux-only binary;
+  absent on macOS). Its SBayesS arm can now run on macOS through the R
+  SBayesRC package backend — see the script's backend resolver.
 
 The CSV files are the authoritative numeric record. See [`README.md`](README.md)
 for commands and artifact names.

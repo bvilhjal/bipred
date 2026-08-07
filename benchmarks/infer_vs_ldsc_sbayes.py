@@ -9,6 +9,11 @@ estimates the summary-statistic quantities each tool reports:
                   each with a 95% credible interval (so we also score coverage).
 * ``sbayess``  -- GCTB ``--sbayes S`` (mixture + MAF/selection ``S`` term): its
                   ``.parRes`` reports h2 (``hsq``) and polygenicity (``Pi``).
+                  When no GCTB binary is available, the same arm falls back to
+                  the **R SBayesRC** package (native eigen-LDM built from the
+                  same reference panel); its ``.par`` reports h2 (``hsq``) and
+                  polygenicity (``nnz`` / m). The row records which backend
+                  produced it (``sbayes_backend``: gctb / r / none).
 
 All three consume the **same** simulated GWAS: LDSC/LDpred3 use the reference-panel
 per-block LD, GCTB builds its **shrunk** LDM (``--make-shrunk-ldm``) from the same
@@ -19,7 +24,9 @@ polygenic / major-locus set.
 
 Reports each estimate as mean +/- SD over reps against the known truth, the
 LDpred3 interval coverage, and wall-clock time. Needs ``msprime`` and GCTB
-(``GCTB=/path/to/gctb``; bioconda ``gctb``). Writes ``infer_ldsc_sbayes.{csv,png}``.
+(``GCTB=/path/to/gctb``; bioconda ``gctb``); without a GCTB binary it uses the
+R **SBayesRC** package for the sbayess arm instead. Writes
+``infer_ldsc_sbayes.{csv,png}``.
 
     GCTB=/opt/gctb/bin/gctb OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
         python benchmarks/infer_vs_ldsc_sbayes.py
@@ -29,6 +36,7 @@ import sys
 import csv
 import math
 import time
+import shutil
 import tempfile
 import subprocess
 
@@ -55,6 +63,52 @@ CHAIN, BURN = 6000, 2000                     # GCTB MCMC
 REPS = int(os.environ.get("REPS", "5"))
 H2_GRID = [0.2, 0.5, 0.8]
 _ERF = np.vectorize(math.erf)
+
+
+# --------------------------------------------------------------------------- #
+#  sbayess backend: GCTB binary if usable, else the R SBayesRC package         #
+# --------------------------------------------------------------------------- #
+_SBAYES_BACKEND = None
+
+
+def _probe_gctb():
+    """True when a GCTB binary resolves and answers ``--sbayes``."""
+    gctb = shutil.which(os.environ.get("GCTB", "gctb"))
+    if not gctb:
+        return False
+    try:
+        subprocess.run([gctb, "--sbayes"], capture_output=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return True
+
+
+def _probe_r_sbayesrc():
+    """True when Rscript can load the SBayesRC package."""
+    if not shutil.which("Rscript"):
+        return False
+    try:
+        r = subprocess.run(["Rscript", "--vanilla", "-e",
+                            'library(SBayesRC); cat("ok")'],
+                           capture_output=True, text=True, timeout=180)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return r.returncode == 0 and "ok" in r.stdout
+
+
+def sbayes_backend():
+    """Resolve once which backend runs the mixture/selection arm: ``gctb``
+    (preferred), ``r`` (SBayesRC fallback), or ``none`` (NaN rows)."""
+    global _SBAYES_BACKEND
+    if _SBAYES_BACKEND is None:
+        if _probe_gctb():
+            _SBAYES_BACKEND = "gctb"
+        elif _probe_r_sbayesrc():
+            _SBAYES_BACKEND = "r"
+        else:
+            _SBAYES_BACKEND = "none"
+        print(f"sbayes backend: {_SBAYES_BACKEND}", flush=True)
+    return _SBAYES_BACKEND
 
 # name -> (causal fraction p, effect-size sampler on the causal SNPs)
 ARCHS = {
