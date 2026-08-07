@@ -22,6 +22,13 @@ export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
 export NUMBA_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
 export MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/bipred-mpl}"
 
+# sweep_cost and fit_memory take flags, so they run through -m below rather
+# than as bare scripts; everything else is a plain module run.
+MODULE_SCRIPTS=(
+  "sweep_cost --csv benchmarks/sweep_cost.csv"
+  "fit_memory --csv benchmarks/fit_memory.csv"
+)
+
 SCRIPTS=(
   rg_architectures
   rg_polygenicity
@@ -54,9 +61,22 @@ for name in "${SCRIPTS[@]}"; do
   fi
 done
 
+for spec in "${MODULE_SCRIPTS[@]}"; do
+  name="${spec%% *}"
+  echo "--- $name : started $(date +%H:%M:%S) ---" | tee -a "$LOG"
+  start=$SECONDS
+  # shellcheck disable=SC2086
+  if "$PY" -m "benchmarks.${spec%% *}" ${spec#* } >>"$LOG" 2>&1; then
+    echo "--- $name : ok in $((SECONDS - start))s ---" | tee -a "$LOG"
+  else
+    echo "--- $name : FAILED after $((SECONDS - start))s ---" | tee -a "$LOG"
+    failed+=("$name")
+  fi
+done
+
 echo | tee -a "$LOG"
 if [ ${#failed[@]} -eq 0 ]; then
-  echo "all ${#SCRIPTS[@]} scripts completed" | tee -a "$LOG"
+  echo "all $(( ${#SCRIPTS[@]} + ${#MODULE_SCRIPTS[@]} )) scripts completed" | tee -a "$LOG"
 else
   echo "FAILED: ${failed[*]}" | tee -a "$LOG"
   exit 1

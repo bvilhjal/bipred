@@ -10,7 +10,7 @@ polygenic-overlap interpretation. See [`guide.md`](guide.md) for fitting.
 | Estimator | Use | Main caveat |
 |---|---|---|
 | `res.rg` | default joint LD estimate | needs well-matched LD |
-| `rg_decorrelated=True` | **sensitivity diagnostic only** — the default estimator measured more accurate in both power regimes (0.0084 vs 0.0110, 0.0174 vs 0.0240); incompatible with multichain and adaptive stopping |
+| `rg_decorrelated=True` | **sensitivity diagnostic only** — the default estimator measured more accurate in both power regimes (0.0086 vs 0.0108, 0.0174 vs 0.0242); incompatible with multichain and adaptive stopping |
 | `bipred.ldsc_rg` | fast screen or independent check | unstable when marginal LDSC `h2` is near zero; one-step and unfiltered, so single large-effect loci carry full leverage |
 | two univariate LDpred fits | additional diagnostic | often attenuated under power asymmetry |
 
@@ -66,8 +66,8 @@ The default sampled-quadratic ratio can attenuate the weak trait through its
 posterior-noise-inflated variance. The alternative averages cross-sweep
 quadratics while excluding same-sweep pairs. Thinning reduces, but does not
 eliminate, dependence between retained MCMC states. In the committed 0.2.0
-synthetic sweep, paired MAE was 0.0084 versus 0.0110 under symmetric power and
-0.0174 versus 0.0240 under asymmetric power for the default versus cross-sweep
+synthetic sweep, paired MAE was 0.0086 versus 0.0108 under symmetric power and
+0.0174 versus 0.0242 under asymmetric power for the default versus cross-sweep
 estimator. Treat it as a sensitivity analysis, not an automatic replacement for
 `res.rg` — and not as a production estimator at all. It needs at least two
 retained effect samples and a full schedule; adaptive stopping is disabled.

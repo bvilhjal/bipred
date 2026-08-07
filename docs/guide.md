@@ -40,18 +40,19 @@ m=20,000 with 500-variant blocks, one core, fitting a sparse causal model
 
 | Representation | ms/sweep | Bytes per variant |
 |---|---:|---|
-| dense float32 (D32) | 0.76 | `4k` = 2,000 |
-| dense int8 (D8) | 0.84 | `k` = 500 |
-| low-rank float32, rank 481 | 2.47 | `4·rank` = 1,924 |
-| low-rank int8, rank 481 (LR8) | 2.95 | `rank` = 481 |
+| dense int8 (D8) | 0.83 | `k` = 500 |
+| dense float32 (D32) | 0.84 | `4k` = 2,000 |
+| low-rank float32, rank 481 | 2.58 | `4·rank` = 1,924 |
+| low-rank int8, rank 481 (LR8) | 3.02 | `rank` = 481 |
 
-Dense int8 and float32 sweep within about 10% of each other, so **int8 is a
-memory choice and costs essentially nothing in time**. The dequantization sits
-in the O(k) row update, which is guarded on a variant's effect changing and so
-fires on roughly the causal fraction of visits — about 1% here. That guard is
-also why this table is sensitive to the fit: on a degenerate fit, where nearly
-every variant is called causal, the same comparison shows int8 1.5× slower.
-Timings taken against unstructured noise will mislead you for that reason.
+Dense int8 and float32 sweep within 2% of each other, so **int8 is a memory
+choice and costs nothing measurable in time**. The dequantization sits in the
+O(k) row update, which is guarded on a variant's effect changing and so fires on
+roughly the causal fraction of visits — about 1% here. That guard is why this
+table is sensitive to the fit: on a degenerate one, where nearly every variant is
+called causal, the same comparison makes int8 look 1.5× slower. Timings taken
+against unstructured noise will mislead you for that reason, and quantizing the
+LD *inside* the fit does more than mislead — see `benchmarks/RESULTS.md` Table 10.
 
 Low-rank cost scales with rank rather than block size, so it wins on large
 blocks and loses on small ones. This benchmark uses a near-full rank (481 of a
@@ -151,8 +152,8 @@ guaranteed to improve calibration at every power setting.
 
 Use `res.rg` by default. `rg_decorrelated=True` is a **sensitivity diagnostic
 only — do not use it for production estimates**: it had higher paired error
-than the default in both the symmetric and asymmetric synthetic sweeps (0.0084
-versus 0.0110, 0.0174 versus 0.0240), and it is incompatible with multichain
+than the default in both the symmetric and asymmetric synthetic sweeps (0.0086
+versus 0.0108, 0.0174 versus 0.0242), and it is incompatible with multichain
 pooling and adaptive stopping. `ldsc_rg` is a fast independent screen.
 Interpretation, sample overlap, and overlap-interval semantics are covered in
 [`rg.md`](rg.md).

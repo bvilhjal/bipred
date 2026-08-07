@@ -1573,7 +1573,7 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
         Estimator based on effects sampled at different sweeps, kept for
         strongly asymmetric-power pairs. The committed 0.2.0 synthetic sweep
         measured the **default** estimator more accurate in both power regimes
-        (RESULTS.md Table 4: 0.0084 vs 0.0110 symmetric, 0.0174 vs 0.0240
+        (RESULTS.md Table 4: 0.0086 vs 0.0108 symmetric, 0.0174 vs 0.0242
         asymmetric), and this option is incompatible with multichain pooling
         and adaptive stopping. Requires ``num_iter > sample_every``. If the
         cross-sweep quadratics are non-finite it raises; if a variance is

@@ -159,7 +159,14 @@ def _measure(kind, m, k, cores, reps, short, long_, seed=0):
 def _cell_subprocess(kind, m, k, cores, reps, short, long_, seed):
     """Run one cell in a fresh interpreter with a private Numba cache."""
     with tempfile.TemporaryDirectory(prefix="bipred-nbc-") as cache_dir:
-        env = dict(os.environ, NUMBA_CACHE_DIR=cache_dir)
+        # NUMBA_NUM_THREADS caps the pool for the whole process and is fixed at
+        # import, so it must be set per cell here. The rest of the suite exports
+        # it as 1 for stable timings -- correct for a benchmark measuring one
+        # core, and fatal for this one, which would report every parallel cell
+        # at 1.0x. The BLAS variables stay pinned: this measures the sampler's
+        # own block threading, not a threaded BLAS underneath it.
+        env = dict(os.environ, NUMBA_CACHE_DIR=cache_dir,
+                   NUMBA_NUM_THREADS=str(max(cores, 1)))
         proc = subprocess.run(
             [sys.executable, "-m", "benchmarks.sweep_cost", "--in-process",
              "--kind", kind, "--m", str(m), "--k", str(k),

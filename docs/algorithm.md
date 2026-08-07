@@ -133,8 +133,8 @@ ordinary pairs but can attenuate a weak trait under strongly asymmetric power.
 same-sweep pairs. Thinning reduces, but does not prove the absence of, dependence
 between retained MCMC states. Treat this as a sensitivity diagnostic only. In
 the committed synthetic sweep the default estimator had lower paired
-realized-rg MAE under both symmetric (0.0084 vs 0.0110) and asymmetric
-(0.0174 vs 0.0240) power, so the default is the recommended estimator; this
+realized-rg MAE under both symmetric (0.0086 vs 0.0108) and asymmetric
+(0.0174 vs 0.0242) power, so the default is the recommended estimator; this
 option exists for sensitivity analysis and is incompatible with multichain
 pooling and adaptive stopping.
 
