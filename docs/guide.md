@@ -33,6 +33,30 @@ while your panel is still alive (78.4 MB of peak against 13.1 MB at m=100,000
 with 500-variant blocks). `ld_int8=True` and `None` are retained for that older
 behaviour. This option does not change low-rank factors.
 
+**Table 1. Choosing a dense or low-rank representation.** Per-sweep cost at
+m=20,000 with 500-variant blocks, one core, from
+[`benchmarks/sweep_cost.py`](../benchmarks/sweep_cost.py).
+
+| Representation | ms/sweep | Bytes per variant |
+|---|---:|---|
+| dense float32 (D32) | 3.5 | `4k` = 2,000 |
+| dense int8 (D8) | 5.2 | `k` = 500 |
+| low-rank float32, rank 481 | 4.5 | `4·rank` = 1,924 |
+| low-rank int8, rank 481 (LR8) | 5.1 | `rank` = 481 |
+
+Two things this table is easy to misread. First, **int8 buys memory, not speed**:
+dense int8 is about 1.5× *slower* per sweep than dense float32, because each LD
+entry is dequantized inside the inner loop. Choose it when the panel would not
+otherwise fit, not to go faster. Second, this benchmark uses a near-full rank
+(481 of a 500-variant block) to stress the projection dots, which is the *worst*
+case for low-rank storage — at that rank LR8 saves nothing over D8. Low-rank
+pays only when `rank ≪ k`, and its sweep cost scales with rank rather than block
+size, so it wins on large blocks and loses on small ones.
+
+What did change is that LR8 now sweeps within about 10% of an equivalent float32
+factor, where it used to be much slower — so once a factor is worth using at
+all, its 4× storage saving over LR32 is close to free.
+
 ## Fit one chain
 
 For one dense matrix:
@@ -90,7 +114,7 @@ require different trace contracts. The pooled posterior records
 
 ## Read the result
 
-**Table 1. Main `BivariateResult` fields.**
+**Table 2. Main `BivariateResult` fields.**
 
 | Field | Meaning |
 |---|---|
@@ -156,7 +180,7 @@ shrinks local estimates toward the genome-wide correlation.
 
 ## Options
 
-**Table 2. Main fitting options.** Unless the *Scope* column says otherwise, an
+**Table 3. Main fitting options.** Unless the *Scope* column says otherwise, an
 option is accepted by both `ldpred3_auto_bivariate[_blocks]` and
 `ldpred3_auto_bivariate_chains`. Options marked *single* are rejected by the
 chains driver, which reserves them for its own dispersal.
