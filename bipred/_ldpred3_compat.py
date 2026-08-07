@@ -28,6 +28,7 @@ _MODULE_NAMES = {
     "ldpred3._numba": (
         "HAVE_NUMBA",
         "_jit",
+        "_jit_fastmath_nogil",
         "_jit_nogil",
         "_jit_parallel",
         "_set_threads",

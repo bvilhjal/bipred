@@ -50,8 +50,8 @@ from ._ldpred3_compat import (
     _finite_control,
     _integer_at_least,
     _jit,
+    _jit_fastmath_nogil,
     _jit_nogil,
-    _jit_parallel,
     _set_threads,
     _validate_beta_hat,
     _validate_blocks,
@@ -79,6 +79,34 @@ _DIAGNOSTIC_MIN_VARIANTS = 1000
 _DIAGNOSTIC_MAX_CAUSAL_FRACTION = 0.5
 _DENSE = 0
 _LOWRANK = 1
+
+
+def _jit_parallel_uncached(func):
+    """``_jit_parallel`` without Numba's on-disk cache.
+
+    Each fused sweep driver below is jitted **twice** from one Python
+    function -- once ``parallel=True`` for ``ncores > 1`` and once ``nogil=True``
+    for the serial path. Numba keys its on-disk cache on (source file,
+    qualname, first line, signature) and *not* on the compilation flags, so the
+    two twins share a single cache entry and whichever compiled first is served
+    to both. The default cache lives in ``__pycache__`` beside this file and
+    persists, so one ``ncores=1`` run would otherwise disable block parallelism
+    for every later run on that checkout, permanently and silently.
+
+    Measured (m=20,000, k=500, 40 int8 blocks): ``ncores=4`` runs at 1.73
+    ms/sweep from a clean cache but 5.38 ms/sweep -- no better than the 5.49
+    serial baseline -- from a cache a prior serial run had touched. Opting the
+    parallel twins out of the cache restores 1.77 ms/sweep, bit-identically.
+
+    Only the parallel twins opt out. The serial path stays cached, so the
+    default single-core run is unaffected; ``ncores > 1`` pays one compilation
+    per process, against a fit that runs for minutes at genome scale.
+    """
+    if not HAVE_NUMBA:
+        return func
+    from numba import njit
+    # Matches ldpred3's _jit_parallel exactly but for ``cache``.
+    return njit(cache=False, parallel=True)(func)
 
 
 @dataclass(frozen=True)
@@ -265,13 +293,21 @@ def _prepare_block(R, ld_int8):
     """Return ``(block, scale)`` for one dense LD block.
 
     Blocks that are already int8 (built by
-    ``ldpred3.compute_ld_blocks(quantize=True)``) are kept int8 as-is. Otherwise,
-    ``ld_int8=None`` automatically quantises float blocks with at most 1500
-    variants and keeps larger blocks float32. This cutoff is a storage heuristic,
-    not a bivariate accuracy guarantee. ``True`` quantises every float block;
-    ``False`` keeps every float block float32. The paired ``scale``
-    (``1/127`` for int8, ``1.0`` for float32) is what the sampler multiplies each
-    LD entry by to dequantise on the fly."""
+    ``ldpred3.compute_ld_blocks(quantize=True)``) are kept int8 as-is, without a
+    copy. The default ``ld_int8=False`` likewise keeps a float block as it was
+    given: ``np.ascontiguousarray`` on an already-C-contiguous float32 array
+    returns a view, so no second payload is built.
+
+    ``True`` quantises every float block and ``None`` quantises those with at
+    most 1500 variants -- both allocate a fresh int8 array per block *inside the
+    fit*, while the caller's panel is still alive. That measured 78.4 MB of peak
+    against 13.1 MB at m=100,000 with 500-variant blocks, and the extra payload
+    is k/2 bytes per variant, so ~500 MB at m=1,000,000. Quantise when the LD is
+    built (``compute_ld_blocks(quantize=True)``), where the float source is
+    private and discardable, rather than here.
+
+    The paired ``scale`` (``1/127`` for int8, ``1.0`` for float32) is what the
+    sampler multiplies each LD entry by to dequantise on the fly."""
     arr = np.asarray(R)
     if arr.dtype == np.int8:
         return np.ascontiguousarray(arr), 1.0 / _Q8
@@ -372,7 +408,7 @@ def _validate_bivariate_options(*, ld_int8, h2_init,
 
 
 _BIVARIATE_OPTION_DEFAULTS = {
-    "ld_int8": None,
+    "ld_int8": False,
     "h2_init": 0.1,
     "rg_init": 0.0,
     "cross_corr": 0.0,
@@ -796,11 +832,19 @@ def _bivar_one_sweep(corr, bh1, bh2, n1, n2, curr1, curr2, rb1, rb2,
                     rb1[i] += cji * b1
                     rb2[i] += cji * b2
 
-    if n_const:                                  # hoist the per-sweep constants
-        (E11, E22, E12, det0, ldet0, a11, det1, ldet1, a22, det2, ldet2,
-         b11, b22, b12, det3, ldet3, Ei11, Ei22, Ei12, prec1, sv1, prec2, sv2,
-         V11, V22, V12, L11, L21, L22) = _bivar_const(
-             n1[0], n2[0], s1, s2, s12, cross_corr)
+    # Prime the residual-independent scalars from the first variant. With a
+    # shared scalar N that is the whole computation for the sweep; with
+    # per-variant N it also primes the memo in the loop below, which
+    # recomputes only when N actually *changes* rather than once per SNP.
+    # Real summary statistics carry long runs of identical n_eff, and
+    # _bivar_const is ~29 quantities including four logs. It is a pure
+    # function of its arguments, so reusing a hit is bit-identical.
+    (E11, E22, E12, det0, ldet0, a11, det1, ldet1, a22, det2, ldet2,
+     b11, b22, b12, det3, ldet3, Ei11, Ei22, Ei12, prec1, sv1, prec2, sv2,
+     V11, V22, V12, L11, L21, L22) = _bivar_const(
+        n1[0], n2[0], s1, s2, s12, cross_corr)
+    last_n1 = n1[0]
+    last_n2 = n2[0]
 
     c10 = 0
     c01 = 0
@@ -813,11 +857,13 @@ def _bivar_one_sweep(corr, bh1, bh2, n1, n2, curr1, curr2, rb1, rb2,
         b2 = curr2[j]
         d1 = bh1[j] - rb1[j] + b1                 # residual marginal estimates
         d2 = bh2[j] - rb2[j] + b2
-        if not n_const:                           # per-variant N: recompute here
+        if not n_const and (n1[j] != last_n1 or n2[j] != last_n2):
             (E11, E22, E12, det0, ldet0, a11, det1, ldet1, a22, det2, ldet2,
              b11, b22, b12, det3, ldet3, Ei11, Ei22, Ei12, prec1, sv1, prec2, sv2,
              V11, V22, V12, L11, L21, L22) = _bivar_const(
                  n1[j], n2[j], s1, s2, s12, cross_corr)
+            last_n1 = n1[j]
+            last_n2 = n2[j]
 
         # log N(d; 0, E + Slab_state) for each of the 4 states (drop 2*pi const).
         q0 = (E22 * d1 * d1 - 2.0 * E12 * d1 * d2 + E11 * d2 * d2) / det0
@@ -934,11 +980,19 @@ def _bivar_one_sweep_lowrank(
                     proj1[c] += ujc * fb1
                     proj2[c] += ujc * fb2
 
-    if n_const:                                  # hoist the per-sweep constants
-        (E11, E22, E12, det0, ldet0, a11, det1, ldet1, a22, det2, ldet2,
-         b11, b22, b12, det3, ldet3, Ei11, Ei22, Ei12, prec1, sv1, prec2, sv2,
-         V11, V22, V12, L11, L21, L22) = _bivar_const(
-             n1[0], n2[0], s1, s2, s12, cross_corr)
+    # Prime the residual-independent scalars from the first variant. With a
+    # shared scalar N that is the whole computation for the sweep; with
+    # per-variant N it also primes the memo in the loop below, which
+    # recomputes only when N actually *changes* rather than once per SNP.
+    # Real summary statistics carry long runs of identical n_eff, and
+    # _bivar_const is ~29 quantities including four logs. It is a pure
+    # function of its arguments, so reusing a hit is bit-identical.
+    (E11, E22, E12, det0, ldet0, a11, det1, ldet1, a22, det2, ldet2,
+     b11, b22, b12, det3, ldet3, Ei11, Ei22, Ei12, prec1, sv1, prec2, sv2,
+     V11, V22, V12, L11, L21, L22) = _bivar_const(
+        n1[0], n2[0], s1, s2, s12, cross_corr)
+    last_n1 = n1[0]
+    last_n2 = n2[0]
 
     c10 = 0
     c01 = 0
@@ -961,11 +1015,13 @@ def _bivar_one_sweep_lowrank(
         rbj2 += residual[j] * b2
         d1 = bh1[j] - rbj1 + b1                 # diag(R) == 1
         d2 = bh2[j] - rbj2 + b2
-        if not n_const:                           # per-variant N: recompute here
+        if not n_const and (n1[j] != last_n1 or n2[j] != last_n2):
             (E11, E22, E12, det0, ldet0, a11, det1, ldet1, a22, det2, ldet2,
              b11, b22, b12, det3, ldet3, Ei11, Ei22, Ei12, prec1, sv1, prec2, sv2,
              V11, V22, V12, L11, L21, L22) = _bivar_const(
                  n1[j], n2[j], s1, s2, s12, cross_corr)
+            last_n1 = n1[j]
+            last_n2 = n2[j]
 
         # log N(d; 0, E + Slab_state) for each of the 4 states (drop 2*pi const).
         q0 = (E22 * d1 * d1 - 2.0 * E12 * d1 * d2 + E11 * d2 * d2) / det0
@@ -1064,7 +1120,17 @@ def _bivar_one_sweep_lowrank(
     return c10, c01, c11, sum1sq, sum2sq, sum12, gv11, gv12, gv22
 
 
-_bivar_one_sweep_lowrank_jit = _jit_nogil(_bivar_one_sweep_lowrank)
+# fastmath here and NOT on the dense kernel, mirroring ldpred3's scoping
+# (_kernels.py:1277). The O(rank) projection dots are ~90% of a low-rank
+# sweep and are add-latency-bound, so letting LLVM reassociate and vectorise
+# the reduction measured 1.76x end-to-end on an all-LR8 fit (1.26x/1.38x/
+# 1.99x at rank 32/64/170). The dense kernel measured only 1.12x -- its
+# guarded row update fires on ~6% of visits, so the sweep is dominated by the
+# four exp() calls rather than by anything reassociable -- and is left plain.
+# fastmath also asserts no NaN/Inf: the factor and residual are validated
+# finite by LowRankLD, and _check_fit_is_finite catches a diverged chain at
+# the end of the fit. Results move ~1e-16 relative.
+_bivar_one_sweep_lowrank_jit = _jit_fastmath_nogil(_bivar_one_sweep_lowrank)
 
 
 def _bivar_dense_sweep_all(
@@ -1095,7 +1161,7 @@ def _bivar_dense_sweep_all(
         stats[b, 5] = g22
 
 
-_bivar_dense_sweep_all_par_jit = _jit_parallel(_bivar_dense_sweep_all)
+_bivar_dense_sweep_all_par_jit = _jit_parallel_uncached(_bivar_dense_sweep_all)
 _bivar_dense_sweep_all_jit = _jit_nogil(_bivar_dense_sweep_all)
 
 
@@ -1128,7 +1194,7 @@ def _bivar_lowrank_sweep_all(
         stats[b, 5] = g22
 
 
-_bivar_lowrank_sweep_all_par_jit = _jit_parallel(_bivar_lowrank_sweep_all)
+_bivar_lowrank_sweep_all_par_jit = _jit_parallel_uncached(_bivar_lowrank_sweep_all)
 _bivar_lowrank_sweep_all_jit = _jit_nogil(_bivar_lowrank_sweep_all)
 
 
@@ -1329,7 +1395,7 @@ class BivariateResult:
 
 
 def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, *,
-                                  ld_int8=None,
+                                  ld_int8=False,
                                   h2_init=0.1, p_init=0.02, rg_init=0.0,
                                   pi_init=None, sigma_prior_scale=None,
                                   cross_corr=0.0, burn_in=200, num_iter=200,
@@ -1347,11 +1413,13 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     mixed representations are supported. Low-rank blocks retain their compact
     factor (including LR8 int8 factors) and diagonal residual.
 
-    By default, supplied int8 blocks stay int8, float blocks with at most 1500
-    variants are int8-quantised, and larger float blocks stay float32. This
-    avoids quantising the large dense blocks where small entrywise errors can
-    materially alter conditioning. Pass ``ld_int8=True`` to quantise every
-    dense float block or ``False`` to keep every dense float block float32.
+    Dense blocks are consumed in the representation they arrive in: supplied
+    int8 blocks stay int8 and float blocks stay float32, both without a copy.
+    Quantise when the LD is *built*, with
+    ``ldpred3.compute_ld_blocks(quantize=True)``, rather than in the fit --
+    quantising here allocates a second genome-scale payload while the caller's
+    panel is still alive (78.4 MB of peak against 13.1 MB at m=100,000, k=500).
+    ``ld_int8=True`` and ``None`` are retained for that older behaviour.
     This option does not alter ``LowRankLD`` factors.
 
     Parameters
@@ -1364,13 +1432,16 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
         Standardized marginal effects for the two traits (same variant order).
     n_eff1, n_eff2 : float or array_like
         Per-trait GWAS sample sizes.
-    ld_int8 : bool or None, default None
-        Dense-LD storage policy. ``None`` keeps supplied int8 blocks as-is,
-        quantises float blocks of at most 1500 variants, and keeps larger float
-        blocks float32. The cutoff is a storage heuristic that has not been
-        calibrated on bivariate real data. ``True`` quantises every float block;
-        ``False`` keeps every float block float32. Supplied int8 blocks stay int8
-        under all three settings. This option does not alter ``LowRankLD`` factors.
+    ld_int8 : bool or None, default False
+        Dense-LD storage policy. ``False`` consumes every block in the
+        representation it was given, with no copy -- the memory-cheapest option,
+        and the one that keeps this call's LD identical to what
+        :func:`~bipred.regional_rg` will evaluate. ``True`` quantises every float
+        block and ``None`` quantises those of at most 1500 variants; both build a
+        fresh int8 array per block inside the fit, so prefer quantising at LD
+        build time (``ldpred3.compute_ld_blocks(quantize=True)``). Supplied int8
+        blocks stay int8 under all three settings, and none of them alters
+        ``LowRankLD`` factors.
     h2_init : float or pair
         Initial per-trait heritability. A scalar applies to both traits.
     p_init : float, default 0.02

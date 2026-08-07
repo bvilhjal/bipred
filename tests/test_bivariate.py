@@ -234,9 +234,9 @@ def test_rg_zero_is_recovered():
 
 
 def test_int8_ld_matches_float_and_accepts_prequantized():
-    # Small blocks use the automatic int8 path and track the exact float32 fit
-    # closely. A block handed in already int8 is consumed as-is -- bit-identical
-    # to quantising the float block on the fly.
+    # Quantising in the fit (ld_int8=True) tracks the exact float32 fit closely.
+    # A block handed in already int8 is consumed as-is -- bit-identical to
+    # quantising the float block on the fly, and without the extra payload.
     k, nb = 200, 12
     blocks, chols, idxs = _blocks(nb, k, seed=2)
     m = nb * k
@@ -248,15 +248,17 @@ def test_int8_ld_matches_float_and_accepts_prequantized():
 
     flt = ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, 60000, 60000,
                                         ld_int8=False, **kw)
-    q8 = ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, 60000, 60000, **kw)
-    # Automatic small-block int8 stays close to the exact float fit.
+    q8 = ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, 60000, 60000,
+                                       ld_int8=True, **kw)
+    # Opt-in int8 stays close to the exact float fit.
     assert abs(q8.rg - flt.rg) < 0.05, (q8.rg, flt.rg)
     assert abs(q8.h2[0] - flt.h2[0]) < 0.05 and abs(q8.h2[1] - flt.h2[1]) < 0.05
     assert np.max(np.abs(q8.beta1_est - flt.beta1_est)) < 0.02
 
     # pre-quantised int8 blocks (what ldpred3.compute_ld_blocks(quantize=True)
-    # emits) are detected by dtype and consumed as-is, so the fit is bit-identical
-    # to the default on-the-fly quantisation -- even with ld_int8=False.
+    # emits, and the recommended way to get int8) are detected by dtype and
+    # consumed as-is, so the fit is bit-identical to quantising on the fly --
+    # under the ld_int8=False default, which copies nothing.
     pre = [(np.rint(np.clip(R, -1.0, 1.0) * 127.0).astype(np.int8), ix)
            for (R, ix) in blocks]
     q8_pre = ldpred3_auto_bivariate_blocks(pre, bh1, bh2, 60000, 60000,

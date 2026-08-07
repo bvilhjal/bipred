@@ -15,9 +15,11 @@ and `LowRankLD` factors, for which
     (a' R b)_sub = (W_sub' a)·(W_sub' b) + sum_i residual_i a_i b_i .
 
 The calculation uses the LD representation supplied to :func:`regional_rg`; it
-does not recover the fit's internally prepared blocks or replay its ``ld_int8``
-policy. In particular, passing an original float block here evaluates that float
-block even if the fit auto-quantised its private copy.
+does not replay the fit's ``ld_int8`` policy. Under the default ``ld_int8=False``
+a fit consumes dense blocks exactly as given, so handing the same blocks to both
+calls evaluates the same LD -- the ordinary pattern is aligned. A caller who
+opts into in-fit quantisation (``ld_int8=True`` or ``None``) reintroduces the
+mismatch, because that copy is private to the fit.
 
 Posterior-mean effects are used deliberately rather than the sampled-quadratic
 ratio that the genome-wide `rg` uses. The sampled ratio inflates its denominator
@@ -44,7 +46,6 @@ regions than as calibrated absolute values.
 
 from __future__ import annotations
 
-import warnings
 from dataclasses import dataclass
 
 import numpy as np
@@ -127,11 +128,12 @@ def regional_rg(beta1, beta2, blocks, regions, *, min_variants=1, clip=True):
     blocks : sequence
         ``(R, idx)`` pairs where ``R`` is a dense float/int8 matrix or a
         :class:`LowRankLD` factor, normally the same logical blocks passed to the
-        fit. This function evaluates the representation supplied here and does
-        not apply the fit's ``ld_int8`` policy. Thus an original float block may
-        differ from the fit's auto- or forcibly quantised private copy. To keep
-        the representations aligned, pass pre-quantised blocks to both calls, or
-        fit with ``ld_int8=False`` and pass the same float32 blocks here.
+        fit. This function evaluates the representation supplied here. With the
+        default ``ld_int8=False`` the fit does the same, so passing it the same
+        blocks is aligned and needs no further care. Only a fit that opted into
+        in-fit quantisation (``ld_int8=True`` or ``None``) evaluates something
+        else, and its private copy cannot be retrieved; quantise the blocks
+        yourself and pass those to both calls instead.
     regions : array_like
         One-dimensional length-``m`` region label per variant. Labels may be
         integers or strings; variants sharing a label form one region, and
@@ -174,25 +176,14 @@ def regional_rg(beta1, beta2, blocks, regions, *, min_variants=1, clip=True):
         raise ValueError("beta1 and beta2 must contain only finite values")
     m = b1.size
 
-    # Representation guard: a default bivariate fit auto-quantises *float*
-    # blocks of at most _AUTO_INT8_MAX_BLOCK variants, so evaluating the
-    # original float blocks here would use different LD than the fit did.
-    # LowRankLD blocks are always consumed natively, so they cannot mismatch.
-    from .bivariate import _AUTO_INT8_MAX_BLOCK
-    for R, _idx in blocks:
-        if isinstance(R, LowRankLD):
-            continue
-        arr = np.asarray(R)
-        if arr.dtype != np.int8 and arr.shape[0] <= _AUTO_INT8_MAX_BLOCK:
-            warnings.warn(
-                "regional_rg evaluates the blocks as given, but a default "
-                "ldpred3_auto_bivariate(_blocks) fit auto-quantises float "
-                f"blocks of {_AUTO_INT8_MAX_BLOCK} variants or fewer into a "
-                "private copy: this call would use different LD than such a "
-                "fit did. Pre-quantise the same blocks for both calls, or fit "
-                "with ld_int8=False and pass those float32 blocks here.",
-                stacklevel=2)
-            break
+    # No representation guard is needed for the default fit. ``ld_int8``
+    # defaults to False, so a fit consumes dense blocks in the representation it
+    # was handed and passing those same blocks here evaluates the same LD. The
+    # warning that used to live at this point existed because the fit-time
+    # default quantised float blocks into a private copy; it fired on every
+    # float block at or below the cutoff, which is now the aligned case.
+    # A caller who opts back in with ``ld_int8=True``/``None`` reintroduces the
+    # mismatch, which the parameter's own documentation states.
 
     if (isinstance(min_variants, (bool, np.bool_))
             or not isinstance(min_variants, (int, np.integer))):
