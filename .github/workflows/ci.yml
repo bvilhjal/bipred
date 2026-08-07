@@ -85,6 +85,12 @@ jobs:
           git config --global \
             url."https://x-access-token:${TOKEN}@github.com/".insteadOf \
             "https://github.com/"
+          # Windows only in effect, harmless elsewhere. ldpred3's benchmark
+          # archive carries a 187-character path
+          # (benchmarks/results/<run>/source/<sha>/untracked/...), and pip clones
+          # into a ~95-character temp directory, so checkout overruns MAX_PATH
+          # and fails with "Filename too long" *after* a successful clone.
+          git config --global core.longpaths true
 
       # bipred depends on ldpred3, which is not on PyPI yet — install it from git
       # so the shared LD / sampler internals are importable.
@@ -155,6 +161,12 @@ jobs:
           git config --global \
             url."https://x-access-token:${TOKEN}@github.com/".insteadOf \
             "https://github.com/"
+          # Windows only in effect, harmless elsewhere. ldpred3's benchmark
+          # archive carries a 187-character path
+          # (benchmarks/results/<run>/source/<sha>/untracked/...), and pip clones
+          # into a ~95-character temp directory, so checkout overruns MAX_PATH
+          # and fails with "Filename too long" *after* a successful clone.
+          git config --global core.longpaths true
 
       - name: Install ldpred3 and bipred with Numba
         run: |
@@ -208,6 +220,12 @@ jobs:
           git config --global \
             url."https://x-access-token:${TOKEN}@github.com/".insteadOf \
             "https://github.com/"
+          # Windows only in effect, harmless elsewhere. ldpred3's benchmark
+          # archive carries a 187-character path
+          # (benchmarks/results/<run>/source/<sha>/untracked/...), and pip clones
+          # into a ~95-character temp directory, so checkout overruns MAX_PATH
+          # and fails with "Filename too long" *after* a successful clone.
+          git config --global core.longpaths true
 
       - name: Install ldpred3 from master (not the pin)
         run: pip install "ldpred3[fast] @ git+https://github.com/bvilhjal/ldpred3.git@master"
@@ -260,6 +278,12 @@ jobs:
           git config --global \
             url."https://x-access-token:${TOKEN}@github.com/".insteadOf \
             "https://github.com/"
+          # Windows only in effect, harmless elsewhere. ldpred3's benchmark
+          # archive carries a 187-character path
+          # (benchmarks/results/<run>/source/<sha>/untracked/...), and pip clones
+          # into a ~95-character temp directory, so checkout overruns MAX_PATH
+          # and fails with "Filename too long" *after* a successful clone.
+          git config --global core.longpaths true
 
       - name: Build wheel and sdist
         run: |
