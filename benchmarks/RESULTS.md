@@ -7,7 +7,7 @@ so accuracy, timing and memory all come from one sweep. Re-run with
 
 Two things moved materially since the previous record:
 
-- **Table 10, the environmental-overlap stress test, is no longer a failure.**
+- **Table 11, the environmental-overlap stress test, is no longer a failure.**
   Joint-fit MAE was up to 0.86 there and is now at most 0.0242. The cause was
   the fit-time `ld_int8` default, which quantized the caller's dense LD
   internally; it now consumes it as given. That row was measuring in-fit LD
@@ -18,8 +18,9 @@ Two things moved materially since the previous record:
 Accuracy on the well-conditioned panels barely moved: joint MAE across all 30
 architecture cells went from 0.0122 to 0.0123.
 
-[External runs](#external-runs) (HAPNEST, SBayesS, `bivariate_demo`) were not
-regenerated and remain earlier measurements, as declared there.
+[External runs](#external-runs): `bivariate_demo` is now regenerated from a
+committed generator and moved with the rest; HAPNEST and SBayesS still need
+inputs this host does not have, as declared there.
 
 Simulation backend: msprime 1.4.2 (default where installed). The fallback
 bundled Numba coalescent (`benchmarks/_coalescent.py`) is available when
@@ -202,6 +203,41 @@ power-dependent: `noise_inflation=True` moves relative polygenicity from
 Univariate anchoring shows the same mixed pattern. These are diagnostics, not
 guaranteed corrections.
 
+Every sweep above holds the per-trait causal fraction at 0.1, so on its own it
+cannot say whether that overestimate is a property of the estimator or of that
+one architecture. Varying the causal fraction with the overlap target held fixed
+answers it: the bias is a function of polygenicity.
+
+**Table 8. Shared-fraction bias against per-trait polygenicity.** `rho_beta`
+target 0.8, `N=50k/20k`, eight replicates per cell.
+
+| Causal fraction | Shared-fraction target | Estimated ± SD | Bias | Relative polygenicity |
+|---:|---:|---:|---:|---:|
+| 0.01 | 0.25 | 0.283 ± 0.036 | +0.033 | 1.50 |
+| 0.01 | 0.50 | 0.571 ± 0.032 | +0.071 | 1.57 |
+| 0.01 | 0.75 | 0.799 ± 0.062 | +0.049 | 1.64 |
+| 0.03 | 0.25 | 0.272 ± 0.042 | +0.022 | 1.34 |
+| 0.03 | 0.50 | 0.535 ± 0.049 | +0.035 | 1.30 |
+| 0.03 | 0.75 | 0.769 ± 0.077 | +0.019 | 1.36 |
+| 0.10 | 0.25 | 0.305 ± 0.046 | +0.055 | 1.25 |
+| 0.10 | 0.50 | 0.617 ± 0.065 | +0.117 | 1.27 |
+| 0.10 | 0.75 | 0.843 ± 0.041 | +0.093 | 1.24 |
+| 0.30 | 0.25 | 0.430 ± 0.062 | +0.180 | 0.98 |
+| 0.30 | 0.50 | 0.780 ± 0.034 | +0.280 | 1.04 |
+| 0.30 | 0.75 | 0.964 ± 0.017 | +0.214 | 1.03 |
+
+Mean bias by causal fraction: **+0.051** at 0.01, **+0.025** at 0.03,
+**+0.088** at 0.10, **+0.225** at 0.30. The SD column is the spread of a single
+replicate, which is what one fit of one dataset actually sees, so compare the
+bias against it rather than against a standard error. At 0.03 every cell's bias
+is smaller than that spread and would not be visible in practice; at 0.30 it is
+2.9 to 12.6 times the spread, and those fits also trip the package's own
+implausible-fit warning (fitted causal fraction ≈ 0.5). The minimum sits near
+0.03 rather than at the sparse end: at 0.01 only 50 variants per trait are
+causal, and both the bias and the count inflation (relative polygenicity 1.50 to
+1.64, the worst in the table) grow again. Read a reported `frac_shared` with the
+fitted polygenicity beside it.
+
 **Figure 5. MiXeR-style overlap and count diagnostics.**
 
 ![MiXeR-style overlap](mixer_overlap.png)
@@ -211,7 +247,7 @@ guaranteed corrections.
 In the higher-power idealized run, known `cross_corr` nearly removes the paired
 shift introduced by correlated sampling noise.
 
-**Table 8. Paired overlap shift relative to the no-overlap cell.**
+**Table 9. Paired overlap shift relative to the no-overlap cell.**
 
 | Target | Noise correlation | Shift with `cross_corr=0` | Shift with known `cross_corr` | MAE, unset / set |
 |---:|---:|---:|---:|---:|
@@ -223,7 +259,7 @@ shift introduced by correlated sampling noise.
 At lower power (`N=15k/15k`, eight replicates), Monte Carlo variation dominates
 the expected shift and setting the correction is not uniformly closer.
 
-**Table 9. Lower-power sample-overlap MAE.**
+**Table 10. Lower-power sample-overlap MAE.**
 
 | Target | Realized r_g, mean ± SD | LDSC constrained / free | Joint unset / set |
 |---:|---:|---:|---:|
@@ -239,7 +275,7 @@ mapping remains assumption-dependent; see [`docs/rg.md`](../docs/rg.md).
 The individual-genotype stress test uses the same 20,000 people for both traits
 and correlates their residual environments.
 
-**Table 10. Paired MAE against realized genetic correlation.**
+**Table 11. Paired MAE against realized genetic correlation.**
 
 | Target | Environmental correlation | Realized r_g | LDSC free / constrained | Joint unset / set |
 |---:|---:|---:|---:|---:|
@@ -268,20 +304,51 @@ simulated stress test — but the specific failure this table documented is
 resolved, and the lesson is about quantizing LD inside a fit, not about
 environmental correlation.
 
+## 8. Joint-fit gain on an under-powered trait
+
+`bivariate_demo.py` is the one run whose LD comes from a stored archive rather
+than from the suite's own cache, which is why it is not part of `run_all.sh`.
+Build the archive first — it is gitignored because it is large — and run the
+demo from the directory holding it:
+
+```text
+python benchmarks/make_ld_library.py          # writes ./ld_library.npz
+python benchmarks/bivariate_demo.py
+```
+
+Trait 2 is deliberately under-powered (`N=2,000` against trait 1's `100,000`,
+h²=0.5 each, m=6,000, six replicates). The question is whether fitting it
+jointly with the strong trait beats fitting it alone.
+
+**Table 12. Trait-2 genetic R² alone and jointly.**
+
+| Architecture | Alone | Joint | Gain | Estimated r_g |
+|---|---:|---:|---:|---:|
+| shared causal, target r_g 0.0 | 0.583 | 0.596 | +0.013 | +0.00 |
+| shared causal, target r_g 0.3 | 0.581 | 0.609 | +0.028 | +0.29 |
+| shared causal, target r_g 0.6 | 0.577 | 0.660 | +0.082 | +0.55 |
+| shared causal, target r_g 0.9 | 0.570 | 0.771 | +0.200 | +0.77 |
+| disjoint causal variants | 0.584 | 0.584 | +0.000 | −0.03 |
+
+The gain rises monotonically with shared signal and is exactly zero when the
+causal sets are disjoint — the joint fit does not borrow strength that is not
+there.
+
+**The 0.2.1 record of this run said the LD library needed 5% spectral
+shrinkage to fit at all. It does not, and that claim was another instance of
+Bug 1.** Three runs separate the two causes. Holding the old shrunk library
+fixed and restoring the 0.2.1 `ld_int8` default reproduces the 0.2.1 row
+exactly (+0.006 / +0.014 / +0.034 / +0.082, `rg_est` −0.02 / +0.23 / +0.49 /
++0.79); the same library under the current default gives +0.011 / +0.018 /
++0.055 / +0.123; and the unshrunk library `make_ld_library.py` actually
+produces gives the table above. So in-fit quantization cost this demo roughly
+a third of its gain at r_g 0.9, and the committed generator's library — 59 to
+96 of 500 eigenvalues below 1e-4 per block, near-singular by any
+reading — fits without shrinkage and scores best of the three. The library
+that collapsed at 0.2.1 was a different, more degenerate artifact than the one
+the committed script builds, which is the reason that script now exists.
+
 ## External runs
-
-Not regenerated for 0.3.0; these remain 0.2.1 measurements:
-
-- `bivariate_demo.py` — rerun with an `ld_library.npz` generated from the
-  repository simulator (12 blocks of 500 variants, 5% spectral shrinkage).
-  The shrinkage turned out to be load-bearing: an unshrunk coalescent
-  correlation library is near-singular (244-320 of 500 eigenvalues below
-  1e-4 per block), on which the joint sampler inflates the causal fraction
-  and collapses h² to zero — the fit's own `RuntimeWarning` names exactly
-  this failure mode. With the conditioned library the demo's narrative
-  reproduces: joint-fit gain rises with true `rg` (+0.006 / +0.014 / +0.034 /
-  +0.082 at true rg 0.0 / 0.3 / 0.6 / 0.9, `rg_est` −0.02 / +0.23 / +0.49 /
-  +0.79) with no harm at rg 0.0 or on disjoint causal variants.
 
 Not regenerated (inputs unavailable on this host):
 

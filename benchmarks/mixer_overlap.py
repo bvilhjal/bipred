@@ -18,6 +18,12 @@ fresh-phenotype replicates on fixed genotypes:
     polygenicity; the headline MiXeR quantity. Checks frac_shared + rg tracking.
   * ``rho``      -- vary the within-shared effect correlation; checks rho_beta
     and that rg = rho_beta * overlap.
+  * ``polygenicity`` -- vary the per-trait causal fraction with the overlap held
+    fixed. Every other sweep here sits at p=0.10, so the ``overlap`` sweep's
+    upward bias in ``frac_shared`` could belong to the estimator or to that one
+    architecture. It is **not** a constant: the bias is a function of
+    polygenicity, small where the causal set is sparse and large where it is
+    dense, which is what decides whether a reported overlap can be read at all.
   * ``power``    -- vary N (hence N*h2/M) at fixed architecture; shows how much
     signal the overlap estimate needs to be meaningful.
   * ``ldmatch``  -- fit the same data on the finite reference panel vs the **exact
@@ -40,7 +46,8 @@ rather than assuming calibration or robustness from model structure alone.
 
     OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python benchmarks/mixer_overlap.py
 
-Env overrides: ``SWEEP`` (overlap,rho,power,ldmatch,calibration,unical or a subset), ``REPS``,
+Env overrides: ``SWEEP`` (overlap,rho,polygenicity,power,ldmatch,calibration,unical
+or a subset), ``REPS``,
 ``OUT``, plus ``NB`` / ``K`` / ``MUT_RATE`` (via rg_architectures) to change ``m``.
 """
 import os
@@ -63,6 +70,10 @@ BURN, ITER = 200, 300
 
 # Per-trait causal count for the overlap / rho / power sweeps (fixed p per trait).
 NCAUSAL = max(int(round(0.10 * M)), 20)     # p = 0.10 per trait
+
+# Per-trait causal fractions for the polygenicity sweep, spanning sparse to
+# dense on the same panel. All four land on an exact count at this m.
+P_GRID = (0.01, 0.03, 0.10, 0.30)
 
 # The exact population LD the sumstats are generated from (the in-sample / oracle
 # LD, zero reference mismatch), for the ld-match control sweep.
@@ -177,6 +188,43 @@ def sweep_rho(rows):
               f"| {r['frac_shared_hat']:>6.2f}±{r['frac_shared_sd']:<5} | "
               f"{r['rg_target']:>5.2f}/{r['rg_realized']:<5.2f} "
               f"{r['rg_hat']:>6.2f}±{r['rg_sd']:<5}", flush=True)
+
+
+def sweep_polygenicity(rows):
+    """How the ``frac_shared`` bias moves with per-trait polygenicity.
+
+    The other sweeps hold p at 0.10, so the overlap sweep alone cannot say
+    whether its upward bias is a fixed property of the estimator. Vary p over two
+    orders of magnitude with the overlap target held at three values, and the
+    bias is not fixed: it tracks polygenicity. Read the ``bias`` column against
+    the ``sd`` beside it -- a bias inside one sampling SD is not a finding, and
+    the point of the sweep is where that stops being true.
+    """
+    print("\n== polygenicity sweep (rho_beta=0.8, "
+          f"N={R.N1}/{R.N2}) ==", flush=True)
+    print(f"{'p/trait':>8} {'causal':>7} {'target':>7} | {'frac_shared':>13} "
+          f"{'bias':>7} | {'rel_poly':>8} | {'rg real/hat':>13}", flush=True)
+    for i, p in enumerate(P_GRID):
+        n_causal = max(int(round(p * M)), 20)
+        for j, frac in enumerate([0.25, 0.5, 0.75]):
+            r = _cell(n_causal, frac, 0.8, R.N1, R.N2,
+                      base_seed=7000 + 200 * i + 20 * j)
+            r["sweep"] = "polygenicity"
+            # The requested p is recovered exactly by true_pi1 = n_causal / M,
+            # so the grid needs no column of its own.
+            rows.append(r)
+            print(f"{p:>8.2f} {n_causal:>7} {frac:>7.2f} | "
+                  f"{r['frac_shared_hat']:>6.2f}±{r['frac_shared_sd']:<6} "
+                  f"{r['frac_shared_hat'] - frac:>+7.3f} | "
+                  f"{r['rel_poly']:>8.2f} | "
+                  f"{r['rg_realized']:>5.2f}/{r['rg_hat']:<5.2f}", flush=True)
+        mean_bias = float(np.mean([row["frac_shared_hat"]
+                                   - row["frac_shared_target"]
+                                   for row in rows
+                                   if row["sweep"] == "polygenicity"
+                                   and row["true_pi1"] == round(n_causal / M, 3)]))
+        print(f"{'':8} {'':7} {'mean':>7} | {'':13} {mean_bias:>+7.3f}",
+              flush=True)
 
 
 def sweep_power(rows):
@@ -359,7 +407,8 @@ def sweep_unical(rows):
               f"{r['rg_realized']:>5.2f}/{r['rg_hat']:<5.2f}", flush=True)
 
 
-SWEEPS = {"overlap": sweep_overlap, "rho": sweep_rho, "power": sweep_power,
+SWEEPS = {"overlap": sweep_overlap, "rho": sweep_rho,
+          "polygenicity": sweep_polygenicity, "power": sweep_power,
           "ldmatch": sweep_ldmatch, "calibration": sweep_calibration,
           "unical": sweep_unical}
 
@@ -381,10 +430,11 @@ def make_figure(rows):
         return
     ov = [r for r in rows if r["sweep"] == "overlap"]
     rh = [r for r in rows if r["sweep"] == "rho"]
+    pg = [r for r in rows if r["sweep"] == "polygenicity"]
     pw = [r for r in rows if r["sweep"] == "power"]
     lm = [r for r in rows if r["sweep"] == "ldmatch"]
     uc = [r for r in rows if r["sweep"] == "unical"]
-    npan = sum(bool(g) for g in (ov, rh, pw, lm, uc))
+    npan = sum(bool(g) for g in (ov, rh, pg, pw, lm, uc))
     if npan == 0:
         return
     fig, ax = plt.subplots(1, npan, figsize=(3.7 * npan, 3.6))
@@ -417,6 +467,21 @@ def make_figure(rows):
                    color="C3", label="rg")
         a.set_xlabel("target rho_beta / mean realized rg")
         a.set_title("rho_beta sweep")
+        a.legend(fontsize=8)
+    if pg:
+        a = next(panels)
+        a.axhline(0.0, ls=":", c="k", lw=1, alpha=.6)
+        for frac, colour in zip((0.25, 0.5, 0.75), ("C0", "C2", "C3")):
+            cells = [r for r in pg if r["frac_shared_target"] == frac]
+            a.errorbar([r["true_pi1"] for r in cells],
+                       [r["frac_shared_hat"] - frac for r in cells],
+                       [r["frac_shared_sd"] for r in cells],
+                       fmt="o-", ms=4, capsize=2, color=colour,
+                       label=f"target {frac:g}")
+        a.set_xscale("log")
+        a.set_xlabel("causal fraction per trait")
+        a.set_ylabel("frac_shared: est − true")
+        a.set_title("polygenicity sweep")
         a.legend(fontsize=8)
     if pw:
         a = next(panels)
@@ -482,7 +547,8 @@ def _warmup():
 
 def main():
     which = os.environ.get(
-        "SWEEP", "overlap,rho,power,ldmatch,calibration,unical").split(",")
+        "SWEEP",
+        "overlap,rho,polygenicity,power,ldmatch,calibration,unical").split(",")
     base = os.environ.get("OUT", "mixer_overlap")
     csv_path = os.path.join(HERE, base + ".csv")
     print(f"MiXeR-style overlap recovery — realistic LD (m={M}, {R.NB} blocks, "

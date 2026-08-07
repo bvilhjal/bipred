@@ -177,7 +177,7 @@ def test_results_environmental_overlap_table_matches_its_csv():
     rows = list(csv.DictReader((root / "rg_env_overlap.csv").open()))
     table = _markdown_table_after(
         (root / "RESULTS.md").read_text(encoding="utf-8"),
-        "**Table 10. Paired MAE against realized genetic correlation.**",
+        "**Table 11. Paired MAE against realized genetic correlation.**",
     )
     assert len(table) == len(rows)
 
@@ -200,6 +200,69 @@ def test_results_environmental_overlap_table_matches_its_csv():
     # The claim itself: no cell may exceed the bound the prose states.
     worst = max(float(r["biv_cc0_mae_realized"]) for r in rows)
     assert worst <= 0.0242 + 1e-9, worst
+
+
+def test_results_polygenicity_table_matches_its_csv():
+    """Table 8 is the evidence that the shared-fraction bias is not a constant.
+
+    Its whole point is a comparison between two columns -- the bias and the
+    replicate spread beside it -- so a transcription slip in either one would
+    invert the reading. The derived columns (bias, and the mean-bias sentence
+    below the table) are recomputed here rather than trusted.
+    """
+    import csv
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parent.parent / "benchmarks"
+    rows = [r for r in csv.DictReader((root / "mixer_overlap.csv").open())
+            if r["sweep"] == "polygenicity"]
+    text = (root / "RESULTS.md").read_text(encoding="utf-8")
+    table = _markdown_table_after(
+        text, "**Table 8. Shared-fraction bias against per-trait polygenicity.**")
+    assert len(table) == len(rows) == 12
+
+    def close(cell, value):
+        digits = len(cell.partition(".")[2])
+        return abs(float(cell) - value) <= 0.5 * 10.0 ** -digits * (1.0 + 1e-9)
+
+    for printed, record in zip(table, rows):
+        fraction, target, estimate, bias, relative = printed
+        shown, spread = (c.strip() for c in estimate.split("±"))
+        hat = float(record["frac_shared_hat"])
+        goal = float(record["frac_shared_target"])
+        assert close(fraction, float(record["true_pi1"])), printed
+        assert close(target, goal), printed
+        assert close(shown, hat), printed
+        assert close(spread, float(record["frac_shared_sd"])), printed
+        assert close(relative, float(record["rel_poly"])), printed
+        # The bias column is derived, so recompute it instead of transcribing.
+        assert close(bias, hat - goal), printed
+
+    def biases(fraction):
+        return [float(r["frac_shared_hat"]) - float(r["frac_shared_target"])
+                for r in rows if abs(float(r["true_pi1"]) - fraction) < 1e-9]
+
+    printed_means = re.search(
+        r"Mean bias by causal fraction: (.+?)\.\s", text, re.S).group(1)
+    found = dict(zip((0.01, 0.03, 0.10, 0.30),
+                     re.findall(r"\*\*([+-][\d.]+)\*\*", printed_means)))
+    assert len(found) == 4, printed_means
+    for fraction, cell in found.items():
+        mean = sum(biases(fraction)) / len(biases(fraction))
+        assert close(cell.lstrip("+"), mean), (fraction, cell, mean)
+
+    # The two claims the section is built on, asserted against the CSV.
+    assert all(b < float(r["frac_shared_sd"])
+               for r, b in zip([r for r in rows
+                                if abs(float(r["true_pi1"]) - 0.03) < 1e-9],
+                               biases(0.03))), "0.03 bias should be under 1 SD"
+    ratios = [b / float(r["frac_shared_sd"])
+              for r, b in zip([r for r in rows
+                               if abs(float(r["true_pi1"]) - 0.30) < 1e-9],
+                              biases(0.30))]
+    # The prose quotes this range to one decimal; hold it to that.
+    assert (round(min(ratios), 1), round(max(ratios), 1)) == (2.9, 12.6), ratios
 
 
 def test_architecture_cache_key_names_the_simulator_schema():

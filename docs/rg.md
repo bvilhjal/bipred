@@ -128,7 +128,7 @@ not precise overlap detectors. Through 0.2.1 this regime looked far worse than
 it is — the stress test measured joint-fit MAE up to 0.86 — but that was an
 artifact of the fit quantizing its LD internally, and with the current
 `ld_int8=False` default the same cells land between 0.0072 and 0.0242
-(`benchmarks/RESULTS.md`, Table 10). Setting `cross_corr` from external evidence
+(`benchmarks/RESULTS.md`, Table 11). Setting `cross_corr` from external evidence
 still helps; it is no longer compensating for a defect.
 
 With `noise_inflation=True`, bipred replaces each `N_t` by `N_t / lambda_t` in
@@ -207,6 +207,15 @@ rg_from_overlap = rho_beta pi11 / sqrt(pi1 pi2)
 Start with `frac_shared`, `rho_beta`, and `rg_from_overlap`. Absolute
 `n_causal` and `n_shared` counts are approximate because LD can spread
 inclusion mass and reference mismatch can inflate it.
+
+`frac_shared` is biased upward, and the bias is a function of polygenicity
+rather than a fixed offset that could be subtracted: on the committed sweep it
+is +0.03 for traits with 3% causal variants, +0.09 at 10% and +0.23 at 30%
+(`benchmarks/RESULTS.md`, Table 8). Only the last is large against the spread
+of a single fit, so the practical rule is to read `frac_shared` next to the
+fitted polygenicity: at low polygenicity take it near face value; on a dense
+trait treat it as an upper bound. Comparing two traits at very different
+polygenicity compares two different biases.
 
 For count-sensitive analyses, compare rather than presume:
 

@@ -14,9 +14,10 @@ installed to run the benchmarks.
 
 [`RESULTS.md`](RESULTS.md) records a full regeneration: every self-contained
 script was re-run end to end, so accuracy, timing and memory columns all come
-from one sweep rather than from two snapshots spliced together. Its "External
-runs" section (HAPNEST, SBayesS, `bivariate_demo`) still holds its earlier
-measurements, and says so. The CSV files are the authoritative numeric record;
+from one sweep rather than from two snapshots spliced together. `bivariate_demo`
+is regenerated too, from the archive `make_ld_library.py` builds; only the
+"External runs" section (HAPNEST, SBayesS) still needs inputs this host lacks,
+and says so. The CSV files are the authoritative numeric record;
 the prose tables are transcribed from them, and
 `tests/test_benchmark_simulate.py` re-derives Table 6 from its CSV so the two
 cannot silently desynchronise again.
@@ -41,8 +42,9 @@ simulation and plotting scripts:
 python -m pip install -e ".[fast,bench]"
 ```
 
-`[sim]` is deliberately narrower: it installs `msprime` only. HAPNEST and
-`bivariate_demo.py` still require the external inputs described below.
+`[sim]` is deliberately narrower: it installs `msprime` only. HAPNEST still
+requires the external inputs described below; `bivariate_demo.py` needs only
+`make_ld_library.py` run first.
 
 Run single-core for stable timings on POSIX shells:
 
@@ -88,10 +90,10 @@ alibi.
 | `rg_polygenicity.py` | Realized-truth recovery as the causal fraction falls from 0.1 to 1e-4; expected and observed causal counts (→ `rg_polygenicity.{csv,png}`) | opt |
 | `rg_methods.py` | LDSC, `uni_gv`, `uni_r2`, the default joint fit, and `rg_decorrelated=True` under symmetric and asymmetric power, plus timing versus m (→ `rg_methods.{csv,png}`, `rg_methods_timing.csv`) | opt |
 | `rg_scaling.py` | Per-fit time, peak RSS, and single-draw recovery versus m, one subprocess per size (→ `rg_scaling.{csv,png}`) | opt |
-| `mixer_overlap.py` | MiXeR-style overlap, effect correlation, joint and overlap-derived r_g, LD matching, noise inflation, and univariate count anchoring (→ `mixer_overlap.{csv,png}`) | opt |
+| `mixer_overlap.py` | MiXeR-style overlap, effect correlation, shared-fraction bias versus per-trait polygenicity, LD matching, noise inflation, and univariate count anchoring (→ `mixer_overlap.{csv,png}`) | opt |
 | `overlap_estimation.py` | Paired effect of known sample-overlap `cross_corr`; it does not validate LDSC-intercept inversion (→ `overlap_estimation.csv`) | opt |
 | `sample_overlap.py` | Lower-power comparison of free/constrained LDSC and unset/set bivariate overlap corrections (→ `sample_overlap.csv`) | opt |
-| `bivariate_demo.py` | Bivariate prediction gain for a weak trait across two-trait architectures (needs `ld_library.npz` in the cwd) | — |
+| `bivariate_demo.py` | Bivariate prediction gain for a weak trait across two-trait architectures (needs `ld_library.npz` in the cwd, from `make_ld_library.py`) | — |
 | `rg_env_overlap.py` | Individual-genotype stress test under **environmental** correlation on shared samples; records paired MAE and failures after the `|r_g| <= 1.5` diagnostic window (→ `rg_env_overlap.csv`) | opt |
 | `hapnest/run_bivariate.py` | rg / h² / MiXeR-overlap recovery **and** out-of-sample PRS gain (bivariate vs univariate) on **HAPNEST** genotypes+phenotypes — synthetic genomes resampled from a real 1000G+HGDP reference, so real LD/MAF/structure with known truth (→ `hapnest/run_bivariate.csv`). See [`hapnest/README.md`](hapnest/README.md). | — (needs HAPNEST) |
 
@@ -111,11 +113,13 @@ can `import infer_vs_ldsc_sbayes` at runtime.
 | `rg_methods` | 10 | ✓ |
 | `rg_methods_timing` | 3 | — |
 | `rg_scaling` | 5 | ✓ |
-| `mixer_overlap` | 29 | ✓ |
+| `mixer_overlap` | 41 | ✓ |
 | `overlap_estimation` | 6 | — |
 | `sample_overlap` | 3 | — |
 | `rg_env_overlap` | 5 | — |
 
-That is nine CSVs and five PNGs. `bivariate_demo.py`, HAPNEST, and standalone
+That is nine CSVs and five PNGs. `bivariate_demo.py` writes no artifact — its
+table is transcribed into [`RESULTS.md`](RESULTS.md) §8 — and needs
+`make_ld_library.py` run first. HAPNEST and standalone
 `infer_vs_ldsc_sbayes.py` require the external inputs named in
 [`RESULTS.md`](RESULTS.md).

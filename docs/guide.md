@@ -52,7 +52,7 @@ roughly the causal fraction of visits — about 1% here. That guard is why this
 table is sensitive to the fit: on a degenerate one, where nearly every variant is
 called causal, the same comparison makes int8 look 1.5× slower. Timings taken
 against unstructured noise will mislead you for that reason, and quantizing the
-LD *inside* the fit does more than mislead — see `benchmarks/RESULTS.md` Table 10.
+LD *inside* the fit does more than mislead — see `benchmarks/RESULTS.md` Table 11.
 
 Low-rank cost scales with rank rather than block size, so it wins on large
 blocks and loses on small ones. This benchmark uses a near-full rank (481 of a
@@ -144,7 +144,10 @@ mx["n_causal"], mx["n_shared"]
 
 Ratios avoid the literal causal-count interpretation but still need calibration.
 LD can spread inclusion mass to correlated neighbours, while reference mismatch
-can add inflation. For count-sensitive work, compare `noise_inflation=True` and
+can add inflation. `frac_shared` runs high by an amount that grows with
+polygenicity — +0.03 at a 3% causal fraction, +0.23 at 30% — so read it beside
+the fitted `p` rather than as a fixed offset; see [`rg.md`](rg.md). For
+count-sensitive work, compare `noise_inflation=True` and
 `res.mixer_calibrated(infer1, infer2)` with the unadjusted result; neither is
 guaranteed to improve calibration at every power setting.
 
