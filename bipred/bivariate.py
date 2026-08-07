@@ -22,12 +22,13 @@ sampling errors); the default 0 assumes uncorrelated cross-trait sampling errors
 A cross-trait LDSC intercept can reflect overlap but also correlated confounding,
 so it is not automatically interchangeable with this correlation.
 
-A distinct failure mode sits with this parameter: a strong **environmental**
-correlation between the traits (shared non-genetic effects) can dominate the
-fit — the 0.2.0 environmental-overlap stress test measured joint-fit MAE up to
-0.86 in that regime (``benchmarks/RESULTS.md``, Table 10). If the traits
-plausibly share environmental correlation, set ``cross_corr`` from external
-evidence rather than leaving it at the default 0.
+Through 0.2.1 a strong **environmental** correlation between the traits (shared
+non-genetic effects) appeared to dominate the fit, at joint-fit MAE up to 0.86.
+That was an artifact of quantising the LD inside the fit: with the caller's
+float32 LD consumed as given, the same stress test lands between 0.0072 and
+0.0242 (``benchmarks/RESULTS.md``, Table 10). Setting ``cross_corr`` from
+external evidence remains worthwhile when the traits plausibly share
+environment, but it is no longer rescuing a broken fit.
 """
 
 from __future__ import annotations
@@ -303,7 +304,8 @@ def _prepare_block(R, ld_int8):
     most 1500 variants -- both allocate a fresh int8 array per block *inside the
     fit*, while the caller's panel is still alive. That measured 78.4 MB of peak
     against 13.1 MB at m=100,000 with 500-variant blocks, and the extra payload
-    is k/2 bytes per variant, so ~500 MB at m=1,000,000. Quantise when the LD is
+    is k bytes per variant -- measured 121 bytes/variant by default against 621
+    with ``ld_int8=True`` -- so ~500 MB at m=1,000,000. Quantise when the LD is
     built (``compute_ld_blocks(quantize=True)``), where the float source is
     private and discardable, rather than here.
 

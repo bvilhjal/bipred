@@ -65,12 +65,25 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 ### Changed
 
-- **`ld_int8` now defaults to `False`: dense blocks are consumed in the
-  representation they arrive in.** The previous default quantised float blocks
+- **`ld_int8` now defaults to `False`, which also resolves the package's worst
+  documented failure mode.** The environmental-overlap stress test
+  (`benchmarks/RESULTS.md` Table 10) recorded joint-fit MAE up to 0.86 under
+  strong shared environment, and that was read as a limit of the model. It was
+  not: it was in-fit LD quantization. Re-running the current code with
+  `ld_int8=True` reproduces the old row byte for byte (0.1733 / 0.0166 / 0.3101
+  / 0.8343 / 0.8603); with the float32 default every cell lands between 0.0072
+  and 0.0242, a 36x improvement in the worst one. The int8 resolution (~4e-3 per
+  LD entry) is enough to destabilize a fit whose conditioning is already
+  stressed, while costing nothing measurable on the well-conditioned panels of
+  Tables 2-7 (joint MAE across all 30 architecture cells moved 0.0122 to 0.0123).
+
+  Mechanically, dense blocks are now consumed in the representation they arrive
+  in. The previous default quantised float blocks
   of at most 1,500 variants *inside the fit*, allocating a second genome-scale
   int8 payload while the caller's panel was still alive. Measured peak inside
   the call at m=100,000 / k=500: **78.4 MB before, 13.1 MB after** — the extra
-  payload is k/2 bytes per variant, so roughly 500 MB at m=1,000,000. This
+  payload is `k` bytes per variant -- measured 121 bytes/variant by default
+  against 621 with `ld_int8=True` at k=500 -- so roughly 500 MB at m=1,000,000. This
   follows ldpred3, whose fit-time default is also `False` and which quantises at
   LD-build time, where the float source is private and discardable: prefer
   `ldpred3.compute_ld_blocks(quantize=True)`. `ld_int8=True` and `None` are

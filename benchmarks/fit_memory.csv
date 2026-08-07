@@ -1,0 +1,9 @@
+representation,m,k,ld_int8,payload_mb,fit_peak_mb,fit_peak_bytes_per_variant
+dense_f32,50000,500,default,1.0,6.062413,121.24826
+dense_f32,50000,500,True,1.0,31.068833,621.37666
+dense_f32,100000,500,default,1.0,12.094414,120.94414
+dense_f32,100000,500,True,1.0,62.122665,621.22665
+dense_i8,50000,500,default,0.25,6.05083,121.0166
+dense_i8,100000,500,default,0.25,12.096227,120.96227
+lr8_0.99 (rank 481),50000,500,default,0.2425,7.0346,140.692
+lr8_0.99 (rank 481),100000,500,default,0.2425,13.099034,130.99034

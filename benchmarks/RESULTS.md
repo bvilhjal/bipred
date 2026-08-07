@@ -1,12 +1,25 @@
 # Benchmarks for bipred 0.2.1
 
-These artifacts were regenerated on 2026-08-04 from benchmark source revision
-`63c8774` (bipred 0.2.1), against the same cached simulation truths as the
-2026-08-03 snapshot (revision `17d6ae2`, bipred 0.2.0). Every accuracy column
-is byte-identical to that snapshot; only the timing and memory columns
-(`*_t`, `peak_gb`, `t_ldpred3_s`, `t_ldsc_s`) and the figures moved.
-[External runs](#external-runs) (HAPNEST, SBayesS) were not regenerated and
-remain 0.2.0 measurements, as declared there.
+Every self-contained script was re-run end to end for this record, against the
+same cached coalescent truths as the 2026-08-03 snapshot (revision `17d6ae2`),
+so accuracy, timing and memory all come from one sweep. Re-run with
+`bash benchmarks/run_all.sh`; the CSVs are the authoritative numbers.
+
+Two things moved materially since the previous record:
+
+- **Table 10, the environmental-overlap stress test, is no longer a failure.**
+  Joint-fit MAE was up to 0.86 there and is now at most 0.0242. The cause was
+  the fit-time `ld_int8` default, which quantized the caller's dense LD
+  internally; it now consumes it as given. That row was measuring in-fit LD
+  quantization, not the model — see the table's own note.
+- Joint-fit timings roughly halved, from the low-rank `fastmath` and LR8
+  widening ports. Unrelated to the default change.
+
+Accuracy on the well-conditioned panels barely moved: joint MAE across all 30
+architecture cells went from 0.0122 to 0.0123.
+
+[External runs](#external-runs) (HAPNEST, SBayesS, `bivariate_demo`) were not
+regenerated and remain earlier measurements, as declared there.
 
 Simulation backend: msprime 1.4.2 (default where installed). The fallback
 bundled Numba coalescent (`benchmarks/_coalescent.py`) is available when
@@ -19,7 +32,7 @@ segments are tagged per backend and never mix.
 |---|---|
 | Python | 3.14.6 |
 | bipred | 0.2.1 |
-| ldpred3 | 0.4.3 |
+| ldpred3 | 0.4.5 |
 | NumPy / Numba | 2.4.6 / 0.66.0 |
 | msprime / Matplotlib | 1.4.2 / 3.11.1 |
 | Platform | Darwin 25.5.0, arm64 |
@@ -66,17 +79,17 @@ correlation, then averaged over the six targets.
 
 | Architecture | LDSC MAE | LDpred3 MAE | LDSC mean SD | LDpred3 mean SD | Failures, LDSC / LDpred3 |
 |---|---:|---:|---:|---:|---:|
-| infinitesimal | 0.0289 | 0.0215 | 0.0448 | 0.0238 | 0 / 0 |
+| infinitesimal | 0.0289 | 0.0218 | 0.0448 | 0.0239 | 0 / 0 |
 | sparse | 0.0914 | 0.0075 | 0.1434 | 0.0990 | 0 / 0 |
-| moderate | 0.0583 | 0.0108 | 0.0800 | 0.0460 | 0 / 0 |
-| polygenic | 0.0484 | 0.0134 | 0.0802 | 0.0325 | 0 / 0 |
-| major locus | 0.0989 | 0.0079 | 0.1748 | 0.1152 | 4 / 0 |
-| **All cells** | **0.0652** | **0.0122** | **0.1047** | **0.0633** | **4 / 0** |
+| moderate | 0.0583 | 0.0108 | 0.0800 | 0.0459 | 0 / 0 |
+| polygenic | 0.0484 | 0.0135 | 0.0802 | 0.0324 | 0 / 0 |
+| major locus | 0.0989 | 0.0081 | 0.1748 | 0.1152 | 4 / 0 |
+| **All cells** | **0.0652** | **0.0123** | **0.1047** | **0.0633** | **4 / 0** |
 
 Within this likelihood-matched simulation, the joint fit has lower paired MAE
 in 26 of 30 cells and lower SD in all 30. It does not win everywhere:
 high-correlation shrinkage is visible. In the infinitesimal target-0.95 cell,
-realized r_g was 0.9509, while the joint and LDSC means were 0.8998 and 0.9474.
+realized r_g was 0.9509, while the joint and LDSC means were 0.9001 and 0.9474.
 This is evidence for the tested model and geometry, not a universal ranking over
 real GWAS.
 
@@ -94,10 +107,10 @@ variant.
 
 | Causal fraction | Expected / observed causal count | Realized r_g, mean ± SD | LDSC MAE | LDpred3 MAE | Failures, LDSC / LDpred3 |
 |---:|---:|---:|---:|---:|---:|
-| 0.1 | 500.0 / 492.6 | 0.494 ± 0.030 | 0.0491 | 0.0089 | 0 / 0 |
-| 0.01 | 50.0 / 45.2 | 0.425 ± 0.071 | 0.1734 | 0.0105 | 0 / 0 |
-| 0.001 | 5.007 / 3.6 | 0.320 ± 0.589 | 0.3159 | 0.0107 | 0 / 0 |
-| 0.0001 | 1.107 / 1.0 | 0.600 ± 0.800 | 0.2448 | 0.0043 | 3 / 0 |
+| 0.1 | 500.0 / 492.6 | 0.493 ± 0.030 | 0.0491 | 0.0091 | 0 / 0 |
+| 0.01 | 50.0 / 45.2 | 0.424 ± 0.071 | 0.1734 | 0.0109 | 0 / 0 |
+| 0.001 | 5.007 / 3.6 | 0.320 ± 0.589 | 0.3159 | 0.0061 | 0 / 0 |
+| 0.0001 | 1.107 / 1.0 | 0.600 ± 0.800 | 0.2448 | 0.0150 | 3 / 0 |
 
 At one realized causal variant, genetic correlation is essentially a
 sign-dominated quantity. The large SD is not evidence that the target 0.5 was
@@ -116,11 +129,11 @@ The comparison uses five target points and six replicates at symmetric
 
 | Estimator | Symmetric MAE | Asymmetric MAE | Mean 5k fit time, symmetric |
 |---|---:|---:|---:|
-| LDSC | 0.0542 | 0.0608 | 0.054 s |
-| two univariate fits, `uni_gv` | 0.0190 | 0.0422 | 1.894 s |
-| two univariate fits, `uni_r2` | 0.0184 | 0.0420 | 1.894 s |
-| joint default | **0.0084** | **0.0174** | 0.240 s |
-| joint cross-sweep sensitivity | 0.0110 | 0.0240 | 0.265 s |
+| LDSC | 0.0542 | 0.0608 | 0.025 s |
+| two univariate fits, `uni_gv` | 0.0190 | 0.0422 | 1.014 s |
+| two univariate fits, `uni_r2` | 0.0184 | 0.0420 | 1.014 s |
+| joint default | **0.0086** | **0.0174** | 0.134 s |
+| joint cross-sweep sensitivity | 0.0108 | 0.0242 | 0.133 s |
 
 No estimator failed in these cells. The cross-sweep
 `rg_decorrelated=True` estimator did not improve on the default, including in
@@ -131,9 +144,9 @@ replacement.
 
 | Variants | Blocks | LDSC | Two univariate fits | Joint default | Joint cross-sweep |
 |---:|---:|---:|---:|---:|---:|
-| 5,000 | 25 | 0.033 s | 1.639 s | 0.233 s | 0.239 s |
-| 20,000 | 100 | 0.523 s | 6.206 s | 0.939 s | 0.932 s |
-| 50,000 | 250 | 3.367 s | 16.223 s | 2.365 s | 2.387 s |
+| 5,000 | 25 | 0.029 s | 1.040 s | 0.132 s | 0.132 s |
+| 20,000 | 100 | 0.353 s | 3.416 s | 0.514 s | 0.517 s |
+| 50,000 | 250 | 1.863 s | 9.030 s | 1.363 s | 1.380 s |
 
 `uni_gv` and `uni_r2` reuse the same two univariate fits, so their recorded cost
 is identical.
@@ -150,18 +163,17 @@ Each size runs in a fresh subprocess and reports one realized draw.
 
 | Variants | LDSC time | LDpred3 time | Peak RSS | Realized r_g | LDSC absolute error | LDpred3 absolute error |
 |---:|---:|---:|---:|---:|---:|---:|
-| 5,000 | 0.062 s | 0.241 s | 0.310 GB | 0.511 | 0.0399 | 0.0185 |
-| 10,000 | 0.192 s | 0.458 s | 0.351 GB | 0.519 | 0.0590 | 0.0031 |
-| 20,000 | 0.510 s | 0.888 s | 0.396 GB | 0.513 | 0.0332 | 0.0019 |
-| 40,000 | 2.193 s | 1.676 s | 0.495 GB | 0.518 | 0.0138 | 0.0021 |
-| 80,000 | 8.091 s | 3.293 s | 0.662 GB | 0.519 | 0.0632 | 0.0355 |
+| 5,000 | 0.021 s | 0.121 s | 0.211 GB | 0.511 | 0.0399 | 0.0172 |
+| 10,000 | 0.072 s | 0.235 s | 0.230 GB | 0.519 | 0.0590 | 0.0024 |
+| 20,000 | 0.321 s | 0.470 s | 0.364 GB | 0.513 | 0.0332 | 0.0005 |
+| 40,000 | 1.209 s | 1.018 s | 0.474 GB | 0.517 | 0.0138 | 0.0016 |
+| 80,000 | 4.889 s | 2.032 s | 0.619 GB | 0.519 | 0.0632 | 0.0322 |
 
-Peak RSS grows sublinearly across this range (0.31 GB to 0.66 GB for a 16x
+Peak RSS grows sublinearly across this range (0.21 GB to 0.62 GB for a 16x
 variant count). LDSC time grows faster than the joint fit's and overtakes it
-between 20k and 40k variants. The earlier 0.2.0 record showed a 2.51 GB spike
-at 80k; the regenerated run does not reproduce it, so treat single-run memory
-figures as machine- and allocator-dependent rather than as a property of the
-method. This sweep measures the default dense/Q8 path, not million-variant LR8
+between 20k and 40k variants. An earlier record showed a 2.51 GB spike at 80k;
+no run since has reproduced it, so treat single-run memory figures as machine-
+and allocator-dependent rather than as a property of the method. This sweep measures the default dense/Q8 path, not million-variant LR8
 production behavior.
 
 **Figure 4. Running time, memory, and single-draw recovery.**
@@ -177,11 +189,11 @@ effect-correlation target at 0.8.
 
 | Shared-fraction target | Estimated shared fraction ± SD | Realized r_g | Joint r_g / MAE | Overlap-derived r_g / MAE |
 |---:|---:|---:|---:|---:|
-| 0.00 | 0.041 ± 0.023 | -0.020 | -0.020 / 0.010 | -0.005 / 0.018 |
-| 0.25 | 0.343 ± 0.082 | 0.206 | 0.203 / 0.010 | 0.172 / 0.033 |
-| 0.50 | 0.595 ± 0.069 | 0.401 | 0.394 / 0.010 | 0.337 / 0.064 |
-| 0.75 | 0.854 ± 0.032 | 0.617 | 0.615 / 0.007 | 0.530 / 0.087 |
-| 1.00 | 0.988 ± 0.003 | 0.804 | 0.794 / 0.010 | 0.728 / 0.076 |
+| 0.00 | 0.039 ± 0.020 | -0.020 | -0.020 / 0.010 | -0.005 / 0.018 |
+| 0.25 | 0.344 ± 0.063 | 0.206 | 0.203 / 0.011 | 0.171 / 0.035 |
+| 0.50 | 0.605 ± 0.045 | 0.401 | 0.393 / 0.010 | 0.332 / 0.069 |
+| 0.75 | 0.854 ± 0.038 | 0.617 | 0.615 / 0.007 | 0.528 / 0.089 |
+| 1.00 | 0.985 ± 0.005 | 0.804 | 0.794 / 0.010 | 0.725 / 0.079 |
 
 The shared fraction is ordered but overestimates intermediate targets, while
 `rg_from_overlap` is attenuated. Absolute-count calibration is also
@@ -203,10 +215,10 @@ shift introduced by correlated sampling noise.
 
 | Target | Noise correlation | Shift with `cross_corr=0` | Shift with known `cross_corr` | MAE, unset / set |
 |---:|---:|---:|---:|---:|
-| 0.0 | 0.2 | 0.0132 ± 0.0013 | 0.0003 ± 0.0015 | 0.0105 / 0.0080 |
-| 0.0 | 0.4 | 0.0263 ± 0.0036 | 0.0003 ± 0.0037 | 0.0212 / 0.0085 |
-| 0.5 | 0.2 | 0.0118 ± 0.0020 | 0.0013 ± 0.0019 | 0.0088 / 0.0069 |
-| 0.5 | 0.4 | 0.0245 ± 0.0035 | 0.0013 ± 0.0038 | 0.0198 / 0.0068 |
+| 0.0 | 0.2 | 0.0128 ± 0.0017 | 0.0002 ± 0.0021 | 0.0102 / 0.0081 |
+| 0.0 | 0.4 | 0.0257 ± 0.0038 | 0.0002 ± 0.0038 | 0.0209 / 0.0086 |
+| 0.5 | 0.2 | 0.0119 ± 0.0021 | 0.0009 ± 0.0019 | 0.0090 / 0.0072 |
+| 0.5 | 0.4 | 0.0238 ± 0.0037 | 0.0011 ± 0.0038 | 0.0191 / 0.0071 |
 
 At lower power (`N=15k/15k`, eight replicates), Monte Carlo variation dominates
 the expected shift and setting the correction is not uniformly closer.
@@ -231,15 +243,30 @@ and correlates their residual environments.
 
 | Target | Environmental correlation | Realized r_g | LDSC free / constrained | Joint unset / set |
 |---:|---:|---:|---:|---:|
-| 0.0 | 0.0 | -0.022 | 0.0666 / 0.0353 | 0.1733 / 0.0637 |
-| 0.0 | 0.3 | -0.003 | 0.0622 / 0.0331 | 0.0166 / 0.0336 |
-| 0.0 | 0.6 | -0.003 | 0.0639 / 0.0297 | 0.3101 / 0.3061 |
-| 0.5 | 0.0 | 0.487 | 0.0389 / 0.0620 | 0.8343 / 0.3027 |
-| 0.5 | 0.6 | 0.494 | 0.0377 / 0.0633 | 0.8603 / 0.1821 |
+| 0.0 | 0.0 | -0.022 | 0.0666 / 0.0353 | 0.0126 / 0.0118 |
+| 0.0 | 0.3 | -0.003 | 0.0622 / 0.0331 | 0.0146 / 0.0105 |
+| 0.0 | 0.6 | -0.003 | 0.0639 / 0.0297 | 0.0185 / 0.0090 |
+| 0.5 | 0.487 | 0.487 | 0.0389 / 0.0620 | 0.0147 / 0.0082 |
+| 0.5 | 0.494 | 0.494 | 0.0377 / 0.0633 | 0.0242 / 0.0072 |
 
-There were no diagnostic-window failures, but the joint estimator was unstable
-in several cells. Supplying the mechanistic `cross_corr` helped some cells and
-harmed another. This artifact rejects a blanket robustness claim.
+**This table previously recorded the package's worst failure mode, and it was
+an artifact of in-fit LD quantization rather than of the model.** Through 0.2.1
+the joint estimator was unstable here — MAE 0.31 and up to 0.86 in the
+`rg_target=0.5` cells — and the instability was read as a genuine limit under
+shared environment. It is not. The fit-time `ld_int8` default used to quantize
+these float blocks to int8 internally, and re-running the current code with
+`ld_int8=True` reproduces the old row byte for byte (0.1733 / 0.0166 / 0.3101 /
+0.8343 / 0.8603). Consuming the caller's float32 LD instead leaves every cell
+between 0.0072 and 0.0242 — a 36x improvement in the worst one.
+
+The int8 resolution (~4e-3 per LD entry) is evidently enough to destabilize the
+fit where correlated environment already stresses the conditioning, even though
+it costs nothing measurable on the well-conditioned panels of Tables 2-7.
+Supplying the mechanistic `cross_corr` still helps slightly and no longer needs
+to rescue anything. A blanket robustness claim is still not made — this is one
+simulated stress test — but the specific failure this table documented is
+resolved, and the lesson is about quantizing LD inside a fit, not about
+environmental correlation.
 
 ## External runs
 

@@ -12,12 +12,25 @@ fall back to a bundled Numba coalescent vendored from ldpred3
 2x msprime's per-segment time at the benchmark shape. Both packages must be
 installed to run the benchmarks.
 
-[`RESULTS.md`](RESULTS.md) is the bipred 0.2.1 record: the accuracy columns are
-the 0.2.0 snapshot generated on 2026-08-03 from benchmark source revision
-`17d6ae2` and are byte-identical to it, while the timing, memory, and figure
-columns were regenerated against 0.2.1. Its "External runs" section (HAPNEST,
-SBayesS) remains at its 0.2.0 measurements. The CSV files are the authoritative
-numeric record; the prose tables are transcribed from them. Accuracy is paired
+[`RESULTS.md`](RESULTS.md) records a full regeneration: every self-contained
+script was re-run end to end, so accuracy, timing and memory columns all come
+from one sweep rather than from two snapshots spliced together. Its "External
+runs" section (HAPNEST, SBayesS, `bivariate_demo`) still holds its earlier
+measurements, and says so. The CSV files are the authoritative numeric record;
+the prose tables are transcribed from them, and
+`tests/test_benchmark_simulate.py` re-derives Table 6 from its CSV so the two
+cannot silently desynchronise again.
+
+`run_all.sh` drives the regeneration in order, single-core:
+
+```bash
+BIPRED_PYTHON=/path/to/python bash benchmarks/run_all.sh
+```
+
+It refuses nothing, but it does record the interpreter, the package versions and
+the resolved simulator backend at the top of its log — a run whose `import
+msprime` fails silently falls back to the bundled coalescent, which shares no
+cached segments with the committed record and is not comparable to it. Accuracy is paired
 against each finite effect draw's realized population-LD genetic correlation;
 `rg_target` records the generating effect-correlation parameter separately.
 
