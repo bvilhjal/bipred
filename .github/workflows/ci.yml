@@ -17,7 +17,8 @@ env:
   LDPRED3_VERSION: "0.4.5"
   # ldpred3 lives in a private repo, so the runner's default GITHUB_TOKEN (scoped
   # to this repo only) cannot clone it. Provide a repo/organization secret
-  # LDPRED3_TOKEN — a PAT or fine-grained token with read access to
+  # LDPRED3_FOR_BIPRED (or LDPRED3_TOKEN) — a PAT or fine-grained token with
+  # read access to
   # bvilhjal/ldpred3 — and the "Authenticate to private ldpred3" steps below wire
   # it into git so `pip install git+https://…` succeeds. Without it, those steps
   # now fail loudly and name the missing secret, rather than letting a pip
@@ -66,7 +67,7 @@ jobs:
       - name: Authenticate to private ldpred3
         shell: bash
         env:
-          TOKEN: ${{ secrets.LDPRED3_TOKEN }}
+          TOKEN: ${{ secrets.LDPRED3_FOR_BIPRED || secrets.LDPRED3_TOKEN }}
         run: |
           # The guard lives in bash, not in an `if:` expression. A secret piped
           # through workflow-level `env` reads as empty to the expression
@@ -75,10 +76,10 @@ jobs:
           # Username` from a pip subprocess several steps later. Say it plainly
           # instead.
           if [ -z "$TOKEN" ]; then
-            echo "::error::LDPRED3_TOKEN is not set on this repository."
+            echo "::error::No ldpred3 token secret is set on this repository."
             echo "ldpred3 is private, so every install below will fail."
             echo "Add a token with read access to bvilhjal/ldpred3:"
-            echo "  gh secret set LDPRED3_TOKEN --repo bvilhjal/bipred"
+            echo "  printf %s '<token>' | gh secret set LDPRED3_FOR_BIPRED --repo bvilhjal/bipred"
             exit 1
           fi
           git config --global \
@@ -136,7 +137,7 @@ jobs:
       - name: Authenticate to private ldpred3
         shell: bash
         env:
-          TOKEN: ${{ secrets.LDPRED3_TOKEN }}
+          TOKEN: ${{ secrets.LDPRED3_FOR_BIPRED || secrets.LDPRED3_TOKEN }}
         run: |
           # The guard lives in bash, not in an `if:` expression. A secret piped
           # through workflow-level `env` reads as empty to the expression
@@ -145,10 +146,10 @@ jobs:
           # Username` from a pip subprocess several steps later. Say it plainly
           # instead.
           if [ -z "$TOKEN" ]; then
-            echo "::error::LDPRED3_TOKEN is not set on this repository."
+            echo "::error::No ldpred3 token secret is set on this repository."
             echo "ldpred3 is private, so every install below will fail."
             echo "Add a token with read access to bvilhjal/ldpred3:"
-            echo "  gh secret set LDPRED3_TOKEN --repo bvilhjal/bipred"
+            echo "  printf %s '<token>' | gh secret set LDPRED3_FOR_BIPRED --repo bvilhjal/bipred"
             exit 1
           fi
           git config --global \
@@ -189,7 +190,7 @@ jobs:
       - name: Authenticate to private ldpred3
         shell: bash
         env:
-          TOKEN: ${{ secrets.LDPRED3_TOKEN }}
+          TOKEN: ${{ secrets.LDPRED3_FOR_BIPRED || secrets.LDPRED3_TOKEN }}
         run: |
           # The guard lives in bash, not in an `if:` expression. A secret piped
           # through workflow-level `env` reads as empty to the expression
@@ -198,10 +199,10 @@ jobs:
           # Username` from a pip subprocess several steps later. Say it plainly
           # instead.
           if [ -z "$TOKEN" ]; then
-            echo "::error::LDPRED3_TOKEN is not set on this repository."
+            echo "::error::No ldpred3 token secret is set on this repository."
             echo "ldpred3 is private, so every install below will fail."
             echo "Add a token with read access to bvilhjal/ldpred3:"
-            echo "  gh secret set LDPRED3_TOKEN --repo bvilhjal/bipred"
+            echo "  printf %s '<token>' | gh secret set LDPRED3_FOR_BIPRED --repo bvilhjal/bipred"
             exit 1
           fi
           git config --global \
@@ -241,7 +242,7 @@ jobs:
       - name: Authenticate to private ldpred3
         shell: bash
         env:
-          TOKEN: ${{ secrets.LDPRED3_TOKEN }}
+          TOKEN: ${{ secrets.LDPRED3_FOR_BIPRED || secrets.LDPRED3_TOKEN }}
         run: |
           # The guard lives in bash, not in an `if:` expression. A secret piped
           # through workflow-level `env` reads as empty to the expression
@@ -250,10 +251,10 @@ jobs:
           # Username` from a pip subprocess several steps later. Say it plainly
           # instead.
           if [ -z "$TOKEN" ]; then
-            echo "::error::LDPRED3_TOKEN is not set on this repository."
+            echo "::error::No ldpred3 token secret is set on this repository."
             echo "ldpred3 is private, so every install below will fail."
             echo "Add a token with read access to bvilhjal/ldpred3:"
-            echo "  gh secret set LDPRED3_TOKEN --repo bvilhjal/bipred"
+            echo "  printf %s '<token>' | gh secret set LDPRED3_FOR_BIPRED --repo bvilhjal/bipred"
             exit 1
           fi
           git config --global \
