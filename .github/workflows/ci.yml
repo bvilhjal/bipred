@@ -19,9 +19,11 @@ env:
   # to this repo only) cannot clone it. Provide a repo/organization secret
   # LDPRED3_TOKEN — a PAT or fine-grained token with read access to
   # bvilhjal/ldpred3 — and the "Authenticate to private ldpred3" steps below wire
-  # it into git so `pip install git+https://…` succeeds. Without the secret those
-  # steps no-op and the ldpred3 install fails exactly as before (nothing is worse).
-  LDPRED3_TOKEN: ${{ secrets.LDPRED3_TOKEN }}
+  # it into git so `pip install git+https://…` succeeds. Without it, those steps
+  # now fail loudly and name the missing secret, rather than letting a pip
+  # subprocess report `could not read Username` a few steps later.
+  # Deliberately NOT mirrored into workflow-level env: a secret read that way is
+  # invisible to `if:` expressions, which is what made this silently skip.
 
 jobs:
   lint:
@@ -62,11 +64,25 @@ jobs:
       # ldpred3 repo. No-op (and the install fails as before) when the secret is
       # unset. `git config --global` persists for the rest of the job.
       - name: Authenticate to private ldpred3
-        if: env.LDPRED3_TOKEN != ''
         shell: bash
+        env:
+          TOKEN: ${{ secrets.LDPRED3_TOKEN }}
         run: |
+          # The guard lives in bash, not in an `if:` expression. A secret piped
+          # through workflow-level `env` reads as empty to the expression
+          # evaluator, so `if: env.LDPRED3_TOKEN != ''` skipped this step even
+          # with the secret set -- and the only symptom was `could not read
+          # Username` from a pip subprocess several steps later. Say it plainly
+          # instead.
+          if [ -z "$TOKEN" ]; then
+            echo "::error::LDPRED3_TOKEN is not set on this repository."
+            echo "ldpred3 is private, so every install below will fail."
+            echo "Add a token with read access to bvilhjal/ldpred3:"
+            echo "  gh secret set LDPRED3_TOKEN --repo bvilhjal/bipred"
+            exit 1
+          fi
           git config --global \
-            url."https://x-access-token:${LDPRED3_TOKEN}@github.com/".insteadOf \
+            url."https://x-access-token:${TOKEN}@github.com/".insteadOf \
             "https://github.com/"
 
       # bipred depends on ldpred3, which is not on PyPI yet — install it from git
@@ -118,11 +134,25 @@ jobs:
           python-version: "3.14"
 
       - name: Authenticate to private ldpred3
-        if: env.LDPRED3_TOKEN != ''
         shell: bash
+        env:
+          TOKEN: ${{ secrets.LDPRED3_TOKEN }}
         run: |
+          # The guard lives in bash, not in an `if:` expression. A secret piped
+          # through workflow-level `env` reads as empty to the expression
+          # evaluator, so `if: env.LDPRED3_TOKEN != ''` skipped this step even
+          # with the secret set -- and the only symptom was `could not read
+          # Username` from a pip subprocess several steps later. Say it plainly
+          # instead.
+          if [ -z "$TOKEN" ]; then
+            echo "::error::LDPRED3_TOKEN is not set on this repository."
+            echo "ldpred3 is private, so every install below will fail."
+            echo "Add a token with read access to bvilhjal/ldpred3:"
+            echo "  gh secret set LDPRED3_TOKEN --repo bvilhjal/bipred"
+            exit 1
+          fi
           git config --global \
-            url."https://x-access-token:${LDPRED3_TOKEN}@github.com/".insteadOf \
+            url."https://x-access-token:${TOKEN}@github.com/".insteadOf \
             "https://github.com/"
 
       - name: Install ldpred3 and bipred with Numba
@@ -157,11 +187,25 @@ jobs:
           python-version: "3.12"
 
       - name: Authenticate to private ldpred3
-        if: env.LDPRED3_TOKEN != ''
         shell: bash
+        env:
+          TOKEN: ${{ secrets.LDPRED3_TOKEN }}
         run: |
+          # The guard lives in bash, not in an `if:` expression. A secret piped
+          # through workflow-level `env` reads as empty to the expression
+          # evaluator, so `if: env.LDPRED3_TOKEN != ''` skipped this step even
+          # with the secret set -- and the only symptom was `could not read
+          # Username` from a pip subprocess several steps later. Say it plainly
+          # instead.
+          if [ -z "$TOKEN" ]; then
+            echo "::error::LDPRED3_TOKEN is not set on this repository."
+            echo "ldpred3 is private, so every install below will fail."
+            echo "Add a token with read access to bvilhjal/ldpred3:"
+            echo "  gh secret set LDPRED3_TOKEN --repo bvilhjal/bipred"
+            exit 1
+          fi
           git config --global \
-            url."https://x-access-token:${LDPRED3_TOKEN}@github.com/".insteadOf \
+            url."https://x-access-token:${TOKEN}@github.com/".insteadOf \
             "https://github.com/"
 
       - name: Install ldpred3 from master (not the pin)
@@ -195,11 +239,25 @@ jobs:
           python-version: "3.14"
 
       - name: Authenticate to private ldpred3
-        if: env.LDPRED3_TOKEN != ''
         shell: bash
+        env:
+          TOKEN: ${{ secrets.LDPRED3_TOKEN }}
         run: |
+          # The guard lives in bash, not in an `if:` expression. A secret piped
+          # through workflow-level `env` reads as empty to the expression
+          # evaluator, so `if: env.LDPRED3_TOKEN != ''` skipped this step even
+          # with the secret set -- and the only symptom was `could not read
+          # Username` from a pip subprocess several steps later. Say it plainly
+          # instead.
+          if [ -z "$TOKEN" ]; then
+            echo "::error::LDPRED3_TOKEN is not set on this repository."
+            echo "ldpred3 is private, so every install below will fail."
+            echo "Add a token with read access to bvilhjal/ldpred3:"
+            echo "  gh secret set LDPRED3_TOKEN --repo bvilhjal/bipred"
+            exit 1
+          fi
           git config --global \
-            url."https://x-access-token:${LDPRED3_TOKEN}@github.com/".insteadOf \
+            url."https://x-access-token:${TOKEN}@github.com/".insteadOf \
             "https://github.com/"
 
       - name: Build wheel and sdist
