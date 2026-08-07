@@ -28,8 +28,8 @@ documents two biases it does not correct (uncorrected sample overlap inflates
 every region, and regional estimates are shrunk toward the genome-wide value).
 
 For a fast, moment-based genetic-correlation estimate (the cross-check on the
-joint fit), :func:`~bipred.ldsc_rg.ldsc_rg` implements cross-trait LD Score
-regression, with :func:`~bipred.ldsc_rg.estimate_sample_overlap` for shared
+joint fit), :func:`~bipred.ldsc.ldsc_rg` implements cross-trait LD Score
+regression, with :func:`~bipred.ldsc.estimate_sample_overlap` for shared
 samples. All genetic-correlation estimation lives here; ldpred3 keeps only the
 *univariate* LDSC (``ld_scores`` / ``ldsc_h2``) that these build on.
 
@@ -42,19 +42,26 @@ import importlib
 
 __version__ = "0.2.1"
 
-# public name -> submodule it lives in
+# public name -> submodule it lives in. No module name may equal one of its own
+# exported names: importing a submodule binds it on this package, and the cache
+# below then overwrites that binding with the function, so a collision makes
+# ``bipred.<name>`` resolve to the module or the function depending on import
+# order. That is why the LDSC module is ``ldsc`` and not ``ldsc_rg``.
 _EXPORTS = {
     "bivariate": ["ldpred3_auto_bivariate", "ldpred3_auto_bivariate_blocks",
                   "BivariateResult"],
     "multichain": ["ldpred3_auto_bivariate_chains",
                    "MultiChainBivariateResult", "BivariateChainSummary",
                    "BivariateBasicSplitRHat"],
-    "ldsc_rg": ["ldsc_rg", "LDSCRgResult", "estimate_sample_overlap"],
+    "ldsc": ["ldsc_rg", "LDSCRgResult", "estimate_sample_overlap"],
     "regional": ["regional_rg", "RegionalRgResult"],
 }
 
 # name -> module, for the lazy loader
 _NAME_TO_MODULE = {name: mod for mod, names in _EXPORTS.items() for name in names}
+
+assert not (set(_EXPORTS) & set(_NAME_TO_MODULE)), (
+    "a submodule name collides with an exported name; see _EXPORTS above")
 
 __all__ = ["__version__", *_NAME_TO_MODULE]
 
@@ -62,12 +69,20 @@ __all__ = ["__version__", *_NAME_TO_MODULE]
 def __getattr__(name):
     """Import the owning submodule on first access (PEP 562)."""
     mod = _NAME_TO_MODULE.get(name)
-    if mod is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    obj = getattr(importlib.import_module(f".{mod}", __name__), name)
-    globals()[name] = obj          # cache so subsequent access skips __getattr__
-    return obj
+    if mod is not None:
+        obj = getattr(importlib.import_module(f".{mod}", __name__), name)
+        globals()[name] = obj      # cache so subsequent access skips __getattr__
+        return obj
+    if name in _EXPORTS:
+        # Submodule access (``bipred.bivariate``). Deliberately *not* cached in
+        # globals(): the import machinery already binds the module on this
+        # package, and caching it here is what shadowed a submodule whose name
+        # matched one of its exports.
+        return importlib.import_module(f".{name}", __name__)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def __dir__():
-    return sorted(__all__)
+    # Submodules are discoverable but stay out of ``__all__``, so
+    # ``from bipred import *`` still imports only the public API.
+    return sorted({*__all__, *_EXPORTS})

@@ -68,9 +68,15 @@ class RegionalRgResult:
     ``region`` holds the region labels in first-appearance order; every other
     array is aligned to it. ``gvar1``/``gvar2`` are the regions' LD-aware genetic
     variances and ``gcov`` their genetic covariance, so a caller may re-derive
-    ``rg`` or aggregate regions without refitting. ``rg`` is NaN where either
-    evaluated variance is non-positive or the region has fewer than
-    ``min_variants`` variants.
+    ``rg`` without refitting. ``rg`` is NaN where either evaluated variance is
+    non-positive or the region has fewer than ``min_variants`` variants.
+
+    Summing these quantities across regions is **not** the quadratic of their
+    union unless the regions lie in different LD blocks. Each region's
+    quadratic covers only its own variants, so merging two regions inside one
+    block drops the cross-region LD terms between them, and on strongly
+    correlated variants those terms carry a large share of the union's value.
+    To aggregate, re-run :func:`regional_rg` with the merged labels.
     """
 
     region: np.ndarray
@@ -181,11 +187,10 @@ def regional_rg(beta1, beta2, blocks, regions, *, min_variants=1, clip=True):
             warnings.warn(
                 "regional_rg evaluates the blocks as given, but a default "
                 "ldpred3_auto_bivariate(_blocks) fit auto-quantises float "
-                f"blocks of {_AUTO_INT8_MAX_BLOCK} variants or fewer: this "
-                "call would use different LD than such a fit did. Pass the "
-                "fit's prepared (quantised) blocks, pre-quantise the same "
-                "blocks for both calls, or fit with ld_int8=False to keep "
-                "them aligned.",
+                f"blocks of {_AUTO_INT8_MAX_BLOCK} variants or fewer into a "
+                "private copy: this call would use different LD than such a "
+                "fit did. Pre-quantise the same blocks for both calls, or fit "
+                "with ld_int8=False and pass those float32 blocks here.",
                 stacklevel=2)
             break
 

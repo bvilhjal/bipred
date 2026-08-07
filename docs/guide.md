@@ -140,11 +140,13 @@ local = regional_rg(
 )
 ```
 
-Pass the fit's prepared (quantised) blocks, pre-quantise the same blocks for
-both calls, or fit with `ld_int8=False`: a default fit auto-quantises float
-blocks of at most 1,500 variants internally, and `regional_rg` warns when it
-is handed float blocks in that range, because evaluating them uses different
-LD than the fit did.
+Pre-quantise the same blocks for both calls (`ldpred3.compute_ld_blocks(...,
+quantize=True)`), or fit with `ld_int8=False` and pass those same float32
+blocks: a default fit auto-quantises float blocks of at most 1,500 variants
+into a private copy, and `regional_rg` warns when it is handed float blocks in
+that range, because evaluating them uses different LD than the fit did. The
+fit's internal copy is not reachable from the public API, so those two are the
+available remedies.
 
 `region_labels` has one label per variant; labels need not be contiguous.
 Regional estimates use posterior-mean effects and expose `rg`, `gcov`, `gvar1`,
@@ -154,25 +156,32 @@ shrinks local estimates toward the genome-wide correlation.
 
 ## Options
 
-**Table 2. Main fitting options.**
+**Table 2. Main fitting options.** Unless the *Scope* column says otherwise, an
+option is accepted by both `ldpred3_auto_bivariate[_blocks]` and
+`ldpred3_auto_bivariate_chains`. Options marked *single* are rejected by the
+chains driver, which reserves them for its own dispersal.
 
-| Option | Default | Use |
-|---|---:|---|
-| `burn_in`, `num_iter` | `200`, `200` | burn-in and retained sweeps |
-| `h2_init`, `p_init`, `rg_init` | `0.1`, `0.02`, `0` | coherent genetic-moment start; `p_init` is union-causal |
-| `pi_init` | `None` | explicit four-state overlap start |
-| `sigma_prior_scale` | `None` | fixed covariance shrinkage target across starts |
-| `cross_corr` | `0` | correlation of cross-trait sampling noise (set from external evidence when traits share environmental effects — see `docs/rg.md`) |
-| `rg_decorrelated` | `False` | sensitivity diagnostic only; the default estimator measured more accurate in both power regimes |
-| `noise_inflation`, `ni_damp` | `False`, `0.1` | learn and damp residual-noise inflation |
-| `pi_prior` | `1` | symmetric Dirichlet mixture concentration |
-| `h2_bounds`, `h2_cap` | `(1e-4, 1)`, `None` | ordinary bounds and optional expert ceiling |
-| `iw_df` | `10` | covariance shrinkage strength |
-| `ld_int8` | `None` | automatic, forced-int8, or forced-float dense storage |
-| `ncores` | `1` | within-chain block threads |
-| `chain_ncores` | `1` | multi-chain concurrency; cannot combine with `ncores>1` |
-| `tol`, `check_every` | `0`, `50` | optional single-chain stabilization heuristic |
-| `seed` | `None` | random seed |
+| Option | Default | Scope | Use |
+|---|---:|---|---|
+| `burn_in`, `num_iter` | `200`, `200` | both | burn-in and retained sweeps; chains additionally requires `num_iter` even and ≥ 4 |
+| `h2_init`, `rg_init` | `0.1`, `0` | both | coherent genetic-moment start |
+| `p_init` | `0.02` | single | union-causal start; chains disperses it over `p_init_range` |
+| `pi_init` | `None` | single | explicit four-state overlap start; the chains analogue is `pi_inits`, one row per chain |
+| `sigma_prior_scale` | `None` | both | fixed covariance shrinkage target across starts |
+| `cross_corr` | `0` | both | correlation of cross-trait sampling noise (set from external evidence when traits share environmental effects — see `docs/rg.md`) |
+| `rg_decorrelated` | `False` | single | sensitivity diagnostic only; the default estimator measured more accurate in both power regimes; chains rejects it |
+| `noise_inflation`, `ni_damp` | `False`, `0.1` | both | learn and damp residual-noise inflation |
+| `pi_prior` | `1` | both | symmetric Dirichlet mixture concentration |
+| `h2_bounds` | `(1e-4, 1)` | both | clamp on the **reported** `h2` only. `rg` is a ratio of the raw quadratics, so it is invariant to this |
+| `h2_cap` | `None` | both | optional expert ceiling on the per-trait slab variance, enforced *inside* the sampler. Unlike `h2_bounds` it changes the fitted effects, so it moves `rg` and `h2` alike whenever it binds |
+| `iw_df` | `10` | both | covariance shrinkage strength |
+| `sample_every` | `5` | both | thinning for the effect states the decorrelated `rg` uses; no effect otherwise |
+| `ld_int8` | `None` | both | automatic, forced-int8, or forced-float dense storage |
+| `ncores` | `1` | both | within-chain block threads |
+| `chain_ncores` | `1` | chains | multi-chain concurrency; cannot combine with `ncores>1` |
+| `tol` | `0` | single | optional stabilization heuristic; chains rejects `tol>0` |
+| `check_every` | `50` | both | retained sweeps between stabilization checks; accepted by chains but inert there, since adaptive stopping is disabled |
+| `seed` | `None` (single) / `0` (chains) | both | random seed. The chains driver requires an integer and rejects `None` |
 
 With `tol>0`, a single chain checks the relative RMS change in both
 posterior-mean effect vectors and the change in `r_g` every `check_every`

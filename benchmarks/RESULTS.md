@@ -116,11 +116,11 @@ The comparison uses five target points and six replicates at symmetric
 
 | Estimator | Symmetric MAE | Asymmetric MAE | Mean 5k fit time, symmetric |
 |---|---:|---:|---:|
-| LDSC | 0.0542 | 0.0608 | 0.033 s |
-| two univariate fits, `uni_gv` | 0.0190 | 0.0422 | 1.168 s |
-| two univariate fits, `uni_r2` | 0.0184 | 0.0420 | 1.168 s |
-| joint default | **0.0084** | **0.0174** | 0.172 s |
-| joint cross-sweep sensitivity | 0.0110 | 0.0240 | 0.173 s |
+| LDSC | 0.0542 | 0.0608 | 0.054 s |
+| two univariate fits, `uni_gv` | 0.0190 | 0.0422 | 1.894 s |
+| two univariate fits, `uni_r2` | 0.0184 | 0.0420 | 1.894 s |
+| joint default | **0.0084** | **0.0174** | 0.240 s |
+| joint cross-sweep sensitivity | 0.0110 | 0.0240 | 0.265 s |
 
 No estimator failed in these cells. The cross-sweep
 `rg_decorrelated=True` estimator did not improve on the default, including in
@@ -131,9 +131,9 @@ replacement.
 
 | Variants | Blocks | LDSC | Two univariate fits | Joint default | Joint cross-sweep |
 |---:|---:|---:|---:|---:|---:|
-| 5,000 | 25 | 0.028 s | 1.115 s | 0.172 s | 0.182 s |
-| 20,000 | 100 | 0.415 s | 4.105 s | 0.686 s | 0.686 s |
-| 50,000 | 250 | 2.193 s | 11.578 s | 1.640 s | 1.637 s |
+| 5,000 | 25 | 0.033 s | 1.639 s | 0.233 s | 0.239 s |
+| 20,000 | 100 | 0.523 s | 6.206 s | 0.939 s | 0.932 s |
+| 50,000 | 250 | 3.367 s | 16.223 s | 2.365 s | 2.387 s |
 
 `uni_gv` and `uni_r2` reuse the same two univariate fits, so their recorded cost
 is identical.
@@ -150,15 +150,19 @@ Each size runs in a fresh subprocess and reports one realized draw.
 
 | Variants | LDSC time | LDpred3 time | Peak RSS | Realized r_g | LDSC absolute error | LDpred3 absolute error |
 |---:|---:|---:|---:|---:|---:|---:|
-| 5,000 | 0.033 s | 0.146 s | 0.273 GB | 0.511 | 0.0399 | 0.0185 |
-| 10,000 | 0.120 s | 0.300 s | 0.336 GB | 0.519 | 0.0590 | 0.0031 |
-| 20,000 | 0.336 s | 0.591 s | 0.397 GB | 0.513 | 0.0332 | 0.0019 |
-| 40,000 | 1.383 s | 1.164 s | 0.466 GB | 0.518 | 0.0138 | 0.0021 |
-| 80,000 | 5.338 s | 2.119 s | 2.510 GB | 0.519 | 0.0632 | 0.0355 |
+| 5,000 | 0.062 s | 0.241 s | 0.310 GB | 0.511 | 0.0399 | 0.0185 |
+| 10,000 | 0.192 s | 0.458 s | 0.351 GB | 0.519 | 0.0590 | 0.0031 |
+| 20,000 | 0.510 s | 0.888 s | 0.396 GB | 0.513 | 0.0332 | 0.0019 |
+| 40,000 | 2.193 s | 1.676 s | 0.495 GB | 0.518 | 0.0138 | 0.0021 |
+| 80,000 | 8.091 s | 3.293 s | 0.662 GB | 0.519 | 0.0632 | 0.0355 |
 
-The 80k memory jump is real for this end-to-end process and should not be
-smoothed into a linear-memory claim. This sweep measures the default dense/Q8
-path, not million-variant LR8 production behavior.
+Peak RSS grows sublinearly across this range (0.31 GB to 0.66 GB for a 16x
+variant count). LDSC time grows faster than the joint fit's and overtakes it
+between 20k and 40k variants. The earlier 0.2.0 record showed a 2.51 GB spike
+at 80k; the regenerated run does not reproduce it, so treat single-run memory
+figures as machine- and allocator-dependent rather than as a property of the
+method. This sweep measures the default dense/Q8 path, not million-variant LR8
+production behavior.
 
 **Figure 4. Running time, memory, and single-draw recovery.**
 

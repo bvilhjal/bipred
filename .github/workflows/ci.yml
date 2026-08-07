@@ -167,8 +167,20 @@ jobs:
       - name: Install ldpred3 from master (not the pin)
         run: pip install "ldpred3[fast] @ git+https://github.com/bvilhjal/ldpred3.git@master"
 
-      - name: Install bipred
-        run: pip install -e ".[test,fast]"
+      - name: Install bipred without re-resolving ldpred3
+        # --no-deps is load-bearing. This leg deliberately installs an ldpred3
+        # whose version differs from bipred's declared range, and ldpred3 is on
+        # no package index, so letting pip re-resolve the dependency fails at
+        # resolution and the leg never reaches pytest -- silently, because it is
+        # continue-on-error. Install bipred's other runtime deps explicitly.
+        run: |
+          pip install "numpy>=1.20" "numba>=0.59" "pytest>=7"
+          pip install -e . --no-deps
+
+      - name: Report the ldpred3 under test
+        # Recorded in the log so a drift failure names the version that caused
+        # it, and so a run that silently fell back to the pin is visible.
+        run: python -c "import ldpred3; print('ldpred3 under test:', ldpred3.__version__)"
 
       - name: Run tests against ldpred3@master
         run: pytest -q
