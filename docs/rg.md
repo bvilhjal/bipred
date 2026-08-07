@@ -158,13 +158,11 @@ first-observed order. Regions may span LD blocks; within-block contributions are
 summed under the block-diagonal LD assumption.
 
 `regional_rg` evaluates the representation encoded by the LD objects passed to
-it. A default fit can internally Q8-quantize float blocks of at most 1,500
-variants without mutating the originals. Passing those originals therefore
-evaluates float LD, not the fit's internal Q8 representation — so
-`regional_rg` **warns** when it is handed float blocks in that range, naming
-the two available remedies: pass matching int8 blocks to both calls, or use the
-same float32 blocks and set `ld_int8=False` during fitting. The fit's internal
-quantised copy is private and cannot be retrieved.
+it, and under the default `ld_int8=False` so does the fit — so passing the same
+blocks to both is aligned, which is why no warning is raised. A fit that opted
+into in-fit quantization (`ld_int8=True` or `None`) evaluates a private Q8 copy
+that cannot be retrieved; pre-quantize the blocks yourself and pass those to
+both calls instead.
 
 **Table 2. `RegionalRgResult` fields.**
 

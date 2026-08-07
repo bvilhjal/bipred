@@ -110,12 +110,13 @@ def test_golden_bivariate():
 
 
 def test_golden_bivariate_int8():
-    # Automatic small-block int8 path: its own frozen goldens (drift detector
-    # for the quantise + dequantise-in-loop machinery).
+    # Opt-in int8 path (ld_int8=True): its own frozen goldens, a drift detector
+    # for the quantise + dequantise-in-loop machinery. Explicit since the
+    # fit-time default became ld_int8=False.
     R, beta_hat, m = _fixtures()
     res = ldpred3_auto_bivariate(R, beta_hat, _beta_hat2(beta_hat, m), 10000,
                                  10000, burn_in=50, num_iter=150, seed=42,
-                                 p_init=0.1)
+                                 p_init=0.1, ld_int8=True)
     np.testing.assert_allclose(res.rg, _BIVAR_RG_INT8, rtol=1e-6)
     np.testing.assert_allclose(res.beta1_est, _BIVAR_BETA1_INT8, rtol=1e-6,
                                atol=1e-9)

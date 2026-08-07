@@ -5,7 +5,11 @@ import pytest
 
 from ldpred3 import LowRankLD
 
-from bipred import RegionalRgResult, regional_rg
+from bipred import (
+    RegionalRgResult,
+    ldpred3_auto_bivariate_blocks,
+    regional_rg,
+)
 from bipred.regional import _Q8_SCALE
 
 
@@ -208,40 +212,44 @@ def test_clip_flag_exposes_out_of_range_values():
     assert abs(raw.rg[0]) > 1.0
 
 
-def test_warns_on_float_blocks_a_default_fit_would_quantise():
+def test_default_fit_and_regional_rg_evaluate_the_same_dense_blocks():
+    """The fit consumes dense blocks as given, so passing them here is aligned.
+
+    ``ld_int8`` defaulted to auto-quantising float blocks at or below a cutoff,
+    which meant the ordinary call pattern -- the same float blocks to both --
+    silently evaluated different LD in each, and regional_rg warned about it.
+    The fit now copies nothing, so that call pattern is correct and silent.
+    """
     import warnings as _w
 
     rng = np.random.default_rng(0)
-    k = 200
-    R = np.eye(k, dtype=np.float32) * 0.5
-    np.fill_diagonal(R, 1.0)
-    b1 = rng.standard_normal(k) * 0.01
-    b2 = rng.standard_normal(k) * 0.01
-    regions = np.ones(k, dtype=int)
+    k, nb = 200, 3
+    m = k * nb
+    pos = np.arange(k)
+    R = (0.5 ** np.abs(pos[:, None] - pos[None, :])).astype(np.float32)
+    blocks = [(R, np.arange(b * k, (b + 1) * k)) for b in range(nb)]
+    bh1 = rng.normal(scale=0.01, size=m)
+    bh2 = 0.6 * bh1 + 0.8 * rng.normal(scale=0.01, size=m)
 
-    # A float block at or below the fit's auto-quantise cutoff: warn, because a
-    # default fit used its quantised private copy instead.
+    res = ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, 20000, 20000,
+                                        burn_in=5, num_iter=5, seed=0)
     with _w.catch_warnings(record=True) as caught:
         _w.simplefilter("always")
-        regional_rg(b1, b2, [(R, np.arange(k))], regions)
-    assert any("auto-quantises" in str(w.message) for w in caught)
+        regional_rg(res.beta1_est, res.beta2_est, blocks,
+                    np.repeat(np.arange(nb), k))
+    assert caught == [], [str(w.message) for w in caught]
 
-    # Pre-quantised int8 blocks are aligned by construction: silent.
+    # The fit holds the caller's own block object, not a converted copy -- which
+    # is both what makes the two calls agree and what keeps the fit from
+    # allocating a second genome-scale payload.
+    from bipred.bivariate import _prepare_block
+
+    prepared, scale = _prepare_block(R, False)
+    assert prepared is R and scale == 1.0
+    # int8 blocks are likewise consumed as-is.
     R8 = np.rint(R * 127).astype(np.int8)
-    with _w.catch_warnings(record=True) as caught:
-        _w.simplefilter("always")
-        regional_rg(b1, b2, [(R8, np.arange(k))], regions)
-    assert not any("auto-quantises" in str(w.message) for w in caught)
-
-    # A float block above the cutoff stays float in the fit too: silent.
-    kb = 1600
-    Rb = np.eye(kb, dtype=np.float32)
-    b1b = rng.standard_normal(kb) * 0.01
-    b2b = rng.standard_normal(kb) * 0.01
-    with _w.catch_warnings(record=True) as caught:
-        _w.simplefilter("always")
-        regional_rg(b1b, b2b, [(Rb, np.arange(kb))], np.ones(kb, dtype=int))
-    assert not any("auto-quantises" in str(w.message) for w in caught)
+    prepared8, scale8 = _prepare_block(R8, False)
+    assert prepared8 is R8 and scale8 == 1.0 / 127.0
 
 
 def test_no_warn_on_lowrank_blocks():

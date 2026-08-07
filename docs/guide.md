@@ -25,11 +25,13 @@ bipred does not harmonize summary statistics or build LD. Blocks may be dense
 float/int8 matrices or ldpred3 `LowRankLD` objects, including LR8, and
 representations may be mixed.
 
-The default `ld_int8=None` keeps supplied int8 blocks, quantizes float blocks of
-at most 1,500 variants, and keeps larger float blocks as float32. This is a
-storage heuristic, not a real-data accuracy guarantee. Use `True` to quantize
-all dense float blocks or `False` to keep them float32; this option does not
-change low-rank factors.
+The default `ld_int8=False` consumes every dense block in the representation it
+arrives in — int8 stays int8, float32 stays float32 — and copies nothing.
+Quantize when the LD is *built*, with `ldpred3.compute_ld_blocks(quantize=True)`,
+rather than in the fit: quantizing here allocates a second genome-scale payload
+while your panel is still alive (78.4 MB of peak against 13.1 MB at m=100,000
+with 500-variant blocks). `ld_int8=True` and `None` are retained for that older
+behaviour. This option does not change low-rank factors.
 
 ## Fit one chain
 
@@ -140,13 +142,11 @@ local = regional_rg(
 )
 ```
 
-Pre-quantise the same blocks for both calls (`ldpred3.compute_ld_blocks(...,
-quantize=True)`), or fit with `ld_int8=False` and pass those same float32
-blocks: a default fit auto-quantises float blocks of at most 1,500 variants
-into a private copy, and `regional_rg` warns when it is handed float blocks in
-that range, because evaluating them uses different LD than the fit did. The
-fit's internal copy is not reachable from the public API, so those two are the
-available remedies.
+Pass the same blocks you fitted with. Under the default `ld_int8=False` the fit
+evaluates them as given, so this is aligned with no further care. Only a fit
+that opted into in-fit quantization (`ld_int8=True` or `None`) evaluates
+something else, and that copy is private: pre-quantize the blocks yourself
+(`ldpred3.compute_ld_blocks(..., quantize=True)`) and pass those to both calls.
 
 `region_labels` has one label per variant; labels need not be contiguous.
 Regional estimates use posterior-mean effects and expose `rg`, `gcov`, `gvar1`,
@@ -176,7 +176,7 @@ chains driver, which reserves them for its own dispersal.
 | `h2_cap` | `None` | both | optional expert ceiling on the per-trait slab variance, enforced *inside* the sampler. Unlike `h2_bounds` it changes the fitted effects, so it moves `rg` and `h2` alike whenever it binds |
 | `iw_df` | `10` | both | covariance shrinkage strength |
 | `sample_every` | `5` | both | thinning for the effect states the decorrelated `rg` uses; no effect otherwise |
-| `ld_int8` | `None` | both | automatic, forced-int8, or forced-float dense storage |
+| `ld_int8` | `False` | both | dense storage policy. The default copies nothing; `True`/`None` quantize inside the fit and build a second payload |
 | `ncores` | `1` | both | within-chain block threads |
 | `chain_ncores` | `1` | chains | multi-chain concurrency; cannot combine with `ncores>1` |
 | `tol` | `0` | single | optional stabilization heuristic; chains rejects `tol>0` |

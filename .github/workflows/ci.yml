@@ -13,8 +13,8 @@ on:
 env:
   # ldpred3 is not published yet and bipred consumes an internal compatibility
   # seam. Keep CI reproducible instead of silently following its moving branch.
-  LDPRED3_REV: "5436dcc8152531000b223c5088f726d588d8a8cd"
-  LDPRED3_VERSION: "0.4.3"
+  LDPRED3_REV: "5d86ac9d97e42c57fa31d84ff093d3bf637dc0e6"
+  LDPRED3_VERSION: "0.4.5"
   # ldpred3 lives in a private repo, so the runner's default GITHUB_TOKEN (scoped
   # to this repo only) cannot clone it. Provide a repo/organization secret
   # LDPRED3_TOKEN — a PAT or fine-grained token with read access to

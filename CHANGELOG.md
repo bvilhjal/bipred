@@ -5,6 +5,85 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 ## [Unreleased]
 
+### Performance
+
+- **Block parallelism silently stopped working after any serial run.** The two
+  fused sweep drivers are each jitted twice from one Python function —
+  `parallel=True` and `nogil=True` — and Numba keys its on-disk cache on
+  (source file, qualname, first line, signature) but *not* on the compilation
+  flags. The twins therefore shared one cache entry, and whichever compiled
+  first was served to both. Since the cache lives in `__pycache__` beside
+  `bivariate.py` and persists, one `ncores=1` run disabled `ncores>1` for every
+  later run on that checkout. Measured at m=20,000 / k=500: `ncores=4` ran at
+  1.73 ms/sweep from a clean cache and 5.38 — no better than the 5.49 serial
+  baseline — from a cache a serial run had touched. The parallel twins now opt
+  out of the on-disk cache, which restores 1.77 ms/sweep bit-identically, at
+  the cost of one compilation per process when `ncores>1`.
+- **The low-rank sweep kernel is compiled with `fastmath`**, mirroring ldpred3's
+  scoping (`_kernels.py:1277`): its O(rank) projection dots are the bulk of a
+  low-rank sweep and are add-latency-bound, so letting LLVM reassociate and
+  vectorise the reduction is most of the available win. Measured at m=20,000,
+  k=500, rank 481: **1.83x** on LR8 (14.05 -> 7.68 ms/sweep) and **2.57x** on
+  float32 low-rank (12.43 -> 4.84). Results move at the reassociation level
+  (`rg` by 2e-16 relative). The dense kernel is deliberately left plain — it
+  measured only 1.12x, because its guarded row update fires on a few per cent of
+  visits and the sweep is dominated by the four `exp()` calls instead.
+- **Per-variant `n_eff` recomputes the sweep's residual-independent scalars only
+  when N changes**, rather than once per variant. `_bivar_const` is ~29
+  quantities including four logs, and real summary statistics carry long runs of
+  identical `n_eff`. It is a pure function of its arguments, so a memo hit is
+  bit-identical. Measured 1.16x on a dense per-variant-N fit with runs of 250;
+  the constant-N path is unchanged.
+- **int8 low-rank (LR8) factors are widened into a float32 scratch once per
+  sweep**, ported from ldpred3 0.4.5. The projection dots read `U[j, c]` for
+  every element of every O(rank) dot, for every variant, every sweep, paying an
+  int8 sign-extend-and-convert each time; widening once per block amortises it.
+  The scratch is one stride per *thread*, so it stays O(k × rank) and int8
+  remains the storage format. Measured **7.72 → 5.08 ms/sweep (1.55x)** at rank
+  481, which brings LR8 to within 10% of an equivalent float32 factor — int8
+  storage at float32 speed. Cumulative with `fastmath`, **14.05 → 5.08 (2.77x)**.
+  The conversion is exact, so the fit moves only where `fastmath` reassociates
+  (1.1e-15 relative), and both drivers widen, so seeded results remain identical
+  across `ncores`.
+
+  The rank gate is bipred's own measurement, not ldpred3's: upstream gates at 64
+  because rank 32 was a loss for its kernel, whereas here widening won at every
+  rank tested (1.07x at 16, 1.16x at 32, 1.31x at 128, 1.43x at 256), so the
+  gate is 32.
+- `_pinned_numba_threads` now touches Numba's threading layer even at
+  `ncores=1`. The low-rank kernel references `_get_thread_id`, and loading it
+  from the on-disk cache before that layer exists **segfaults the interpreter**
+  — reproduced on numba 0.66 as an exit-139 on a warm cache with a serial-only
+  run. This is why ldpred3 pins the mask unconditionally.
+- `benchmarks/sweep_cost.py` measures per-sweep cost by representation and core
+  count, giving each cell a private Numba cache in a subprocess — without that
+  isolation a grid measures its first arm repeatedly, for the reason above.
+  `benchmarks/sweep_cost.csv` records the grid at m=20,000 / k=500.
+
+### Changed
+
+- **`ld_int8` now defaults to `False`: dense blocks are consumed in the
+  representation they arrive in.** The previous default quantised float blocks
+  of at most 1,500 variants *inside the fit*, allocating a second genome-scale
+  int8 payload while the caller's panel was still alive. Measured peak inside
+  the call at m=100,000 / k=500: **78.4 MB before, 13.1 MB after** — the extra
+  payload is k/2 bytes per variant, so roughly 500 MB at m=1,000,000. This
+  follows ldpred3, whose fit-time default is also `False` and which quantises at
+  LD-build time, where the float source is private and discardable: prefer
+  `ldpred3.compute_ld_blocks(quantize=True)`. `ld_int8=True` and `None` are
+  retained for the old behaviour. **This changes results** for callers who
+  relied on the default with float blocks, by the int8 quantisation resolution
+  (~4e-3 on LD entries) and in the direction of more accuracy.
+- **The pinned ldpred3 revision moves to `5d86ac9` (0.4.5)** and the dependency
+  floor to `>=0.4.5,<0.5`. The seam was audited against it first, as the README
+  requires: all eighteen borrowed symbols still resolve. The bump is what makes
+  `_get_thread_id`, and therefore the LR8 widening above, available.
+- `regional_rg` no longer warns when handed float blocks at or below the fit's
+  old auto-quantise cutoff. That warning existed because the fit-time default
+  quantised them into a private copy; with the default consuming blocks as
+  given, the pattern it flagged — the same float blocks to both calls — is now
+  the aligned one, and the warning was firing on the correct usage.
+
 ### Fixed
 
 - **`rg` no longer saturates against `h2_bounds`.** The reported genetic
