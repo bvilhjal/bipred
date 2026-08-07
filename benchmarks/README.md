@@ -12,11 +12,14 @@ fall back to a bundled Numba coalescent vendored from ldpred3
 2x msprime's per-segment time at the benchmark shape. Both packages must be
 installed to run the benchmarks.
 
-[`RESULTS.md`](RESULTS.md) is the bipred 0.2.0 snapshot generated on 2026-08-03
-from benchmark source revision `17d6ae2`. The CSV files are the authoritative
-numeric record. Accuracy is paired against each finite effect draw's realized
-population-LD genetic correlation; `rg_target` records the generating
-effect-correlation parameter separately.
+[`RESULTS.md`](RESULTS.md) is the bipred 0.2.1 record: the accuracy columns are
+the 0.2.0 snapshot generated on 2026-08-03 from benchmark source revision
+`17d6ae2` and are byte-identical to it, while the timing, memory, and figure
+columns were regenerated against 0.2.1. Its "External runs" section (HAPNEST,
+SBayesS) remains at its 0.2.0 measurements. The CSV files are the authoritative
+numeric record; the prose tables are transcribed from them. Accuracy is paired
+against each finite effect draw's realized population-LD genetic correlation;
+`rg_target` records the generating effect-correlation parameter separately.
 
 From a checkout, `[bench]` installs the dependencies for the self-contained
 simulation and plotting scripts:

@@ -66,6 +66,24 @@ guide. Summary statistics must already be ancestry-matched and harmonized.
   the reproducible benchmark snapshot (0.2.0, with the accuracy-identical 0.2.1
   refresh), including limitations and provenance.
 
+## Citing and prior work
+
+bipred has no paper of its own yet; cite the repository and the version you ran
+(`bipred.__version__`). The methods it builds on should be cited directly:
+
+- **LDpred / LDpred2** — the summary-statistic Gaussian-mixture model and Gibbs
+  sampler this extends to two traits. Vilhjálmsson et al., *AJHG* 97:576–592
+  (2015); Privé et al., *Bioinformatics* 36:5424–5431 (2020).
+- **Cross-trait LD Score regression** — the moment estimator in
+  `bipred.ldsc_rg`. Bulik-Sullivan et al., *Nature Genetics* 47:1236–1241 (2015).
+- **MiXeR** — the polygenic-overlap parameterisation behind
+  `BivariateResult.mixer`. Frei et al., *Nature Communications* 10:2417 (2019).
+
+The estimators here are reimplementations, not wrappers, and their agreement
+with the originals is characterised only by the repository's own synthetic
+benchmarks. See [benchmark results](https://github.com/bvilhjal/bipred/blob/main/benchmarks/RESULTS.md)
+for what has and has not been validated.
+
 ## License
 
 MIT. See [`LICENSE`](LICENSE).

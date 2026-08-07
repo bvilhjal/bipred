@@ -1,5 +1,7 @@
 """Bivariate LDpred-auto: rg / h2 recovery and cross-trait borrowing."""
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -79,6 +81,143 @@ def test_recovers_rg_and_h2():
     assert abs(np.mean(rgs) - 0.7) < 0.2, np.mean(rgs)
     assert abs(np.mean(h1s) - 0.5) < 0.12
     assert abs(np.mean(h2s) - 0.5) < 0.12
+
+
+def test_vectorised_rg_matches_the_scalar_elementwise():
+    """The split-Rhat trace and the reported rg must use one convention.
+
+    Including the degenerate cases: a non-positive variance reports 0.0, and a
+    NaN variance stays NaN rather than being laundered into an rg of 0.
+    """
+    cases = [
+        (0.1, 0.3, 0.4), (0.1, -0.001, 0.3), (0.5, 0.1, 0.1), (0.0, 0.0, 0.0),
+        (-0.5, 0.1, 0.1), (0.1, 0.0, 0.4), (0.1, 0.3, -1.0),
+        (np.nan, 0.3, 0.4), (0.1, np.nan, 0.4), (0.1, 0.3, np.nan),
+        (np.inf, 0.3, 0.4), (0.1, np.inf, 0.4),
+    ]
+    g12, g1, g2 = (np.array([c[i] for c in cases]) for i in range(3))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")          # no sqrt/divide RuntimeWarnings
+        vector = bivariate._rg_from_quadratics_array(g12, g1, g2)
+    expected = np.array([bivariate._rg_from_quadratics(*c) for c in cases])
+    np.testing.assert_array_equal(vector, expected)      # NaN-aware
+
+
+def test_option_defaults_match_the_public_signature():
+    """The multi-chain path reads defaults from a dict, not the signature.
+
+    ``_BIVARIATE_OPTION_DEFAULTS`` duplicates the defaults of
+    ``ldpred3_auto_bivariate_blocks``. Without this gate, changing one default
+    silently gives the single-chain and multi-chain entry points different
+    behaviour.
+    """
+    import inspect
+
+    signature = inspect.signature(ldpred3_auto_bivariate_blocks)
+    for name, default in bivariate._BIVARIATE_OPTION_DEFAULTS.items():
+        assert name in signature.parameters, f"{name} is not a public option"
+        assert signature.parameters[name].default == default, name
+
+
+def test_rg_is_invariant_to_h2_bounds():
+    """rg is a ratio of the raw quadratics, not of the clamped h2.
+
+    Dividing the raw genetic covariance by the h2_bounds-clamped variances
+    made a binding bound drive rg toward +/-1: on this fixture a true rg of
+    ~0.7 was reported as 1.0 once h2_bounds capped h2 below its fitted value.
+    h2 itself is still clamped for reporting.
+    """
+    k, nb = 200, 12
+    blocks, chols, idxs = _blocks(nb, k, seed=1)
+    m = nb * k
+    rng = np.random.default_rng(10)
+    b1, b2 = _sim(blocks, chols, idxs, m, p=0.05, h2=(0.5, 0.5), rg=0.7, rng=rng)
+    bh1 = _sumstats(blocks, chols, idxs, b1, 40000, k, rng)
+    bh2 = _sumstats(blocks, chols, idxs, b2, 40000, k, rng)
+
+    def fit(h2_bounds):
+        return ldpred3_auto_bivariate_blocks(
+            blocks, bh1, bh2, 40000, 40000, burn_in=120, num_iter=150,
+            seed=0, h2_bounds=h2_bounds, h2_init=0.1)
+
+    loose = fit((1e-4, 1.0))
+    # The tight ceiling binds, which the diagnostic now reports from the raw
+    # quadratics rather than from the already-clamped h2.
+    with pytest.warns(RuntimeWarning, match="h2 reached its upper bound"):
+        tight = fit((1e-4, 0.1))
+
+    # The clamp binds: reported h2 is pinned to the ceiling ...
+    assert tight.h2 == (0.1, 0.1)
+    assert loose.h2[0] > 0.1 and loose.h2[1] > 0.1
+    # ... but the sampled quadratics, and therefore rg, are untouched.
+    np.testing.assert_allclose(tight.genetic_samples, loose.genetic_samples)
+    assert tight.rg == pytest.approx(loose.rg)
+    assert abs(tight.rg) < 0.99, "rg saturated against the h2 bound"
+
+
+def test_nonfinite_fit_raises_instead_of_returning_nan(monkeypatch):
+    """A diverged chain must fail loudly, not return NaN estimates.
+
+    NaN does not announce itself in the sweep: the log-sum-exp leaves
+    ``wmax = w0``, every state probability becomes NaN, all three ``u < p``
+    tests are False, and the variant falls through to the both-causal branch.
+    """
+    from bipred.bivariate import _check_fit_is_finite
+
+    finite = np.zeros(3)
+    _check_fit_is_finite((0.3, 0.1, 0.4), finite, finite)      # no raise
+
+    with pytest.raises(FloatingPointError, match="non-finite genetic quadratic"):
+        _check_fit_is_finite((np.nan, 0.1, 0.4), finite, finite)
+    with pytest.raises(FloatingPointError, match="non-finite genetic quadratic"):
+        _check_fit_is_finite((np.inf, 0.1, 0.4), finite, finite)
+    with pytest.raises(FloatingPointError, match="non-finite posterior-mean"):
+        _check_fit_is_finite((0.3, 0.1, 0.4), np.array([np.nan]), finite)
+    with pytest.raises(FloatingPointError, match="non-finite posterior-mean"):
+        _check_fit_is_finite((0.3, 0.1, 0.4), finite, np.array([np.inf]))
+
+    # And the driver actually consults it, rather than clamping NaN away.
+    blocks, chols, idxs = _blocks(1, 40, seed=0)
+    rng = np.random.default_rng(0)
+    m = 40
+    b1, b2 = _sim(blocks, chols, idxs, m, p=0.2, h2=(0.3, 0.3), rg=0.5, rng=rng)
+    bh1 = _sumstats(blocks, chols, idxs, b1, 10000, 40, rng)
+    bh2 = _sumstats(blocks, chols, idxs, b2, 10000, 40, rng)
+    real = bivariate._check_fit_is_finite
+
+    def poisoned(quadratics, beta1, beta2):
+        return real((np.nan,) * 3, beta1, beta2)
+
+    monkeypatch.setattr(bivariate, "_check_fit_is_finite", poisoned)
+    with pytest.raises(FloatingPointError):
+        ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, 10000, 10000,
+                                      burn_in=5, num_iter=5, seed=0)
+
+
+def test_implausible_fit_warning_is_two_sided():
+    """A floored h2 is as suspect as an inflated one, and used to be silent."""
+    bounds = (1e-4, 1.0)
+    m = bivariate._DIAGNOSTIC_MIN_VARIANTS
+
+    with pytest.warns(RuntimeWarning, match="upper bound"):
+        bivariate._warn_if_implausible_fit((1.0, 0.3), 0.01, bounds, m)
+    # A non-positive quadratic is degenerate and does zero rg ...
+    with pytest.warns(RuntimeWarning, match="non-positive.*reports rg as 0"):
+        bivariate._warn_if_implausible_fit((-1e-9, 0.3), 0.01, bounds, m)
+    # ... but a small strictly-positive one only means h2 was clamped. Saying
+    # "non-positive" there would be a false statement about a healthy
+    # low-heritability fit, and rg is computed from the raw quadratics.
+    with pytest.warns(RuntimeWarning, match="lower bound.*rg is unaffected"):
+        bivariate._warn_if_implausible_fit((5e-5, 0.3), 0.01, (1e-4, 1.0), m)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        bivariate._warn_if_implausible_fit((5e-5, 0.3), 0.01, (1e-4, 1.0), m)
+    assert "non-positive" not in str(caught[0].message)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")                 # ordinary fit: silent
+        bivariate._warn_if_implausible_fit((0.3, 0.4), 0.01, bounds, m)
+        # and still quiet below the panel-size floor
+        bivariate._warn_if_implausible_fit((1e-4, 0.3), 0.01, bounds, m - 1)
 
 
 def test_rg_zero_is_recovered():

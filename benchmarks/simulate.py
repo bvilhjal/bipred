@@ -22,20 +22,39 @@ from __future__ import annotations
 import numpy as np
 
 
+_BACKEND_TAGS = {"numba": "numba-v1", "msprime": "msprime-v1"}
+
+#: Resolved once, on first use. Probing the import per call is not idempotent:
+#: a failing ``import msprime`` can leave partially initialised dependencies in
+#: ``sys.modules``, so an immediate retry succeeds where the first attempt
+#: raised ImportError (observed with a NumPy C-API mismatch in tskit). With two
+#: independent resolutions -- one frozen into the cache tag at import, one per
+#: call -- segments then get simulated by msprime and cached under the numba
+#: tag. One memoised answer makes that disagreement unrepresentable.
+_RESOLVED_BACKEND = None
+
+
 def _backend():
-    """The simulator backend used for new segments on this host."""
-    try:
-        import msprime  # noqa: F401
-        return "msprime"
-    except ImportError:
-        # Bundled vendored coalescent (JIT where Numba exists, interpreted
-        # pure-Python otherwise): the dependency-free fallback.
-        return "numba"
+    """The simulator backend used for new segments on this host (memoised)."""
+    global _RESOLVED_BACKEND
+    if _RESOLVED_BACKEND is None:
+        try:
+            import msprime  # noqa: F401
+            _RESOLVED_BACKEND = "msprime"
+        except ImportError:
+            # Bundled vendored coalescent (JIT where Numba exists, interpreted
+            # pure-Python otherwise): the dependency-free fallback. Taken
+            # whenever msprime cannot be imported cleanly, including a broken
+            # install -- a consistent fallback beats an unreproducible mix.
+            _RESOLVED_BACKEND = "numba"
+    return _RESOLVED_BACKEND
 
 
 #: Cache tag for the active backend. Bump the version suffix when a backend's
-#: draws change; the two backends never share cached segments.
-SIMULATOR_CACHE_TAG = {"numba": "numba-v1", "msprime": "msprime-v1"}[_backend()]
+#: draws change; the two backends never share cached segments. Reading it here
+#: also pins ``_backend()`` for the rest of the process, so the tag on a cached
+#: segment always names the simulator that produced it.
+SIMULATOR_CACHE_TAG = _BACKEND_TAGS[_backend()]
 
 
 def simulate_genotypes_by_mutation_rate(n, seq_len, *, recomb_rate=1e-8,

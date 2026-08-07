@@ -544,7 +544,36 @@ def _bivar_converged(avg1, avg2, prev1, prev2, count, rg, prev_rg, tol):
     return ok, rg
 
 
-def _warn_if_implausible_fit(h2, p, h2_bounds, m):
+def _check_fit_is_finite(quadratics, beta1, beta2):
+    """Reject a fit whose estimates are not finite.
+
+    A Gibbs chain on a non-PSD LD reference can diverge to +/-inf and then to
+    NaN. NaN is not self-announcing here: the sweep's log-sum-exp leaves
+    ``wmax = w0`` (every ``w > wmax`` test is False for NaN), all four state
+    probabilities become NaN, all three ``u < p`` tests are False, and the
+    variant silently falls through to the both-causal branch. Without this
+    check the fit returns NaN ``h2``, ``rg``, ``sigma`` and effect vectors with
+    no error, and the h2 clamp below would additionally launder a diverged
+    (large negative) genetic variance into an ordinary-looking low-h2 result.
+    """
+    if not np.all(np.isfinite(quadratics)):
+        raise FloatingPointError(
+            "the bivariate fit produced non-finite genetic quadratic forms "
+            f"{tuple(float(q) for q in quadratics)}; the sampler diverged, "
+            "which usually means the LD reference is not positive "
+            "semi-definite. Regularise it (ldpred3.shrink_ld_blocks), use "
+            "smaller blocks, or use a larger reference panel."
+        )
+    if not (np.all(np.isfinite(beta1)) and np.all(np.isfinite(beta2))):
+        raise FloatingPointError(
+            "the bivariate fit produced non-finite posterior-mean effects; "
+            "the sampler diverged. Regularise the LD reference "
+            "(ldpred3.shrink_ld_blocks), use smaller blocks, or use a larger "
+            "reference panel."
+        )
+
+
+def _warn_if_implausible_fit(raw_h2, p, h2_bounds, m):
     """Flag a fit that is simultaneously statistically suspect and slow.
 
     A poorly conditioned LD reference inflates h2, which inflates the fitted
@@ -552,6 +581,16 @@ def _warn_if_implausible_fit(h2, p, h2_bounds, m):
     nearly every variant instead of a small minority. That adds a real slowdown
     on top of a wrong answer, so it is worth saying out loud rather than leaving
     the caller to wonder why a run was both slow and implausible.
+
+    ``raw_h2`` is the pair of *unclamped* sampled quadratics, so a bound that
+    binds is visible here; the reported ``h2`` has already been clamped into
+    range and could not reveal it. The test is two-sided, with the low end
+    split in two because the two cases differ in kind: a **non-positive**
+    sampled genetic variance (possible on a non-PSD int8-quantised block) is
+    degenerate and also zeroes ``rg``, whereas a small but strictly positive
+    quadratic under the caller's own ``lo`` only means the reported ``h2`` is
+    a clamped value -- ``rg`` is unaffected, and on a genuinely
+    low-heritability trait that is not evidence of anything wrong.
     """
     # Only meaningful at scale. On a handful of variants a large causal fraction
     # or an h2 at its bound is ordinary -- there is not enough data for either to
@@ -561,15 +600,26 @@ def _warn_if_implausible_fit(h2, p, h2_bounds, m):
         return
     lo, hi = h2_bounds
     reasons = []
-    if any(v >= hi * (1.0 - 1e-6) for v in h2):
+    if any(v >= hi * (1.0 - 1e-6) for v in raw_h2):
         reasons.append("h2 reached its upper bound %g" % hi)
+    if any(v <= 0.0 for v in raw_h2):
+        # The exact condition under which _rg_from_quadratics returns 0.0.
+        reasons.append(
+            "a sampled genetic variance is non-positive, which also reports "
+            "rg as 0")
+    elif any(v <= lo * (1.0 + 1e-6) for v in raw_h2):
+        # Strictly positive but under the caller's floor: the reported h2 is a
+        # clamped value. rg is computed from the raw quadratics, so it stands.
+        reasons.append(
+            "h2 fell to its lower bound %g, so the reported h2 is clamped "
+            "(rg is unaffected)" % lo)
     if p > _DIAGNOSTIC_MAX_CAUSAL_FRACTION:
         reasons.append("the fitted causal fraction is %.2f" % p)
     if reasons:
         warnings.warn(
             "Implausible bivariate fit: " + " and ".join(reasons) + ". This "
             "usually means the LD reference is too small or too weakly "
-            "regularised for its block size, which inflates h2 and the causal "
+            "regularised for its block size, which distorts h2 and the causal "
             "fraction. Besides being statistically suspect, it makes the "
             "sampler markedly slower, because the per-variant LD row update "
             "then fires for almost every variant. Consider a larger LD "
@@ -1093,6 +1143,26 @@ def _rg_from_quadratics(g12, g1, g2):
     if g1 <= 0.0 or g2 <= 0.0:
         return 0.0
     return float(min(max(g12 / np.sqrt(g1 * g2), -1.0), 1.0))
+
+
+def _rg_from_quadratics_array(g12, g1, g2):
+    """Elementwise :func:`_rg_from_quadratics` for whole traces.
+
+    Same convention, including the 0.0 for a non-positive variance, so a
+    per-draw diagnostic trace cannot disagree with the scalar the fit reports.
+    """
+    g12, g1, g2 = np.asarray(g12), np.asarray(g1), np.asarray(g2)
+    # Mirror the scalar guard exactly, including its NaN behaviour: ``nan <= 0``
+    # is False there, so a NaN variance falls through and yields NaN rather than
+    # being silently reported as an rg of 0. Writing this as ``g1 > 0`` instead
+    # would classify NaN as invalid and diverge from the scalar.
+    valid = ~((g1 <= 0.0) | (g2 <= 0.0))
+    # Evaluate only where the denominator is defined; np.sqrt of a non-positive
+    # variance would otherwise warn and seed NaN into the split-Rhat inputs.
+    out = np.zeros(np.broadcast(g12, g1, g2).shape, dtype=float)
+    np.divide(g12, np.sqrt(g1 * g2, where=valid, out=np.ones_like(out)),
+              out=out, where=valid)
+    return np.clip(out, -1.0, 1.0)
 
 
 @dataclass
@@ -1709,9 +1779,7 @@ def _ldpred3_auto_bivariate_prepared_inner(prepared, options, start):
             if (tol > 0.0 and not rg_decorrelated
                     and count % check_every == 0 and count > check_every):
                 g11c, g12c, g22c = gv_acc / count
-                h1c = min(max(g11c, lo), hi)
-                h2c = min(max(g22c, lo), hi)
-                rg_now = _rg_from_quadratics(g12c, h1c, h2c)
+                rg_now = _rg_from_quadratics(g12c, g11c, g22c)
                 done, prev_rg = _bivar_converged(avg1, avg2, prev1, prev2,
                                                  count, rg_now, prev_rg, tol)
                 if done:
@@ -1719,9 +1787,7 @@ def _ldpred3_auto_bivariate_prepared_inner(prepared, options, start):
             elif tol > 0.0 and count % check_every == 0:
                 # Prime the snapshot without testing against it.
                 g11c, g12c, g22c = gv_acc / count
-                h1c = min(max(g11c, lo), hi)
-                h2c = min(max(g22c, lo), hi)
-                prev_rg = _rg_from_quadratics(g12c, h1c, h2c)
+                prev_rg = _rg_from_quadratics(g12c, g11c, g22c)
                 prev1[:] = avg1 / count
                 prev2[:] = avg2 / count
 
@@ -1730,6 +1796,7 @@ def _ldpred3_auto_bivariate_prepared_inner(prepared, options, start):
     if not 0 < count <= num_iter:                 # defensive internal invariant
         raise RuntimeError("internal error: retained-iteration count mismatch")
     g11, g12, g22 = gv_acc / count
+    _check_fit_is_finite((g11, g12, g22), avg1, avg2)
     h2_1 = min(max(g11, lo), hi)
     h2_2 = min(max(g22, lo), hi)
     # rg from effect samples with approximately independent noise (drawn at
@@ -1770,15 +1837,21 @@ def _ldpred3_auto_bivariate_prepared_inner(prepared, options, start):
         else:
             rg = _rg_from_quadratics(num, v1, v2)
     else:
-        # Use the reported (clamped) h2 scale for the denominator: raw sampled
-        # quadratics can go non-positive on non-PD (int8-quantised) blocks,
-        # which would slam rg to +/-1 through the floor.
-        rg = _rg_from_quadratics(g12, h2_1, h2_2)
+        # Ratio of the *raw* quadratics, exactly as docs/algorithm.md Equation 6
+        # defines it. Dividing the raw numerator by the h2_bounds-clamped
+        # variances is not a correlation: whenever a bound binds it drives rg
+        # toward +/-1 while the true ratio is unchanged (a tightened h2_bounds
+        # reported a true rg of 0.43 as 1.00). The non-positive quadratics that
+        # motivated the clamped form -- possible on non-PD int8 blocks -- are
+        # already handled by _rg_from_quadratics' own guard.
+        rg = _rg_from_quadratics(g12, g11, g22)
     # Summarise both hyperparameters over exactly the same retained iterates.
     pi_mean = pi_samples[:count].mean(axis=0)
     s1_mean, s2_mean, s12_mean = sig_samples[:count].mean(axis=0)
     noise_mean = noise_scale_samples[:count].mean(axis=0)
-    _warn_if_implausible_fit((float(h2_1), float(h2_2)),
+    # Pass the raw quadratics, not the clamped h2: a clamped value can no
+    # longer show that a bound was reached.
+    _warn_if_implausible_fit((float(g11), float(g22)),
                              float(pi_mean[1] + pi_mean[2] + pi_mean[3]),
                              (lo, hi), m)
     return BivariateResult(beta1_est=avg1 / count, beta2_est=avg2 / count,

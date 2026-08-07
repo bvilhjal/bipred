@@ -12,8 +12,17 @@ license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Bjarni Vilhjálmsson" }]
 # bipred consumes ldpred3's private sampler/LDSC compatibility seam. It is not
-# yet on PyPI; install this exact version from the tested Git revision in README.
-dependencies = ["numpy>=1.20", "ldpred3==0.4.3"]
+# yet on PyPI; install it from the tested Git revision in README.
+#
+# A range, not `==0.4.3`. ldpred3 exists on no package index, so an exact
+# specifier makes pip search for a distribution it can never find whenever the
+# installed version differs -- which breaks the README's own sibling-checkout
+# development recipe against an ldpred3 working tree that has moved past the
+# pin. Reproducibility is carried where it belongs: LDPRED3_REV in
+# .github/workflows/ci.yml plus its version assertion, and the exact revision
+# in the README install command. The upper bound is the seam guard: the private
+# surface in bipred/_ldpred3_compat.py may change across a minor release.
+dependencies = ["numpy>=1.20", "ldpred3>=0.4.3,<0.5"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",

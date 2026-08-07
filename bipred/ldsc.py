@@ -150,6 +150,16 @@ def ldsc_rg(beta_hat1, beta_hat2, ld_scores, n_eff1, n_eff2, *, m_snps=None,
     ``r_g = rho_g / sqrt(h2_1 h2_2)`` with marginal heritabilities from
     univariate LD Score regression. Standard errors are by block jackknife.
 
+    This is a **one-step, unfiltered** LDSC: every supplied variant enters the
+    regression and there is no chi-square cap. The regression weights are built
+    from the *fitted* means, so a variant whose observed chi-square far exceeds
+    the LDSC line is not down-weighted and keeps near-full leverage. A handful
+    of large-effect variants can therefore pull both the genetic covariance and
+    the marginal heritabilities upward. The reference LDSC implementation
+    excludes ``chi2 > max(0.001 N, 80)`` for this reason. Exclude long-range-LD
+    regions (MHC, APOE) and cap extreme chi-square yourself before calling this
+    when a screen needs to be robust to individual loci.
+
     All per-variant inputs must be aligned to the same variants in genomic
     order. This function receives no genomic coordinates, so it cannot verify
     or restore that order. A common row permutation leaves the point estimates
@@ -170,6 +180,15 @@ def ldsc_rg(beta_hat1, beta_hat2, ld_scores, n_eff1, n_eff2, *, m_snps=None,
         are defined. Defaults to the number of supplied summary-statistic rows.
         When those rows are a subset of a larger reference variant map, pass the
         full reference-map count so the LDSC slope uses the intended estimand.
+
+        ``m_snps`` and ``ld_scores`` must describe the **same** variant map. The
+        regression is ``x = N * ell / M``, whose model only holds when ``ell``
+        sums r^2 over all ``M`` reference variants. ``ldpred3.ld_scores(blocks)``
+        sums over exactly the blocks it is given, so building blocks from the
+        summary-statistic subset and then passing the full reference count
+        inflates both slopes. Either compute ``ell`` over the full reference
+        blocks and subset the rows afterwards, or leave ``m_snps`` at its
+        default so ``M`` and ``ell`` stay consistent.
     constrain_intercept : float, optional
         Fix the cross-trait intercept (e.g. ``0.0`` for non-overlapping samples).
     n_blocks : int, default 200

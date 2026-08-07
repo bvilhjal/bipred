@@ -7,6 +7,48 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 ### Fixed
 
+- **`rg` no longer saturates against `h2_bounds`.** The reported genetic
+  correlation divided the raw genetic covariance by the *clamped* per-trait
+  heritabilities, so a binding bound drove `rg` toward ±1 while the underlying
+  quadratics were unchanged — on one 2,000-variant fixture a true `rg` of 0.43
+  was reported as 1.00 after tightening `h2_bounds`. `rg` is now the ratio of
+  the raw quadratics, exactly as `docs/algorithm.md` Equation 6 defines it;
+  `h2` is still clamped for reporting. The same correction applies to the
+  adaptive-stopping check, the pooled multi-chain `rg`, and the per-draw `rg`
+  trace feeding split-Rhat (where saturation also faked between-chain
+  agreement). Fits whose `h2` stayed inside its bounds are unaffected.
+- **`from bipred import estimate_sample_overlap, ldsc_rg` bound the module, not
+  the function**, so the documented snippet in `docs/rg.md` raised
+  `TypeError: 'module' object is not callable`. The LDSC module was named
+  `ldsc_rg`, colliding with the `ldsc_rg` function it exports, and which one
+  `bipred.ldsc_rg` resolved to depended on import order. The module is now
+  `bipred/ldsc.py`; the public API is unchanged. Submodules
+  (`bipred.bivariate`, `bipred.ldsc`, `bipred.multichain`, `bipred.regional`)
+  are now reachable as attributes and appear in `dir(bipred)`, and a name
+  collision is asserted against at import. `import bipred.ldsc_rg` no longer
+  resolves; the function `bipred.ldsc_rg` and every other public name are
+  unchanged.
+- A diverged chain raised through `ldpred3_auto_bivariate_chains` now keeps its
+  `FloatingPointError` type instead of being flattened into `RuntimeError` by
+  the chain wrapper, matching the type `_validated_chain_traces` already raises
+  for a non-finite trace.
+- A diverged fit now raises `FloatingPointError` instead of returning NaN or a
+  floored `h2`. NaN was not self-announcing in the sweep: the log-sum-exp left
+  `wmax` at the first state, every state probability became NaN, and each
+  variant fell through to the both-causal branch, so `h2`, `rg`, `sigma` and
+  both effect vectors came back NaN with no error. The *implausible fit*
+  warning is also two-sided now — a floored `h2` was previously silent — and
+  reads the raw quadratics, since a clamped `h2` cannot show that a bound was
+  reached. The low end distinguishes the two cases: a non-positive sampled
+  genetic variance is degenerate and also reports `rg` as 0, while a small but
+  strictly positive quadratic under the caller's own floor only means the
+  reported `h2` is clamped. The warning is still suppressed below 1,000
+  variants.
+- The benchmark simulator resolved its backend twice: frozen into
+  `SIMULATOR_CACHE_TAG` at import, then re-probed per call. `import msprime` is
+  not idempotent — a failed attempt can leave partial state that lets a retry
+  succeed — so segments could be simulated by msprime and cached under the
+  `numba` tag. The backend is now resolved once per process.
 - `rg_decorrelated=True` no longer aborts an otherwise usable fit when the
   cross-sweep genetic-variance estimate is degenerate. A non-positive variance
   (exactly zero in finite samples, or slightly negative — e.g. a sparse, weakly
@@ -18,7 +60,7 @@ User-visible changes to **bipred** are recorded here. The project is currently
 - The seam gate `test_private_ldpred3_imports_stay_centralised` now reads each
   module as UTF-8 instead of the platform default, so it no longer raises
   `UnicodeDecodeError` on a cp1252 (Windows) checkout over the Greek letters in
-  `ldsc_rg.py`.
+  the LDSC module (`bipred/ldsc.py`, then named `ldsc_rg.py`).
 - `regional_rg` rejects a float `regions` array containing non-finite labels
   (`NaN`/`inf`) instead of silently pooling every `NaN`-marked variant into one
   spurious cross-genome region — matching the existing rejection of `None`
@@ -26,6 +68,36 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 ### Changed
 
+- The `ldpred3` dependency is now the range `>=0.4.3,<0.5` rather than
+  `==0.4.3`. ldpred3 is on no package index, so the exact specifier sent pip
+  looking for a distribution it can never find whenever the installed version
+  differed — breaking the README's own sibling-checkout development recipe
+  against an ldpred3 tree past the pin. The exact tested revision still lives
+  in the README install command and in CI's `LDPRED3_REV` plus its version
+  assertion.
+- The weekly `ldpred3-head` drift-watch CI leg installs bipred with
+  `--no-deps`. It deliberately runs an ldpred3 whose version differs from
+  bipred's declared range, so letting pip re-resolve the dependency failed at
+  resolution and the leg never reached `pytest` — silently, because it is
+  `continue-on-error`.
+- Documentation corrections: `docs/rg.md` said a degenerate `rg_decorrelated`
+  fit raises (it warns and returns NaN); `docs/guide.md` and `docs/rg.md`
+  offered "pass the fit's prepared blocks" as a remedy with no public API
+  behind it; `docs/guide.md` Table 2 now marks which options the chains driver
+  accepts, rejects, or renames, documents `sample_every`, and gives the chains
+  `seed` contract; `ldsc_rg` documents that it is one-step and unfiltered (no
+  chi-square cap, so single large-effect loci keep full leverage) and that
+  `m_snps` and `ld_scores` must describe the same variant map;
+  `RegionalRgResult` no longer claims regions can be aggregated by summing
+  (that drops cross-region LD within a block).
+- `benchmarks/RESULTS.md` Tables 4–6 were still printing 0.2.0 timing and
+  peak-memory numbers against regenerated CSVs, including a 2.51 GB memory
+  spike at 80k variants that the current data does not reproduce. Accuracy
+  columns were correct and unchanged. A test now re-derives Table 6 from
+  `rg_scaling.csv` cell by cell; Tables 4 and 5 were corrected by hand and
+  remain unguarded.
+- The README gained a citation section pointing at LDpred/LDpred2, cross-trait
+  LDSC, and MiXeR.
 - Passing `tol > 0` together with `rg_decorrelated=True` to the single-chain
   `ldpred3_auto_bivariate[_blocks]` now emits a `RuntimeWarning` and is
   documented as a no-op (the thinned decorrelated-rg estimator needs the full

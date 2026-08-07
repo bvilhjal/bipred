@@ -140,7 +140,13 @@ pooling and adaptive stopping.
 
 `res.h2` reports the mean sampled quadratic `beta_t' R beta_t`, clamped to
 `h2_bounds`. Because sampled rather than Rao–Blackwellized effects are used, it
-can be mildly upward-biased at low power.
+can be mildly upward-biased at low power. The clamp applies to the reported
+heritability only: `r_g` is the ratio of the unclamped quadratics in Equation 6,
+so tightening `h2_bounds` does not rescale it. (`h2_cap` is different — it acts
+inside the sampler, so it moves both.) A clamp that binds is reported through
+the *implausible fit* warning on panels of at least 1,000 variants; below that
+the warning is suppressed, and `res.h2` landing exactly on a bound, or the raw
+`(gvar_1, gcov, gvar_2)` in `res.genetic_samples`, is the only signal.
 
 Cross-trait LDSC (`bipred.ldsc_rg`) is a separate moment estimator and useful
 screen. Its ratio can be unstable when either marginal LDSC heritability is near

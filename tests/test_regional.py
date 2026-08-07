@@ -135,7 +135,9 @@ def test_min_variants_blanks_small_regions():
     reg = [0, 0, 0, 0, 1, 1]
     res = regional_rg(b1, b2, [(R, np.arange(6))], reg, min_variants=3)
     assert np.isfinite(res.rg[0]) and np.isnan(res.rg[1])
-    # the quadratics are still reported, so a caller can pool small regions
+    # The quadratics are still reported for an under-sized region, so a caller
+    # can inspect it. They are not additive across regions inside one LD block
+    # (see RegionalRgResult) -- to merge regions, re-run with merged labels.
     assert np.isfinite(res.gcov[1])
 
 

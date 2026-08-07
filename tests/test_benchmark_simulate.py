@@ -35,6 +35,9 @@ def test_msprime_backend_returns_filtered_diploid_dosages(monkeypatch):
         BinaryMutationModel=lambda: "binary",
     )
     monkeypatch.setitem(sys.modules, "msprime", fake_msprime)
+    # The backend is resolved once per process, so select it explicitly rather
+    # than relying on the stub being visible to a re-probe.
+    monkeypatch.setattr(simulate, "_RESOLVED_BACKEND", "msprime")
 
     dosages = simulate_genotypes_by_mutation_rate(
         3, 123.9, recomb_rate=2e-8, mut_rate=3e-8, Ne=12000,
@@ -79,6 +82,84 @@ def test_cache_tag_matches_the_resolved_backend():
     expected = {"numba": "numba-v1", "msprime": "msprime-v1"}[
         simulate._backend()]
     assert simulate.SIMULATOR_CACHE_TAG == expected
+
+
+def test_backend_resolution_is_stable_within_a_process():
+    """The tag names the simulator that actually produced a cached segment.
+
+    ``import msprime`` is not idempotent -- a failed attempt can leave partial
+    state that lets a retry succeed -- so re-probing per call once let segments
+    be simulated by msprime and cached under the numba tag. Resolving once
+    makes the two answers the same object.
+    """
+    code = """
+import benchmarks.simulate as simulate
+
+first = simulate._backend()
+assert simulate.SIMULATOR_CACHE_TAG == simulate._BACKEND_TAGS[first]
+# Re-probe many times: a non-idempotent import would flip on a later attempt.
+for _ in range(5):
+    assert simulate._backend() == first, "backend changed mid-process"
+assert simulate.SIMULATOR_CACHE_TAG == simulate._BACKEND_TAGS[simulate._backend()]
+"""
+    subprocess.run([sys.executable, "-c", code], check=True)
+
+
+def _markdown_table_after(text, caption):
+    """Rows of the first markdown table following ``caption``, as cell lists."""
+    lines = text[text.index(caption):].splitlines()
+    rows = []
+    for line in lines[1:]:
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            if rows:
+                break
+            continue
+        cells = [c.strip() for c in stripped.strip("|").split("|")]
+        if set("".join(cells)) <= set("-: "):        # the header separator
+            continue
+        rows.append(cells)
+    return rows[1:]                                  # drop the header row
+
+
+def test_results_scaling_table_matches_its_csv():
+    """RESULTS.md's prose tables are transcriptions; keep them honest.
+
+    The 0.2.1 regeneration updated benchmarks/rg_scaling.csv but left the
+    printed timing and peak-memory columns at their 0.2.0 values, including a
+    2.51 GB memory spike the current data does not show.
+    """
+    import csv
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parent.parent / "benchmarks"
+    rows = list(csv.DictReader((root / "rg_scaling.csv").open()))
+    table = _markdown_table_after(
+        (root / "RESULTS.md").read_text(encoding="utf-8"),
+        "**Table 6. Scaling with variant count.**",
+    )
+    assert len(table) == len(rows)
+
+    def number(cell):
+        return float(cell.split()[0].replace(",", ""))
+
+    columns = ["m", "t_ldsc_s", "t_ldpred3_s", "peak_gb", "rg_realized",
+               "abs_error_ldsc_realized", "abs_error_ldpred3_realized"]
+    for printed, record in zip(table, rows):
+        assert len(printed) == len(columns)
+        for cell, column in zip(printed, columns):
+            # Each cell transcribes its CSV value at the precision it is
+            # printed to, so the tolerance is that column's own half-ulp --
+            # not one fixed window, which would be far too loose for a cell
+            # printed to fewer decimals. Exact halfway values (0.5175 -> 0.517
+            # or 0.518) are accepted either way; anything beyond half an ulp is
+            # a real desync.
+            digits = len(cell.split()[0].partition(".")[2])
+            # The 1e-9 slack is floating point, not looseness: an exact tie
+            # such as |0.518 - 0.5175| evaluates to 5.000000000000004e-4.
+            half_ulp = 0.5 * 10.0 ** -digits * (1.0 + 1e-9)
+            assert abs(number(cell) - float(record[column])) <= half_ulp, (
+                f"{column}: table says {cell!r}, CSV says {record[column]!r}")
 
 
 def test_architecture_cache_key_names_the_simulator_schema():

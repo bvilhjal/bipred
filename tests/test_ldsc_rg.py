@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from bipred import ldsc_rg, LDSCRgResult, estimate_sample_overlap
-from bipred.ldsc_rg import _z_from_standardized
+from bipred.ldsc import _z_from_standardized
 from ldpred3 import ld_scores, standardize_betas
 
 

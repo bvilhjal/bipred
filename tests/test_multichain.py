@@ -7,7 +7,10 @@ import pytest
 
 import bipred.bivariate as bivariate
 import bipred.multichain as multichain
-from bipred.bivariate import ldpred3_auto_bivariate_blocks
+from bipred.bivariate import (
+    _rg_from_quadratics,
+    ldpred3_auto_bivariate_blocks,
+)
 
 
 def _result(m, retained, chain, *, genetic=None):
@@ -241,6 +244,58 @@ def test_h2_and_rg_use_pooled_raw_genetic_traces(monkeypatch):
     assert result.posterior.rg != pytest.approx(-0.9)
 
 
+def test_diverged_chain_keeps_its_arithmetic_exception_type(monkeypatch):
+    """A diverged chain raises FloatingPointError, not a generic RuntimeError.
+
+    ``_validated_chain_traces`` already uses FloatingPointError for a
+    non-finite trace, so funnelling the fit's own divergence guard through the
+    catch-all wrapper would give the same condition two different types
+    depending on where it was caught.
+    """
+    def diverge(prepared, options, start):
+        raise FloatingPointError("the bivariate fit produced non-finite "
+                                 "genetic quadratic forms")
+
+    monkeypatch.setattr(multichain, "_ldpred3_auto_bivariate_prepared", diverge)
+    blocks, beta1, beta2 = _inputs()
+    with pytest.raises(FloatingPointError, match=r"chain 0 \(seed \d+\) failed"):
+        multichain.ldpred3_auto_bivariate_chains(
+            blocks, beta1, beta2, 10_000, 12_000, num_iter=4)
+
+
+def test_pooled_rg_does_not_saturate_when_the_h2_bound_binds(monkeypatch):
+    """The multi-chain rg is the raw pooled ratio, not the clamped one.
+
+    Every fixture in this module keeps its pooled quadratics inside the default
+    h2_bounds, so a denominator clamped to the bound and the raw one coincide
+    and nothing here could tell them apart. This one makes the ceiling bind:
+    pooled (gvar1, gcov, gvar2) = (2.0, 1.0, 2.0) is a true rg of 0.5, which
+    the clamped form would report as 1.0.
+    """
+    calls = []
+
+    def run(prepared, options, start):
+        chain = len(calls)
+        calls.append((prepared, options, start))
+        genetic = np.tile((2.0, 1.0, 2.0), (options.num_iter, 1))
+        return _result(prepared.m, options.num_iter, chain, genetic=genetic)
+
+    monkeypatch.setattr(multichain, "_ldpred3_auto_bivariate_prepared", run)
+    blocks, beta1, beta2 = _inputs()
+    result = multichain.ldpred3_auto_bivariate_chains(
+        blocks, beta1, beta2, 10_000, 12_000, num_iter=4,
+        h2_bounds=(1e-4, 1.0),
+    )
+
+    assert result.posterior.h2 == pytest.approx((1.0, 1.0))   # ceiling binds
+    assert result.posterior.rg == pytest.approx(0.5)          # not 1.0
+    # The per-draw split-Rhat trace shares the convention; a saturated trace
+    # would be constant at 1.0 and fake perfect between-chain agreement.
+    rhat = result.basic_split_rhat
+    assert rhat.degenerate["rg"] is True                # identical constant draws
+    assert np.isnan(rhat.rhat["rg"])
+
+
 def test_real_sampler_matches_manual_seeded_pooling():
     m = 6
     blocks = [(np.eye(m), np.arange(m))]
@@ -316,17 +371,15 @@ def test_real_sampler_matches_manual_seeded_pooling():
     )
 
     genetic_mean = pooled_genetic.mean(axis=0)
+    # h2 is clamped for reporting; rg is the ratio of the *raw* pooled
+    # quadratics. Deriving the expected rg from the clamped h2 -- as this
+    # oracle used to -- encodes the saturating formula the fit no longer uses.
     expected_h2 = (
         float(np.clip(genetic_mean[0], 1e-4, 1.0)),
         float(np.clip(genetic_mean[2], 1e-4, 1.0)),
     )
-    expected_rg = float(
-        np.clip(
-            genetic_mean[1] / np.sqrt(expected_h2[0] * expected_h2[1]),
-            -1.0,
-            1.0,
-        )
-    )
+    expected_rg = _rg_from_quadratics(
+        genetic_mean[1], genetic_mean[0], genetic_mean[2])
     assert result.posterior.h2 == expected_h2
     assert result.posterior.rg == expected_rg
     np.testing.assert_array_equal(result.posterior.pi, pooled_pi.mean(axis=0))

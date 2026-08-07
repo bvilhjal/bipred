@@ -21,6 +21,7 @@ from .bivariate import (
     _ldpred3_auto_bivariate_prepared,
     _prepare_bivariate_inputs,
     _rg_from_quadratics,
+    _rg_from_quadratics_array,
     _validate_seed,
     _validate_sigma_prior_scale,
 )
@@ -229,7 +230,12 @@ def _diagnostic_traces(
     lo, hi = h2_bounds
     h21 = np.clip(genetic[:, :, 0], lo, hi)
     h22 = np.clip(genetic[:, :, 2], lo, hi)
-    rg = np.clip(genetic[:, :, 1] / np.sqrt(h21 * h22), -1.0, 1.0)
+    # rg is the ratio of the *raw* quadratics, matching what the fit reports.
+    # Dividing the raw covariance by the clamped variances saturates rg at +/-1
+    # whenever a bound binds, which would also fake perfect between-chain
+    # agreement in the split-Rhat below.
+    rg = _rg_from_quadratics_array(genetic[:, :, 1], genetic[:, :, 0],
+                                   genetic[:, :, 2])
     rho_beta = np.clip(
         sigma[:, :, 2] / np.sqrt(sigma[:, :, 0] * sigma[:, :, 1]),
         -1.0,
@@ -416,6 +422,14 @@ def ldpred3_auto_bivariate_chains(
             return _ldpred3_auto_bivariate_prepared(
                 prepared, options, chain_starts[index]
             )
+        except FloatingPointError as error:
+            # A diverged chain surfaces as FloatingPointError from the fit, and
+            # _validated_chain_traces raises the same type for a non-finite
+            # trace. Keep that type at this boundary instead of flattening the
+            # arithmetic failure into a generic RuntimeError.
+            raise FloatingPointError(
+                f"chain {index} (seed {int(chain_seed)}) failed: {error}"
+            ) from error
         except Exception as error:
             raise RuntimeError(
                 f"chain {index} (seed {int(chain_seed)}) failed: {error}"
@@ -475,7 +489,9 @@ def ldpred3_auto_bivariate_chains(
     noise_mean = pooled_noise.mean(axis=0)
     h21 = float(np.clip(genetic_mean[0], *h2_bounds))
     h22 = float(np.clip(genetic_mean[2], *h2_bounds))
-    rg = _rg_from_quadratics(genetic_mean[1], h21, h22)
+    # Raw quadratics, as in the single-chain fit: h2 is clamped for reporting,
+    # but clamping the rg denominator alone would saturate the ratio.
+    rg = _rg_from_quadratics(genetic_mean[1], genetic_mean[0], genetic_mean[2])
 
     posterior = BivariateResult(
         beta1_est=beta1_sum / n_chains,

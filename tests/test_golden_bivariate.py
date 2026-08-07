@@ -41,6 +41,17 @@ _BIVAR_BETA1 = np.array([
     -7.99270116102478669e-04, -3.04057175433961442e-03, -4.10055068429184974e-03,
     1.84725979127333327e-04, 5.32542022673826696e-02,
 ])
+_BIVAR_BETA2 = np.array([
+    9.18440875132913695e-05, -1.25642487517512119e-04, 3.12476925618041211e-02,
+    -1.50669158736608140e-02, -4.87582115673005061e-03, 2.96888441841096460e-04,
+    1.90612357018260133e-02, 5.01923279358683916e-02, -2.29932496838740723e-02,
+    -4.20566729021603705e-02, -6.26576098905062199e-04, 6.25668350189269584e-02,
+    -1.26660340430480300e-01, 5.36907636546743658e-02, -5.50249677920169322e-02,
+    9.90437042971750443e-05, -8.65444991076825794e-04, -2.30433652022696148e-03,
+    -2.15184420544339605e-04, 3.26256805437314806e-02,
+])
+_BIVAR_H2 = (0.04008305500773926, 0.022890700274269222)
+_BIVAR_P = 0.6425691261548463
 
 
 # --- int8 goldens: the automatic policy quantises this small R to int8, so the
@@ -57,6 +68,28 @@ _BIVAR_BETA1_INT8 = np.array([
     -5.47859240316516112e-04, -3.04406402266507066e-03, -3.95344960911508188e-03,
     3.24734576740398688e-04, 5.28174127155385009e-02,
 ])
+_BIVAR_BETA2_INT8 = np.array([
+    1.02115180212825803e-04, -2.15675249986642197e-04, 3.26065818535915403e-02,
+    -1.71594465410478195e-02, -4.28552685647558187e-03, 3.06730247384675203e-04,
+    2.19670240197312357e-02, 4.68249600796658699e-02, -2.06410510093719760e-02,
+    -4.27037674985630486e-02, -9.82513475312560324e-04, 6.31044299056693070e-02,
+    -1.28363358225860258e-01, 5.50089385418068497e-02, -5.64463129787121098e-02,
+    1.29402916155430090e-04, -8.57908853788176659e-04, -2.77631690475894010e-03,
+    -1.94790235242917401e-04, 3.23914799079089780e-02,
+])
+_BIVAR_H2_INT8 = (0.0397042716216955, 0.023440858650269677)
+_BIVAR_P_INT8 = 0.6474505667358872
+
+
+def _assert_rg_matches_its_definition(res):
+    """rg must equal the quadratic ratio it is defined as (algorithm.md Eq. 6).
+
+    Freezing rg alone cannot catch a rescaled denominator: clamping h2 into
+    h2_bounds and dividing the raw covariance by it left every golden value
+    intact while saturating rg on any fit whose h2 hit a bound.
+    """
+    gvar1, gcov, gvar2 = res.genetic_samples.mean(axis=0)
+    np.testing.assert_allclose(res.rg, gcov / np.sqrt(gvar1 * gvar2), rtol=1e-12)
 
 
 def test_golden_bivariate():
@@ -68,6 +101,12 @@ def test_golden_bivariate():
                                  p_init=0.1, ld_int8=False)
     np.testing.assert_allclose(res.rg, _BIVAR_RG, rtol=1e-6)
     np.testing.assert_allclose(res.beta1_est, _BIVAR_BETA1, rtol=1e-6, atol=1e-9)
+    # Trait 2 and the heritability scale are frozen too: with only rg and
+    # beta1_est pinned, a scale error confined to trait 2 or to h2 passed.
+    np.testing.assert_allclose(res.beta2_est, _BIVAR_BETA2, rtol=1e-6, atol=1e-9)
+    np.testing.assert_allclose(res.h2, _BIVAR_H2, rtol=1e-6)
+    np.testing.assert_allclose(res.p, _BIVAR_P, rtol=1e-6)
+    _assert_rg_matches_its_definition(res)
 
 
 def test_golden_bivariate_int8():
@@ -80,6 +119,13 @@ def test_golden_bivariate_int8():
     np.testing.assert_allclose(res.rg, _BIVAR_RG_INT8, rtol=1e-6)
     np.testing.assert_allclose(res.beta1_est, _BIVAR_BETA1_INT8, rtol=1e-6,
                                atol=1e-9)
+    np.testing.assert_allclose(res.beta2_est, _BIVAR_BETA2_INT8, rtol=1e-6,
+                               atol=1e-9)
+    np.testing.assert_allclose(res.h2, _BIVAR_H2_INT8, rtol=1e-6)
+    np.testing.assert_allclose(res.p, _BIVAR_P_INT8, rtol=1e-6)
+    _assert_rg_matches_its_definition(res)
     # int8 stays close to the exact float fit (quantisation error is small).
     np.testing.assert_allclose(res.rg, _BIVAR_RG, atol=0.02)
     np.testing.assert_allclose(res.beta1_est, _BIVAR_BETA1, atol=0.01)
+    np.testing.assert_allclose(res.beta2_est, _BIVAR_BETA2, atol=0.01)
+    np.testing.assert_allclose(res.h2, _BIVAR_H2, atol=0.01)

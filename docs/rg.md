@@ -11,7 +11,7 @@ polygenic-overlap interpretation. See [`guide.md`](guide.md) for fitting.
 |---|---|---|
 | `res.rg` | default joint LD estimate | needs well-matched LD |
 | `rg_decorrelated=True` | **sensitivity diagnostic only** — the default estimator measured more accurate in both power regimes (0.0084 vs 0.0110, 0.0174 vs 0.0240); incompatible with multichain and adaptive stopping |
-| `bipred.ldsc_rg` | fast screen or independent check | unstable when marginal LDSC `h2` is near zero |
+| `bipred.ldsc_rg` | fast screen or independent check | unstable when marginal LDSC `h2` is near zero; one-step and unfiltered, so single large-effect loci carry full leverage |
 | two univariate LDpred fits | additional diagnostic | often attenuated under power asymmetry |
 
 Cross-trait LDSC fits the moment relation:
@@ -31,7 +31,15 @@ below one. The simpler `z_tj ≈ sqrt(N_tj) beta_hat_tj` is only a weak-effect
 approximation. The slope estimates genetic covariance under LDSC assumptions.
 The intercept captures correlated sampling noise and cross-trait confounding.
 `M` is the variant count defining the heritability and covariance; pass the full
-count as `m_snps` when summary statistics are a subset of that map.
+count as `m_snps` when summary statistics are a subset of that map. `m_snps` and
+`ld_scores` must describe the same variant map — `ldpred3.ld_scores(blocks)` sums
+over exactly the blocks it is handed, so pairing subset-derived LD scores with a
+full-map `m_snps` inflates both slopes.
+
+`ldsc_rg` is one-step and applies no chi-square filter, so a few large-effect
+variants keep near-full leverage on both the covariance and the marginal
+heritabilities. Drop long-range-LD regions (MHC, APOE) before using it as a
+screen where individual loci could dominate.
 
 For `rg_se`, order rows by chromosome and position. The block jackknife deletes
 contiguous ranges of the supplied row order; arbitrary order does not preserve
@@ -63,8 +71,10 @@ synthetic sweep, paired MAE was 0.0084 versus 0.0110 under symmetric power and
 estimator. Treat it as a sensitivity analysis, not an automatic replacement for
 `res.rg` — and not as a production estimator at all. It needs at least two
 retained effect samples and a full schedule; adaptive stopping is disabled.
-Undefined cross-sweep quadratics raise an error
-rather than silently returning the default estimator.
+Non-finite cross-sweep quadratics raise an error rather than silently returning
+the default estimator. A merely *degenerate* denominator — a non-positive
+cross-sweep genetic variance, which a sparse, weakly powered fit can produce —
+warns and reports `rg` as `NaN`, leaving the rest of the fit usable.
 
 ## Sample overlap
 
@@ -152,9 +162,9 @@ it. A default fit can internally Q8-quantize float blocks of at most 1,500
 variants without mutating the originals. Passing those originals therefore
 evaluates float LD, not the fit's internal Q8 representation — so
 `regional_rg` **warns** when it is handed float blocks in that range, naming
-the remedies: pass matching int8 blocks to both calls, use the same float32
-blocks and set `ld_int8=False` during fitting, or pass the fit's prepared
-(quantised) blocks.
+the two available remedies: pass matching int8 blocks to both calls, or use the
+same float32 blocks and set `ld_int8=False` during fitting. The fit's internal
+quantised copy is private and cannot be retrieved.
 
 **Table 2. `RegionalRgResult` fields.**
 
