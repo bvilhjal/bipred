@@ -1,4 +1,4 @@
-# Benchmarks for bipred 0.2.1
+# Benchmarks for bipred 0.2.2
 
 Every self-contained script was re-run end to end for this record, against the
 same cached coalescent truths as the 2026-08-03 snapshot (revision `17d6ae2`),
@@ -31,7 +31,7 @@ segments are tagged per backend and never mix.
 | Component | Value |
 |---|---|
 | Python | 3.14.6 |
-| bipred | 0.2.1 |
+| bipred | 0.2.2 |
 | ldpred3 | 0.4.5 |
 | NumPy / Numba | 2.4.6 / 0.66.0 |
 | msprime / Matplotlib | 1.4.2 / 3.11.1 |
@@ -129,11 +129,11 @@ The comparison uses five target points and six replicates at symmetric
 
 | Estimator | Symmetric MAE | Asymmetric MAE | Mean 5k fit time, symmetric |
 |---|---:|---:|---:|
-| LDSC | 0.0542 | 0.0608 | 0.025 s |
-| two univariate fits, `uni_gv` | 0.0190 | 0.0422 | 1.014 s |
-| two univariate fits, `uni_r2` | 0.0184 | 0.0420 | 1.014 s |
-| joint default | **0.0086** | **0.0174** | 0.134 s |
-| joint cross-sweep sensitivity | 0.0108 | 0.0242 | 0.133 s |
+| LDSC | 0.0542 | 0.0608 | 0.031 s |
+| two univariate fits, `uni_gv` | 0.0190 | 0.0422 | 1.090 s |
+| two univariate fits, `uni_r2` | 0.0184 | 0.0420 | 1.090 s |
+| joint default | **0.0086** | **0.0174** | 0.139 s |
+| joint cross-sweep sensitivity | 0.0108 | 0.0242 | 0.136 s |
 
 No estimator failed in these cells. The cross-sweep
 `rg_decorrelated=True` estimator did not improve on the default, including in
@@ -144,9 +144,9 @@ replacement.
 
 | Variants | Blocks | LDSC | Two univariate fits | Joint default | Joint cross-sweep |
 |---:|---:|---:|---:|---:|---:|
-| 5,000 | 25 | 0.029 s | 1.040 s | 0.132 s | 0.132 s |
-| 20,000 | 100 | 0.353 s | 3.416 s | 0.514 s | 0.517 s |
-| 50,000 | 250 | 1.863 s | 9.030 s | 1.363 s | 1.380 s |
+| 5,000 | 25 | 0.031 s | 1.092 s | 0.139 s | 0.133 s |
+| 20,000 | 100 | 0.344 s | 3.908 s | 0.566 s | 0.559 s |
+| 50,000 | 250 | 2.070 s | 10.606 s | 1.508 s | 1.547 s |
 
 `uni_gv` and `uni_r2` reuse the same two univariate fits, so their recorded cost
 is identical.
@@ -163,13 +163,13 @@ Each size runs in a fresh subprocess and reports one realized draw.
 
 | Variants | LDSC time | LDpred3 time | Peak RSS | Realized r_g | LDSC absolute error | LDpred3 absolute error |
 |---:|---:|---:|---:|---:|---:|---:|
-| 5,000 | 0.021 s | 0.121 s | 0.211 GB | 0.511 | 0.0399 | 0.0172 |
-| 10,000 | 0.072 s | 0.235 s | 0.230 GB | 0.519 | 0.0590 | 0.0024 |
-| 20,000 | 0.321 s | 0.470 s | 0.364 GB | 0.513 | 0.0332 | 0.0005 |
-| 40,000 | 1.209 s | 1.018 s | 0.474 GB | 0.517 | 0.0138 | 0.0016 |
-| 80,000 | 4.889 s | 2.032 s | 0.619 GB | 0.519 | 0.0632 | 0.0322 |
+| 5,000 | 0.048 s | 0.132 s | 0.290 GB | 0.511 | 0.0399 | 0.0172 |
+| 10,000 | 0.103 s | 0.264 s | 0.321 GB | 0.519 | 0.0590 | 0.0024 |
+| 20,000 | 0.384 s | 0.538 s | 0.404 GB | 0.513 | 0.0332 | 0.0005 |
+| 40,000 | 1.308 s | 1.182 s | 0.462 GB | 0.517 | 0.0138 | 0.0016 |
+| 80,000 | 5.094 s | 2.297 s | 0.654 GB | 0.519 | 0.0632 | 0.0322 |
 
-Peak RSS grows sublinearly across this range (0.21 GB to 0.62 GB for a 16x
+Peak RSS grows sublinearly across this range (0.29 GB to 0.65 GB for a 16x
 variant count). LDSC time grows faster than the joint fit's and overtakes it
 between 20k and 40k variants. An earlier record showed a 2.51 GB spike at 80k;
 no run since has reproduced it, so treat single-run memory figures as machine-
@@ -270,7 +270,7 @@ environmental correlation.
 
 ## External runs
 
-Regenerated at 0.2.1:
+Not regenerated for 0.2.2; these remain 0.2.1 measurements:
 
 - `bivariate_demo.py` — rerun with an `ld_library.npz` generated from the
   repository simulator (12 blocks of 500 variants, 5% spectral shrinkage).

@@ -40,7 +40,7 @@ from ldpred3's ``[fast]`` extra.
 
 import importlib
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
 # public name -> submodule it lives in. No module name may equal one of its own
 # exported names: importing a submodule binds it on this package, and the cache

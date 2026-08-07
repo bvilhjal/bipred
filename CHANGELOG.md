@@ -1,9 +1,15 @@
 # Changelog
 
 User-visible changes to **bipred** are recorded here. The project is currently
-`0.2.1`.
+`0.2.2`.
 
-## [Unreleased]
+## [0.2.2] - 2026-08-07
+
+Performance and benchmark-evidence release. The sampler's estimates are
+unchanged except where a defect made them wrong; the one deliberate behaviour
+change is the `ld_int8` default, which also retires the package's worst
+documented failure mode. Every benchmark artifact in `benchmarks/` was
+regenerated for this version from a single sweep.
 
 ### Performance
 

@@ -40,13 +40,13 @@ m=20,000 with 500-variant blocks, one core, fitting a sparse causal model
 
 | Representation | ms/sweep | Bytes per variant |
 |---|---:|---|
+| dense float32 (D32) | 0.80 | `4k` = 2,000 |
 | dense int8 (D8) | 0.83 | `k` = 500 |
-| dense float32 (D32) | 0.84 | `4k` = 2,000 |
-| low-rank float32, rank 481 | 2.58 | `4·rank` = 1,924 |
-| low-rank int8, rank 481 (LR8) | 3.02 | `rank` = 481 |
+| low-rank float32, rank 481 | 2.60 | `4·rank` = 1,924 |
+| low-rank int8, rank 481 (LR8) | 3.12 | `rank` = 481 |
 
-Dense int8 and float32 sweep within 2% of each other, so **int8 is a memory
-choice and costs nothing measurable in time**. The dequantization sits in the
+Dense int8 and float32 sweep within a few per cent of each other, so **int8 is
+a memory choice and costs nothing meaningful in time**. The dequantization sits in the
 O(k) row update, which is guarded on a variant's effect changing and so fires on
 roughly the causal fraction of visits — about 1% here. That guard is why this
 table is sensitive to the fit: on a degenerate one, where nearly every variant is
