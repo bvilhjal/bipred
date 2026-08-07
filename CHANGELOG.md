@@ -14,34 +14,37 @@ User-visible changes to **bipred** are recorded here. The project is currently
   flags. The twins therefore shared one cache entry, and whichever compiled
   first was served to both. Since the cache lives in `__pycache__` beside
   `bivariate.py` and persists, one `ncores=1` run disabled `ncores>1` for every
-  later run on that checkout. Measured at m=20,000 / k=500: `ncores=4` ran at
-  1.73 ms/sweep from a clean cache and 5.38 — no better than the 5.49 serial
-  baseline — from a cache a serial run had touched. The parallel twins now opt
-  out of the on-disk cache, which restores 1.77 ms/sweep bit-identically, at
-  the cost of one compilation per process when `ncores>1`.
+  later run on that checkout. Measured at m=20,000 / k=500 on LR8: from a cache a
+  serial run had touched, `ncores=4` ran at 9.50 ms/sweep against a 9.54 serial
+  baseline — no scaling whatever — where a clean cache gave 2.76. The parallel
+  twins now opt out of the on-disk cache, which restores full scaling (1.16
+  ms/sweep against a 1.12 private-cache reference) bit-identically, at the cost
+  of one compilation per process when `ncores>1`.
 - **The low-rank sweep kernel is compiled with `fastmath`**, mirroring ldpred3's
   scoping (`_kernels.py:1277`): its O(rank) projection dots are the bulk of a
   low-rank sweep and are add-latency-bound, so letting LLVM reassociate and
   vectorise the reduction is most of the available win. Measured at m=20,000,
-  k=500, rank 481: **1.83x** on LR8 (14.05 -> 7.68 ms/sweep) and **2.57x** on
-  float32 low-rank (12.43 -> 4.84). Results move at the reassociation level
-  (`rg` by 2e-16 relative). The dense kernel is deliberately left plain — it
-  measured only 1.12x, because its guarded row update fires on a few per cent of
-  visits and the sweep is dominated by the four `exp()` calls instead.
+  k=500, rank 481, serial: **2.34x** on LR8 (9.46 -> 4.03 ms/sweep) and
+  **3.79x** on float32 low-rank (9.36 -> 2.47). Results move at the
+  reassociation level (`rg` by 2e-16 relative). The dense kernel is deliberately
+  left plain: its O(k) row update is guarded on a variant's effect changing, so
+  at a realistic causal fraction it fires on about 1% of visits and the sweep is
+  dominated by the four `exp()` calls instead.
 - **Per-variant `n_eff` recomputes the sweep's residual-independent scalars only
   when N changes**, rather than once per variant. `_bivar_const` is ~29
   quantities including four logs, and real summary statistics carry long runs of
   identical `n_eff`. It is a pure function of its arguments, so a memo hit is
-  bit-identical. Measured 1.16x on a dense per-variant-N fit with runs of 250;
-  the constant-N path is unchanged.
+  bit-identical. Measured **1.69x** on a dense per-variant-N fit with runs of 250
+  (1.442 -> 0.853 ms/sweep), which brings per-variant `n_eff` to parity with a
+  shared scalar N (0.833) — the penalty for varying N is essentially gone. The
+  constant-N path is unchanged.
 - **int8 low-rank (LR8) factors are widened into a float32 scratch once per
   sweep**, ported from ldpred3 0.4.5. The projection dots read `U[j, c]` for
   every element of every O(rank) dot, for every variant, every sweep, paying an
   int8 sign-extend-and-convert each time; widening once per block amortises it.
   The scratch is one stride per *thread*, so it stays O(k × rank) and int8
-  remains the storage format. Measured **7.72 → 5.08 ms/sweep (1.55x)** at rank
-  481, which brings LR8 to within 10% of an equivalent float32 factor — int8
-  storage at float32 speed. Cumulative with `fastmath`, **14.05 → 5.08 (2.77x)**.
+  remains the storage format. Measured **4.03 → 2.97 ms/sweep (1.36x)** at rank
+  481. Cumulative with `fastmath`, **9.46 → 2.97 (3.19x)**.
   The conversion is exact, so the fit moves only where `fastmath` reassociates
   (1.1e-15 relative), and both drivers widen, so seeded results remain identical
   across `ncores`.
