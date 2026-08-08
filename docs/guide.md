@@ -99,6 +99,24 @@ quantisation, so pre-quantise when exact alignment matters. `dentist` remains a
 compatibility alias for this routine; it does not turn the approximation into
 the full DENTIST method.
 
+Blocks are independent, so `ncores` settles several at once — 2.49× on four
+cores at 16 × k=2,000, with the mask identical at every core count. The pool
+nests over BLAS, so it is taken only when BLAS is pinned to one thread and
+`threadpoolctl` confirms the loaded library is reentrant; the concurrent call
+is `np.linalg.eigh`, which is exactly the routine that miscomputes under a
+non-reentrant BLAS, so it never nests on an environment-variable guess:
+
+```bash
+OMP_NUM_THREADS=1 python your_screen.py     # then ld_consistency_screen(..., ncores=4)
+```
+
+Note that ldpred3 ships a *different* LD-consistency filter,
+`ldpred3.qc.dentist_outlier_mask`. It inverts a whole block and removes the
+single worst variant per pass; this one predicts random half-windows from each
+other, which is closer to the split-sample procedure Chen et al. published. They
+are not interchangeable, and bipred's committed factorial evidence was generated
+with the screen documented here.
+
 ### What the factorial established
 
 Three related trait pairs spanning the sign range — LDL × CAD (+0.26), height ×

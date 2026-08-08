@@ -48,6 +48,8 @@ univariate fit::
 
 from __future__ import annotations
 
+import functools
+
 import numpy as np
 
 from ldpred3 import LowRankLD
@@ -173,10 +175,16 @@ def _dentist_statistic(ld, z, predictors, targets, eigenvalue_floor):
     if not keep.any():
         return np.zeros(len(targets))
     retained = vectors[:, keep]
-    scaled = retained / values[keep]                  # V diag(1/lambda)
-    predicted = across @ (scaled @ (retained.T @ z[predictors]))
+    values = values[keep]
+    # ``retained / values`` scales columns, so ``across @ (retained / values)``
+    # is ``(across @ retained) / values``: one ``t x p x r`` product serves both
+    # the prediction and the leverage, where forming ``scaled`` separately paid
+    # for that product twice. ``predicted`` then reads off the ``t x r`` result
+    # rather than ``across``, which is cheaper again.
+    projected = across @ retained                     # the only O(t p r) work
+    predicted = projected @ ((retained.T @ z[predictors]) / values)
     # 1 - r' pinv(R) r, per target, without ever forming pinv(R).
-    leverage = np.einsum("ij,ij->i", across @ scaled, across @ retained)
+    leverage = ((projected * projected) / values).sum(axis=1)
     return (z[targets] - predicted) ** 2 / np.clip(1.0 - leverage, 1e-6, None)
 
 
@@ -222,10 +230,73 @@ def dentist_statistic(ld, z, predictors, targets, *,
         ld, z, predictors, targets, eigenvalue_floor)
 
 
+def _pool_is_worthwhile(ncores, n_blocks):
+    """Whether to settle blocks concurrently, or run them one at a time.
+
+    The pool nests over BLAS, so it is *useful* only when BLAS is pinned to one
+    thread -- otherwise the parallelism already exists inside each ``eigh`` and
+    a second layer merely oversubscribes the same cores.
+
+    It is *safe* only when the loaded BLAS is reentrant, and this screen's
+    concurrent call is ``np.linalg.eigh`` -- the routine ldpred3 measured
+    returning silently wrong answers under an OpenMP-layer OpenBLAS. So this
+    takes the conservative branch of ldpred3's gate and never nests on the
+    environment-variable hint alone: without ``threadpoolctl`` installed to
+    confirm reentrancy, the screen stays serial no matter what ``ncores`` says.
+    """
+    if ncores < 2 or n_blocks <= 1:
+        return False
+    # Local import: the seam pulls in ``ldpred3.ld`` on first access, and a
+    # single-core screen should not pay for it.
+    from ._ldpred3_compat import _blas_pool_safe
+    # The flag selects the conservative branch, named there for the low-rank
+    # route because that is the one built on ``eigh``. This screen is too.
+    return _blas_pool_safe(True)
+
+
+def _settle_block(task, *, z, window, threshold, eigenvalue_floor):
+    """Screen one block through every round, and return its own keep-mask.
+
+    Blocks tile disjoint variant ranges, and each round re-reads only the
+    survivors of the block it is screening, so a block's whole schedule --
+    every round, every window -- is a function of that block, its z-scores and
+    its own random streams. Returning the block's mask rather than writing into
+    a shared one keeps the serial and pooled paths identical by construction
+    rather than by argument.
+    """
+    block, idx, round_seeds = task
+    keep = np.ones(idx.size, dtype=bool)
+    zb = z[idx]
+    dropped = np.zeros(len(round_seeds), dtype=np.int64)
+    for round_no, round_seed in enumerate(round_seeds):
+        rng = np.random.default_rng(round_seed)
+        live = np.where(keep)[0]
+        if live.size < MIN_WINDOW:
+            continue
+        for start in range(0, live.size, window):
+            local = live[start:start + window]
+            if local.size < MIN_WINDOW:
+                continue
+            ld = _window_ld(block, local)
+            zw = zb[local]
+            order = rng.permutation(local.size)
+            half = local.size // 2
+            first, second = order[:half], order[half:]
+            for targets, predictors in ((first, second), (second, first)):
+                stat = _dentist_statistic(
+                    ld, zw, predictors, targets, eigenvalue_floor)
+                bad = targets[stat > threshold]
+                if bad.size:
+                    keep[local[bad]] = False
+                    dropped[round_no] += int(bad.size)
+    return keep, dropped
+
+
 def ld_consistency_screen(
         blocks, z, *, rounds=DEFAULT_ROUNDS, window=DEFAULT_WINDOW,
         threshold=DEFAULT_THRESHOLD,
-        eigenvalue_floor=DEFAULT_EIGENVALUE_FLOOR, seed=0, verbose=False):
+        eigenvalue_floor=DEFAULT_EIGENVALUE_FLOOR, seed=0, ncores=1,
+        verbose=False):
     """DENTIST-inspired keep-mask over the variants ``blocks`` spans.
 
     This uses DENTIST's split-half statistic, but it is not the complete
@@ -249,6 +320,16 @@ def ld_consistency_screen(
         found, so a later pass can see variants that were masked by a bad
         neighbour in an earlier one. Every requested pass is run: a split that
         drops nothing says nothing about a later, independent split.
+    ncores : int, default 1
+        Screen this many blocks concurrently. Blocks are independent and each
+        draws its own random splits, so the mask is identical to ``ncores=1``
+        whatever the pool does. The pool nests over BLAS and is therefore taken
+        **only when BLAS is pinned to one thread and ``threadpoolctl`` confirms
+        the loaded library is reentrant** -- the concurrent call is
+        ``np.linalg.eigh``, which is exactly the routine that miscomputes under
+        a non-reentrant BLAS, so it never nests on an environment-variable
+        guess. Pin BLAS (``OMP_NUM_THREADS=1``) to opt in. Peak memory rises
+        from one window's dense LD to ``ncores`` of them.
     window, threshold, eigenvalue_floor, seed
         See the module constants.
 
@@ -256,7 +337,9 @@ def ld_consistency_screen(
     -------
     ndarray of bool
         ``True`` for variants to keep. Counts per round go to stdout under
-        ``verbose``.
+        ``verbose``; because each block now runs all of its rounds together,
+        those counts are reported once the screen finishes rather than as each
+        round completes. The numbers are unchanged.
     """
     try:
         blocks = list(blocks)
@@ -282,39 +365,52 @@ def ld_consistency_screen(
         "eigenvalue_floor", eigenvalue_floor, lower=0.0)
     if eigenvalue_floor >= 1:
         raise ValueError("eigenvalue_floor must be < 1")
-    rng = np.random.default_rng(seed)
+    ncores = _integer_at_least("ncores", ncores, 1)
+
+    # One independent stream per (block, round), derived here in a fixed order.
+    # A single stream consumed in block order could not be pooled: which draws
+    # a block saw depended on how many the blocks before it had made, so the
+    # splits -- and the mask -- would follow whatever order the workers
+    # happened to finish in. Keying each block's splits to its own position
+    # instead makes the result a function of the seed alone, identical at every
+    # ``ncores``. It does mean a given seed no longer reproduces the masks of
+    # bipred <= 0.3.5.
+    root = np.random.SeedSequence(seed)
+    tasks = [(block, idx, child.spawn(rounds))
+             for (block, idx), child in zip(blocks, root.spawn(len(blocks)))]
+    settle = functools.partial(
+        _settle_block, z=z, window=window, threshold=threshold,
+        eigenvalue_floor=eigenvalue_floor)
+
+    if _pool_is_worthwhile(ncores, len(tasks)):
+        from concurrent.futures import ThreadPoolExecutor
+        # Each task materialises only its own window at a time, so at most
+        # ``ncores`` dense windows are live -- not ``ncores`` whole blocks.
+        with ThreadPoolExecutor(max_workers=ncores) as executor:
+            results = list(executor.map(settle, tasks))
+    else:
+        results = [settle(task) for task in tasks]
+
     keep = np.ones(total, dtype=bool)
-    for round_no in range(rounds):
-        dropped = 0
-        for block, idx in blocks:
-            live = np.where(keep[idx])[0]
-            if live.size < MIN_WINDOW:
-                continue
-            for start in range(0, live.size, window):
-                local = live[start:start + window]
-                if local.size < MIN_WINDOW:
-                    continue
-                ld = _window_ld(block, local)
-                zw = z[idx[local]]
-                order = rng.permutation(local.size)
-                half = local.size // 2
-                first, second = order[:half], order[half:]
-                for targets, predictors in ((first, second), (second, first)):
-                    stat = _dentist_statistic(
-                        ld, zw, predictors, targets, eigenvalue_floor)
-                    bad = targets[stat > threshold]
-                    if bad.size:
-                        keep[idx[local[bad]]] = False
-                        dropped += int(bad.size)
-        if verbose:
-            print(f"  LD screen round {round_no + 1}: dropped {dropped:,}, "
-                  f"{keep.sum():,} remain", flush=True)
+    per_round = np.zeros(rounds, dtype=np.int64)
+    for (block_keep, dropped), (_block, idx) in zip(results, blocks):
+        keep[idx] = block_keep
+        per_round += dropped
+    if verbose:
+        # A variant is dropped at most once -- an earlier round's casualties are
+        # never in a later round's ``live`` -- so the running total is exact.
+        remaining = total
+        for round_no, count in enumerate(per_round):
+            remaining -= int(count)
+            print(f"  LD screen round {round_no + 1}: dropped {count:,}, "
+                  f"{remaining:,} remain", flush=True)
     return keep
 
 
 def dentist(blocks, z, *, rounds=DEFAULT_ROUNDS, window=DEFAULT_WINDOW,
             threshold=DEFAULT_THRESHOLD,
-            eigenvalue_floor=DEFAULT_EIGENVALUE_FLOOR, seed=0, verbose=False):
+            eigenvalue_floor=DEFAULT_EIGENVALUE_FLOOR, seed=0, ncores=1,
+            verbose=False):
     """Compatibility name for :func:`ld_consistency_screen`.
 
     No warning is emitted: existing pipelines keep working, while new code can
@@ -322,7 +418,8 @@ def dentist(blocks, z, *, rounds=DEFAULT_ROUNDS, window=DEFAULT_WINDOW,
     """
     return ld_consistency_screen(
         blocks, z, rounds=rounds, window=window, threshold=threshold,
-        eigenvalue_floor=eigenvalue_floor, seed=seed, verbose=verbose)
+        eigenvalue_floor=eigenvalue_floor, seed=seed, ncores=ncores,
+        verbose=verbose)
 
 
 def in_long_range_ld(chrom, pos, *, include_apoe=True, regions=None):

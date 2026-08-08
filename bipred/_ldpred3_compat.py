@@ -25,6 +25,10 @@ _MODULE_NAMES = {
         "_validate_seed",
     ),
     "ldpred3.ld_repr": ("_Q8",),
+    # Nesting a thread pool over BLAS is safe only for some builds of it, and
+    # ldpred3 already owns that determination. Importing it here rather than
+    # re-deriving it keeps one answer to the question across both packages.
+    "ldpred3.ld": ("_blas_pool_safe",),
     "ldpred3._numba": (
         "HAVE_NUMBA",
         "_jit",

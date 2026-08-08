@@ -8,6 +8,16 @@ comes from the separate archive run, Tables 13--14 from LDL-CAD, and Tables
 bipred revision, package environment, and input hashes. CSVs are the
 authoritative numeric record; tables below are rounded summaries.
 
+**Screen-dependent rows do not reproduce exactly on 0.3.6 or later.** Every
+figure here that depends on `ld_consistency_screen` — the retained counts and
+`rg` of Sections 9 and 10, and Tables 13--17 — was produced under 0.3.5's
+random-split keying. 0.3.6 gives each block its own stream per round so the
+screen can be pooled, which changes *which* variants a given seed drops. The
+separations these sections report are qualitative (12/12 unscreened arms warned
+against 0/12 screened) and are not expected to turn on the exact mask, but the
+counts, timings and estimates would move on a regeneration. They are recorded
+as 0.3.5 measurements and have not been re-run.
+
 Sections 9 and 10 are the only non-simulated studies. They use public summary
 statistics against a UK Biobank LD reference and expose file/reference
 mismatches that simulations drawing `beta_hat` from the fitted model cannot.

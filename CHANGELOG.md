@@ -1,7 +1,71 @@
 # Changelog
 
 User-visible changes to **bipred** are recorded here. The project is currently
-`0.3.5`.
+`0.3.6`.
+
+## [0.3.6] - 2026-08-08
+
+Ports what carries over from ldpred3 0.4.6's DENTIST work. Only one of its
+three changes applies here, because the two screens are different statistics:
+ldpred3 inverts a whole block and drops the single worst variant per pass,
+while this one predicts random half-windows from each other. Its SPD-Cholesky
+inverse route has no counterpart in a truncated `eigh` pseudo-inverse, and its
+fused Numba Schur kernel downdates a precision matrix this screen never forms.
+Its factored low-rank route is not wanted here either: `_window_ld` already
+reads the exact windowed submatrix of `U U' + diag(d)` at window scale, where
+ldpred3 needs an approximation whose own benchmark shows it discarding up to
+seven times more clean variants.
+
+### Added
+
+- **`ld_consistency_screen(..., ncores=N)` settles blocks concurrently.**
+  Blocks tile disjoint variant ranges and each round re-reads only its own
+  survivors, so a block's entire schedule depends on no other block. Measured
+  at 16 x k=2,000 over 3 rounds with BLAS pinned, on four cores: 1.69x at
+  `ncores=2`, 2.17x at 3, 2.49x at 4, with the keep mask identical at every
+  core count. Runtime is monotone in `ncores`.
+
+  The pool nests over BLAS, so it is taken only when BLAS is pinned to one
+  thread *and* `threadpoolctl` confirms the loaded library is reentrant. This
+  screen's concurrent call is `np.linalg.eigh` -- the routine ldpred3 measured
+  returning silently wrong answers under an OpenMP-layer OpenBLAS -- so it
+  takes the conservative branch of ldpred3's gate and never nests on the
+  environment-variable hint alone. Without `threadpoolctl` the screen stays
+  serial whatever `ncores` says. Peak memory rises by one dense window per
+  worker, not one dense block.
+
+### Changed
+
+- **A given `seed` no longer reproduces the masks of 0.3.5 and earlier.**
+  Making the pool possible required this: the old single generator was
+  consumed in block order, so which draws a block saw depended on how many the
+  blocks before it had made, and the splits would have followed whatever order
+  the workers finished in. Each block now derives its own stream per round
+  from a spawned `SeedSequence`, keyed to its position in `blocks`. The mask
+  is a function of the seed alone and identical at every `ncores`. A shorter
+  run remains a prefix of a longer one, so comparing `rounds=3` against
+  `rounds=4` still isolates the fourth split.
+- Under `verbose`, per-round drop counts are printed once the screen finishes
+  rather than as each round completes, since a block now runs all of its
+  rounds together. The counts themselves are unchanged.
+- The split-half statistic forms one `t x p x r` product instead of two.
+  `retained / values` scales columns, so `across @ (retained / values)` is
+  `(across @ retained) / values`: one product serves both the prediction and
+  the leverage, and the prediction reads off the smaller `t x r` result rather
+  than `across`. Measured 1.10x on the screen end-to-end, serial, with the
+  mask unchanged; `eigh` dominates what is left. The reassociation moves the
+  statistic by float64 rounding against a threshold of 29.72, and a test pins
+  it to the two-product form.
+
+### Benchmarks
+
+- Nothing was regenerated for this release, and the committed record stays a
+  0.3.5 one. The re-keying above changes which variants a given seed drops, so
+  every screen-dependent figure in `benchmarks/RESULTS.md` — the retained
+  counts and `rg` of Sections 9 and 10, and Tables 13--17 — would move on a
+  re-run. Those sections report qualitative separations (12/12 unscreened arms
+  warned against 0/12 screened) that are not expected to turn on the exact
+  mask, but the numbers are 0.3.5 measurements and are now labelled as such.
 
 ## [0.3.5] - 2026-08-08
 

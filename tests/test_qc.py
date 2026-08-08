@@ -141,13 +141,91 @@ def test_all_random_partitions_run_even_after_empty_ones():
     z[:2] = [-5.0, 5.0]
     blocks = [(R, np.arange(k))]
 
-    # With seed 6 the correlated pair lands on the same side of the first
+    # With seed 12 the correlated pair lands on the same side of the first
     # three partitions, so its marginal z^2=25 stays below 29.72. The fourth
     # puts the pair on opposite sides and exposes their disagreement.
-    keep_three = ld_consistency_screen(blocks, z, rounds=3, seed=6)
-    keep_four = ld_consistency_screen(blocks, z, rounds=4, seed=6)
+    #
+    # The comparison is only about the fourth split because a block's rounds
+    # are spawned from one parent sequence: spawn(3) is a prefix of spawn(4),
+    # so both calls below run the *same* first three rounds.
+    keep_three = ld_consistency_screen(blocks, z, rounds=3, seed=12)
+    keep_four = ld_consistency_screen(blocks, z, rounds=4, seed=12)
     assert keep_three[:2].all()
     assert not keep_four[:2].any()
+
+
+def test_rounds_are_spawned_so_a_shorter_run_is_a_prefix():
+    """What the test above relies on, pinned directly rather than by seed."""
+    parent = np.random.SeedSequence(12).spawn(1)[0]
+    three = [s.generate_state(4).tolist()
+             for s in np.random.SeedSequence(12).spawn(1)[0].spawn(3)]
+    four = [s.generate_state(4).tolist() for s in parent.spawn(4)]
+    assert three == four[:3]
+
+
+def test_pooled_screen_matches_the_serial_one(monkeypatch):
+    """Blocks are independent, so ncores must not be able to change the mask.
+
+    The pool is forced on here: whether it would be taken for real depends on
+    the BLAS the tests happen to run against, and this is asserting that the
+    pooled path computes the same thing, not that it is chosen.
+    """
+    import bipred.qc as qc
+
+    blocks, z = _clean_panel(k=120, blocks=4, rho=0.9, seed=13)
+    z = z.copy()
+    for victim in (30, 200, 415):                 # spread across three blocks
+        z[victim] = -z[victim] - 8.0
+    serial = ld_consistency_screen(blocks, z, rounds=3, seed=2)
+    assert not serial[[30, 200, 415]].any(), "planted errors must be caught"
+
+    monkeypatch.setattr(qc, "_pool_is_worthwhile", lambda ncores, n: True)
+    for ncores in (2, 3, 5):
+        pooled = ld_consistency_screen(blocks, z, rounds=3, seed=2,
+                                       ncores=ncores)
+        np.testing.assert_array_equal(pooled, serial)
+
+
+def test_pool_is_refused_without_a_confirmed_reentrant_blas(monkeypatch):
+    """eigh is the call that miscomputes there, so a guess must not enable it."""
+    import bipred.qc as qc
+    import bipred._ldpred3_compat as compat
+
+    monkeypatch.setattr(compat, "_blas_pool_safe", lambda lowrank: False)
+    assert qc._pool_is_worthwhile(8, 40) is False
+    monkeypatch.setattr(compat, "_blas_pool_safe", lambda lowrank: True)
+    assert qc._pool_is_worthwhile(8, 40) is True
+    # Nothing to spread, or nobody to spread it over.
+    assert qc._pool_is_worthwhile(1, 40) is False
+    assert qc._pool_is_worthwhile(8, 1) is False
+
+
+def test_statistic_matches_the_two_matmul_reference():
+    """The single product must agree with forming pinv's factor separately."""
+    from bipred.qc import _dentist_statistic
+
+    rng = np.random.default_rng(17)
+    k = 240
+    R = _ar1(0.75, k)
+    z = np.linalg.cholesky(R + 1e-8 * np.eye(k)) @ rng.standard_normal(k)
+    order = rng.permutation(k)
+    predictors, targets = order[:k // 2], order[k // 2:]
+
+    within, across = R[np.ix_(predictors, predictors)], R[np.ix_(targets,
+                                                                 predictors)]
+    values, vectors = np.linalg.eigh(within)
+    keep = values > 1e-3 * max(float(values.max()), 1e-12)
+    retained, vals = vectors[:, keep], values[keep]
+    scaled = retained / vals
+    predicted = across @ (scaled @ (retained.T @ z[predictors]))
+    leverage = np.einsum("ij,ij->i", across @ scaled, across @ retained)
+    expected = (z[targets] - predicted) ** 2 / np.clip(1.0 - leverage, 1e-6,
+                                                       None)
+
+    got = _dentist_statistic(R, z, predictors, targets, 1e-3)
+    # Same computation reassociated, so this is float64 rounding -- and the
+    # statistic is compared against a threshold of 29.72.
+    np.testing.assert_allclose(got, expected, rtol=1e-9)
 
 
 def test_dentist_compatibility_name_matches_primary_screen():
@@ -169,6 +247,9 @@ def test_dentist_compatibility_name_matches_primary_screen():
         ({"threshold": 0.0}, ValueError, "threshold must be"),
         ({"eigenvalue_floor": -1e-3}, ValueError, "eigenvalue_floor must be"),
         ({"eigenvalue_floor": 1.0}, ValueError, "eigenvalue_floor must be"),
+        ({"ncores": 0}, ValueError, "ncores must be an integer >= 1"),
+        ({"ncores": 2.0}, ValueError, "ncores must be an integer >= 1"),
+        ({"ncores": True}, ValueError, "ncores must be an integer >= 1"),
     ],
 )
 def test_ld_consistency_screen_validates_controls(kwargs, error, message):
