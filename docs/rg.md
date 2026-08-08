@@ -3,14 +3,14 @@
 This page covers estimator choice, sample overlap, regional exploration, and
 polygenic-overlap interpretation. See [`guide.md`](guide.md) for fitting.
 
-On real data, none of it means anything until the summary statistics have been
-screened for consistency with the LD reference. A joint fit on unscreened
-public GWAS returned `rg` +0.07 where cross-trait LDSC on the same data said
-+0.22, because the sampler had diverged while reporting an `h2` and a causal
-fraction that both looked ordinary. See *Quality control before fitting real
-data* in [`guide.md`](guide.md), and run
-[`bipred.qc.dentist`](../bipred/qc.py) first. A bivariate fit tolerates much
-less summary-statistic error than a univariate one on the same panel.
+Real summary statistics require harmonisation and checks against the LD
+reference. In one public-data analysis, an LD-mismatched lipid file made a joint
+fit diverge while its `h2` and causal fraction looked ordinary. That failure
+followed the file, not bivariate fitting in general. Inspect fit warnings and
+compare the DENTIST-inspired
+[`bipred.qc.ld_consistency_screen`](../bipred/qc.py) diagnostic described in the
+[guide](guide.md); it is neither the complete published DENTIST procedure nor
+proof that a retained variant is correct.
 
 ## Genome-wide estimators
 
@@ -75,10 +75,11 @@ The default sampled-quadratic ratio can attenuate the weak trait through its
 posterior-noise-inflated variance. The alternative averages cross-sweep
 quadratics while excluding same-sweep pairs. Thinning reduces, but does not
 eliminate, dependence between retained MCMC states. In the committed synthetic
-sweep (`benchmarks/RESULTS.md`, Table 4), paired MAE was 0.0086 versus 0.0108 under symmetric power and
-0.0174 versus 0.0242 under asymmetric power for the default versus cross-sweep
-estimator. Treat it as a sensitivity analysis, not an automatic replacement for
-`res.rg` — and not as a production estimator at all. It needs at least two
+sweep (`benchmarks/RESULTS.md`, Table 4), paired MAE was 0.0086 versus 0.0108
+under symmetric power and 0.0174 versus 0.0242 under asymmetric power for the
+default versus cross-sweep estimator. Treat it as a sensitivity analysis, not
+an automatic replacement for `res.rg` — and not as a production estimator at
+all. It needs at least two
 retained effect samples and a full schedule; adaptive stopping is disabled.
 Non-finite cross-sweep quadratics raise an error rather than silently returning
 the default estimator. A merely *degenerate* denominator — a non-positive
@@ -122,26 +123,36 @@ from bipred import estimate_sample_overlap, ldsc_rg
 n1_scalar = 50_000.0
 n2_scalar = 40_000.0
 rgr = ldsc_rg(beta_hat1, beta_hat2, ld_scores, n1_scalar, n2_scalar)
-estimate_sample_overlap(rgr, n1_scalar, n2_scalar, pheno_corr=0.4)
+overlap = estimate_sample_overlap(
+    rgr, n1_scalar, n2_scalar, pheno_corr=0.4,
+)
 ```
 
-**Use the returned `overlap_corr` as `cross_corr`.** It is the intercept
-itself, needs no assumption about the phenotypic correlation, and on real data
-it is not a small correction. GLGC measured HDL and triglycerides in the same
-individuals; the intercept there is **-0.352**, and the joint fit gives `rg`
--0.90 with `cross_corr=0` against **-0.52** with the correction, where the
-published value is -0.5 to -0.6. Neither fit warned — uncorrected overlap
-produces a fully converged fit with a badly inflated answer, which is a
-different failure from a diverged one and is not detectable from inside the fit.
+When `overlap["cross_corr_valid"]` is true, its `overlap_corr` is the raw
+intercept to use as a `cross_corr` sensitivity value. It needs no assumption
+about the phenotypic correlation. A free LDSC intercept can, however, fall
+outside the joint fit's required open interval `(-1, 1)`; then
+`cross_corr_valid` is false, a warning is raised, and the value must not be
+passed unchanged. GLGC measured HDL and triglycerides in the same individuals;
+the intercept there is **-0.352**, and the joint fit gives `rg` -0.90 with
+`cross_corr=0` against **-0.52** with the correction. A rough external range
+used by the historical benchmark is -0.5 to -0.6; it is context, not ground
+truth. Neither fit warned — uncorrected overlap produces a converged but
+misspecified fit, a different failure from sampler divergence.
 
 The shared-*count* is a weaker claim, because the intercept identifies only the
 product `N_shared * rho_pheno`. Splitting it needs `rho_pheno` from outside,
 and the default `pheno_corr=1.0` is a placeholder, not a guess: for a
 negatively correlated pair it has the wrong sign, the inversion has no
 solution, and `n_shared` comes back `nan` with a warning rather than `0.0`.
-Supplying the real value identifies it — HDL x TG at `pheno_corr=-0.45` gives
-72,454 shared samples, 78% of each study, instead of the "no overlap" that a
-clipped zero used to imply.
+Under the overlap-only model, supplying an external sensitivity value completes
+the inversion: HDL x TG at `pheno_corr=-0.45` gives 72,454 shared samples, 78%
+of each study, instead of the "no overlap" that a clipped zero used to imply.
+That value is not identified by the intercept. Read the count only when
+`overlap["physically_consistent"]` is true. A negative count or a count larger
+than the smaller cohort is impossible under the assumed overlap-only model;
+the function then warns and returns `nan` for `n_shared` and `overlap_frac`
+while retaining `n_shared_raw` for diagnosis.
 
 The intercept can also contain population structure, measurement effects, and
 other confounding, so it does not identify overlap by itself. Under an
@@ -187,11 +198,13 @@ first-observed order. Regions may span LD blocks; within-block contributions are
 summed under the block-diagonal LD assumption.
 
 `regional_rg` evaluates the representation encoded by the LD objects passed to
-it, and under the default `ld_int8=False` so does the fit — so passing the same
-blocks to both is aligned, which is why no warning is raised. A fit that opted
-into in-fit quantization (`ld_int8=True` or `None`) evaluates a private Q8 copy
-that cannot be retrieved; pre-quantize the blocks yourself and pass those to
-both calls instead.
+it. The default fit preserves D8/D32 values (copying non-contiguous storage when
+needed) but normalises other dense floats and floating low-rank factors to D32;
+`regional_rg` makes the same low-rank normalisation. Exact dense alignment
+therefore requires D8/D32 inputs or passing the same normalised representation
+to both calls. In-fit quantization (`ld_int8=True` or `None`) evaluates a
+private Q8 copy for float blocks; pre-quantize and pass those blocks to both
+calls instead.
 
 **Table 2. `RegionalRgResult` fields.**
 
@@ -205,8 +218,8 @@ both calls instead.
 
 Two limitations dominate:
 
-1. If sample overlap was not handled in the genome-wide fit, the same spurious
-   covariance contaminates every region and does not average away.
+1. If sample overlap was not handled in the genome-wide fit, spurious
+   covariance can affect every region and does not average away.
 2. The sampler has one genome-wide effect covariance, so local estimates are
    shrunk toward the genome-wide correlation.
 
@@ -227,6 +240,7 @@ The four-state mixture gives:
 ```text
 pi1             = pi10 + pi11
 pi2             = pi01 + pi11
+frac_shared     = pi11 / min(pi1, pi2)
 rho_beta        = s12 / sqrt(s1 s2)
 rg_from_overlap = rho_beta pi11 / sqrt(pi1 pi2)
 ```
@@ -235,14 +249,14 @@ Start with `frac_shared`, `rho_beta`, and `rg_from_overlap`. Absolute
 `n_causal` and `n_shared` counts are approximate because LD can spread
 inclusion mass and reference mismatch can inflate it.
 
-`frac_shared` is biased upward, and the bias is a function of polygenicity
-rather than a fixed offset that could be subtracted: on the committed sweep it
-is +0.03 for traits with 3% causal variants, +0.09 at 10% and +0.23 at 30%
-(`benchmarks/RESULTS.md`, Table 8). Only the last is large against the spread
-of a single fit, so the practical rule is to read `frac_shared` next to the
-fitted polygenicity: at low polygenicity take it near face value; on a dense
-trait treat it as an upper bound. Comparing two traits at very different
-polygenicity compares two different biases.
+`frac_shared` is biased upward, but not monotonically with polygenicity: the
+committed sweep measured mean bias **+0.051** at 1% causal variants, **+0.025**
+at 3%, **+0.088** at 10%, and **+0.225** at 30%
+(`benchmarks/RESULTS.md`, Table 8). Very sparse traits are not automatically
+safe: the 1% cells contain only 50 causal variants per trait and show more count
+inflation than the 3% cells. Read `frac_shared` beside fitted polygenicity and
+the spread expected for the target architecture; treat it as descriptive
+unless simulations matched to that architecture establish calibration.
 
 For count-sensitive analyses, compare rather than presume:
 

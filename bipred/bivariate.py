@@ -5,10 +5,12 @@ Each variant falls in one of **four** latent states with probabilities
 ``(pi00, pi10, pi01, pi11)``: causal for neither trait, trait 1 only, trait 2
 only, or **both**. A trait-1-causal effect is ``N(0, s1)``, a trait-2-causal one
 ``N(0, s2)``, and a *both*-causal pair is drawn from ``N(0, Sigma)`` with
-``Sigma = [[s1, s12], [s12, s2]]`` -- the off-diagonal ``s12`` is the genetic
-covariance and is the only place the traits couple. The Gibbs step evaluates the
-four bivariate-Gaussian likelihoods of the residual estimate, samples the state,
-then draws the effects; ``pi`` and ``(s1, s2, s12)`` are re-estimated each sweep.
+``Sigma = [[s1, s12], [s12, s2]]`` -- the off-diagonal ``s12`` is the effect
+covariance within the shared component and is the only place the traits couple.
+Genome-wide genetic covariance also depends on shared inclusion and LD. The
+Gibbs step evaluates the four bivariate-Gaussian likelihoods of the residual
+estimate, samples the state, then draws the effects; ``pi`` and
+``(s1, s2, s12)`` are re-estimated each sweep.
 
 This **per-trait** indicator (rather than a single shared one) is what makes the
 joint model adaptive: whether the two traits' causal variants co-occur is
@@ -26,7 +28,7 @@ Through 0.2.1 a strong **environmental** correlation between the traits (shared
 non-genetic effects) appeared to dominate the fit, at joint-fit MAE up to 0.86.
 That was an artifact of quantising the LD inside the fit: with the caller's
 float32 LD consumed as given, the same stress test lands between 0.0072 and
-0.0242 (``benchmarks/RESULTS.md``, Table 10). Setting ``cross_corr`` from
+0.0242 (``benchmarks/RESULTS.md``, Table 11). Setting ``cross_corr`` from
 external evidence remains worthwhile when the traits plausibly share
 environment, but it is no longer rescuing a broken fit.
 """
@@ -306,20 +308,17 @@ def _apply_R_rows(fblocks, V):
 def _prepare_block(R, ld_int8):
     """Return ``(block, scale)`` for one dense LD block.
 
-    Blocks that are already int8 (built by
-    ``ldpred3.compute_ld_blocks(quantize=True)``) are kept int8 as-is, without a
-    copy. The default ``ld_int8=False`` likewise keeps a float block as it was
-    given: ``np.ascontiguousarray`` on an already-C-contiguous float32 array
-    returns a view, so no second payload is built.
+    C-contiguous int8 blocks (built by
+    ``ldpred3.compute_ld_blocks(quantize=True)``) are reused. With the default
+    ``ld_int8=False``, C-contiguous float32 is likewise reused; non-contiguous
+    inputs are copied and other float types are normalised once to float32.
 
     ``True`` quantises every float block and ``None`` quantises those with at
     most 1500 variants -- both allocate a fresh int8 array per block *inside the
-    fit*, while the caller's panel is still alive. That measured 62.1 MB of peak
-    against 12.1 MB at m=100,000 with 500-variant blocks
-    (``benchmarks/fit_memory.csv``), and the extra payload
-    is k bytes per variant -- measured 121 bytes/variant by default against 621
-    with ``ld_int8=True`` -- so ~500 MB at m=1,000,000. Quantise when the LD is
-    built (``compute_ld_blocks(quantize=True)``), where the float source is
+    fit*, while the caller's panel is still alive. The extra dense payload costs
+    roughly ``k`` bytes per variant for block size ``k``; see
+    ``benchmarks/fit_memory.csv`` for the measured fixture. Quantise when the LD
+    is built (``compute_ld_blocks(quantize=True)``), where the float source is
     private and discardable, rather than here.
 
     The paired ``scale`` (``1/127`` for int8, ``1.0`` for float32) is what the
@@ -761,14 +760,15 @@ def _warn_if_fit_diverged(beta1, beta2, raw_h2, sigma_diag, genetic_samples, m,
                         "to reach." % int(largest_block))
         warnings.warn(
             "Bivariate fit appears to have diverged: " + "; ".join(reasons)
-            + ". Do not interpret h2 or rg from this fit. The usual cause is "
-            "summary statistics inconsistent with the LD reference rather than "
-            "the reference itself -- a bivariate fit tolerates far less of "
-            "that than a univariate one does on the same panel. Screen the "
-            "sumstats for LD consistency (bipred.qc.dentist), check imputation "
-            "quality and per-variant sample size, and exclude the MHC."
+            + ". Do not interpret h2 or rg from this fit. The summary statistics "
+            "and LD reference are incompatible. Recheck harmonisation, "
+            "reference ancestry and quality, imputation quality, per-variant "
+            "sample size, and allele-frequency agreement; compare "
+            "the LD-consistency sensitivity screen "
+            "(bipred.qc.ld_consistency_screen). Long-range-LD exclusion is an "
+            "estimator-specific sensitivity analysis, not a universal repair."
             + geometry
-            + " Regularising the blocks (ldpred3.shrink_ld_blocks) helps, but "
+            + " Regularising the blocks (ldpred3.shrink_ld_blocks) may help, but "
             "note its size-aware rule assumes finite-panel noise: against a "
             "reference whose correlations were thresholded to zero it "
             "under-shrinks, because that distortion is structural and does "
@@ -1619,13 +1619,13 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     mixed representations are supported. Low-rank blocks retain their compact
     factor (including LR8 int8 factors) and diagonal residual.
 
-    Dense blocks are consumed in the representation they arrive in: supplied
-    int8 blocks stay int8 and float blocks stay float32, both without a copy.
+    Supplied C-contiguous dense int8 and float32 blocks are consumed without a
+    copy. Non-contiguous blocks are copied; other float types are normalised once
+    to contiguous float32.
     Quantise when the LD is *built*, with
     ``ldpred3.compute_ld_blocks(quantize=True)``, rather than in the fit --
     quantising here allocates a second genome-scale payload while the caller's
-    panel is still alive (62.1 MB of peak against 12.1 MB at m=100,000, k=500;
-    ``benchmarks/fit_memory.csv``).
+    panel is still alive (``benchmarks/fit_memory.csv``).
     ``ld_int8=True`` and ``None`` are retained for that older behaviour.
     This option does not alter ``LowRankLD`` factors.
 
@@ -1640,15 +1640,13 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     n_eff1, n_eff2 : float or array_like
         Per-trait GWAS sample sizes.
     ld_int8 : bool or None, default False
-        Dense-LD storage policy. ``False`` consumes every block in the
-        representation it was given, with no copy -- the memory-cheapest option,
-        and the one that keeps this call's LD identical to what
-        :func:`~bipred.regional_rg` will evaluate. ``True`` quantises every float
-        block and ``None`` quantises those of at most 1500 variants; both build a
-        fresh int8 array per block inside the fit, so prefer quantising at LD
-        build time (``ldpred3.compute_ld_blocks(quantize=True)``). Supplied int8
-        blocks stay int8 under all three settings, and none of them alters
-        ``LowRankLD`` factors.
+        Dense-LD storage policy. ``False`` reuses contiguous D8/D32, copies
+        non-contiguous storage, and normalises other float types to D32.
+        ``True`` quantises every float block and ``None`` quantises those of at
+        most 1500 variants; both build a fresh int8 array per block inside the
+        fit, so prefer quantising at LD build time
+        (``ldpred3.compute_ld_blocks(quantize=True)``). Supplied int8 blocks stay
+        int8 under all three settings, and none alters ``LowRankLD`` factors.
     h2_init : float or pair
         Initial per-trait heritability. A scalar applies to both traits.
     p_init : float, default 0.02
@@ -1672,9 +1670,11 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     burn_in, num_iter : int
         Burn-in and sampling sweeps.
     h2_bounds : (float, float)
-        Clamp range for the per-trait heritabilities.
+        Clamp range for reported per-trait heritabilities. This does not
+        regularise fitted effects or change ``rg``.
     h2_cap : (float, float), optional
-        Optional hard ceilings on implied per-trait heritability.
+        Optional in-sampler ceilings on implied per-trait heritability. Unlike
+        ``h2_bounds``, these can change fitted effects, ``h2``, and ``rg``.
     iw_df : float, default 10
         Shrinkage strength on the effect covariance ``Sigma``. Larger values pull
         more strongly toward independent traits.
@@ -2171,10 +2171,11 @@ def ldpred3_auto_bivariate(corr, beta_hat1, beta_hat2, n_eff1, n_eff2, **kwargs)
     Convenience wrapper over :func:`ldpred3_auto_bivariate_blocks` for one block
     (or a block-diagonal genome packed into one matrix). See that function and
     :class:`BivariateResult` for the parameters and output. ``corr`` may be a
-    dense matrix or an ldpred3 ``LowRankLD`` object. Dense matrices are consumed
-    in the representation they arrive in (``ld_int8=False``, the default);
-    ``ld_int8=True`` quantises every float block and ``None`` those of at most
-    1500 variants, both building a second payload inside the fit.
+    dense matrix or an ldpred3 ``LowRankLD`` object. With the default
+    ``ld_int8=False``, contiguous D8/D32 are reused, non-contiguous inputs are
+    copied, and other floats are normalised once; ``ld_int8=True`` quantises
+    every float block and ``None`` those of at most 1500 variants, both building
+    a second payload inside the fit.
     """
     # Derive the logical LD size from the effect vector. The block validator then
     # checks that ``corr`` is exactly square with this shape before quantisation.

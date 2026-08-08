@@ -3,7 +3,8 @@
 The fit's cost is dominated by the per-sweep kernels, so this measures a sweep
 directly rather than a whole fit: each cell runs the public driver twice at
 different ``num_iter`` and takes the difference, which cancels preparation,
-compilation and the fixed post-processing. Reported as milliseconds per sweep.
+compilation and the fixed post-processing. Each cell reports the median and
+unscaled median absolute deviation (MAD) in milliseconds per sweep.
 
 Two properties of the sampler make a naive timing harness lie about it, and
 both are controlled here.
@@ -18,6 +19,11 @@ single cell).
 
 *Compilation is not free at ``parallel=True``.* The first call to each cell is
 discarded before timing.
+
+*Repeated references are not a genome.* Every block owns a distinct LD payload,
+even though the synthetic blocks share one spectrum. Reusing one matrix object
+for every block keeps a 1 MB payload hot in cache and makes both timing and
+memory figures fictitious.
 
 Usage::
 
@@ -44,16 +50,19 @@ import numpy as np
 
 
 def _blocks(kind, m, k, seed=0):
-    """Build one LD panel of the requested representation.
+    """Build a distinct-payload LD panel of the requested representation.
 
     Returns ``(blocks, label, dense)``. ``dense`` is the float64 correlation
     matrix every representation here approximates; the fixture simulates from it
-    so that all cells face the same truth. The label records the achieved rank,
-    which for the low-rank representations is chosen by the eigenspectrum rather
-    than by the caller.
+    so that all cells face the same truth. Values repeat, but storage does not:
+    real block sweeps cannot repeatedly hit one aliased matrix in cache. The
+    label records the achieved rank, which for the low-rank representations is
+    chosen by the eigenspectrum rather than by the caller.
     """
     from ldpred3 import lowrank_ld
 
+    if m < 1 or k < 1 or m % k:
+        raise ValueError("m and k must be positive, with m divisible by k")
     nb = m // k
     pos = np.arange(k)
     # AR(1) at rho=0.6 is well conditioned; a low-rank factor of it needs a
@@ -63,22 +72,31 @@ def _blocks(kind, m, k, seed=0):
     def idx(b):
         return np.arange(b * k, (b + 1) * k)
 
+    def clone_factor(factor):
+        return type(factor)(
+            U=np.array(factor.U, copy=True, order="C"),
+            m=factor.m,
+            scale=factor.scale,
+            residual_diag=np.array(factor.residual_diag, copy=True, order="C"),
+        )
+
     if kind == "dense_f32":
-        block = np.ascontiguousarray(dense, dtype=np.float32)
-        return [(block, idx(b)) for b in range(nb)], kind, dense
+        template = np.ascontiguousarray(dense, dtype=np.float32)
+        return [(template.copy(), idx(b)) for b in range(nb)], kind, dense
     if kind == "dense_i8":
-        block = np.rint(np.clip(dense, -1.0, 1.0) * 127.0).astype(np.int8)
-        return [(block, idx(b)) for b in range(nb)], kind, dense
+        template = np.rint(np.clip(dense, -1.0, 1.0) * 127.0).astype(np.int8)
+        return [(template.copy(), idx(b)) for b in range(nb)], kind, dense
     if kind.startswith(("lr8_", "lr32_")):
         quantize = kind.startswith("lr8_")
         variance = float(kind.split("_", 1)[1])
         factor = lowrank_ld(dense, variance=variance, quantize=quantize)
-        return ([(factor, idx(b)) for b in range(nb)],
+        return ([(clone_factor(factor), idx(b)) for b in range(nb)],
                 f"{kind} (rank {factor.U.shape[1]})", dense)
     if kind == "mixed":
         i8 = np.rint(np.clip(dense, -1.0, 1.0) * 127.0).astype(np.int8)
         lr = lowrank_ld(dense, variance=0.99, quantize=True)
-        return ([(i8 if b % 2 else lr, idx(b)) for b in range(nb)],
+        return ([(i8.copy() if b % 2 else clone_factor(lr), idx(b))
+                 for b in range(nb)],
                 f"mixed (rank {lr.U.shape[1]})", dense)
     raise SystemExit(f"unknown representation {kind!r}")
 
@@ -150,8 +168,14 @@ def _measure(kind, m, k, cores, reps, short, long_, seed=0):
         t_short, _ = run(short)
         t_long, result = run(long_)
         per_sweep.append((t_long - t_short) / (long_ - short) * 1e3)
-    return {"representation": label, "m": m, "k": k, "ncores": cores,
-            "ms_per_sweep": min(per_sweep),
+    per_sweep = np.asarray(per_sweep, dtype=np.float64)
+    median = float(np.median(per_sweep))
+    mad = float(np.median(np.abs(per_sweep - median)))
+    return {"representation": label, "m": m, "k": k,
+            "block_storage": "distinct", "ncores": cores,
+            "timing_reps": reps, "short_sweeps": short,
+            "long_sweeps": long_, "ms_per_sweep_median": median,
+            "ms_per_sweep_mad": mad,
             "rg": float(result.rg), "h2_1": float(result.h2[0]),
             "h2_2": float(result.h2[1]), "p": float(result.p)}
 
@@ -180,6 +204,18 @@ def _cell_subprocess(kind, m, k, cores, reps, short, long_, seed):
     return json.loads(proc.stdout.strip().splitlines()[-1])
 
 
+def _add_speedups(rows):
+    """Attach order-independent speedups against the unique one-core row."""
+    baselines = [row for row in rows if int(row["ncores"]) == 1]
+    if len(baselines) != 1:
+        raise ValueError("each representation requires exactly one 1-core row")
+    baseline = float(baselines[0]["ms_per_sweep_median"])
+    for row in rows:
+        row["speedup_vs_1core"] = (
+            baseline / float(row["ms_per_sweep_median"]))
+    return rows
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--m", type=int, default=20_000)
@@ -203,23 +239,29 @@ def main(argv=None):
                        args.short, args.long_, seed=args.seed)
         print(json.dumps(row))
         return 0
+    if (len(set(args.cores)) != len(args.cores)
+            or any(cores < 1 for cores in args.cores)
+            or 1 not in args.cores):
+        parser.error("--cores must contain distinct positive values including 1")
 
     rows = []
-    print(f"m={args.m}  k={args.k}  best of {args.reps}  "
+    print(f"m={args.m}  k={args.k}  median +/- MAD of {args.reps}  "
           f"(private Numba cache per cell)\n")
-    print(f"{'representation':24} {'cores':>5} {'ms/sweep':>10} {'speed-up':>9}"
-          f" {'fitted p':>9}")
-    print("-" * 62)
+    print(f"{'representation':24} {'cores':>5} {'median ms':>10} {'MAD ms':>9}"
+          f" {'speed-up':>9} {'fitted p':>9}")
+    print("-" * 73)
     for kind in args.kinds:
-        baseline = None
+        kind_rows = []
         for cores in args.cores:
             row = _cell_subprocess(kind, args.m, args.k, cores, args.reps,
                                    args.short, args.long_, args.seed)
-            baseline = baseline or row["ms_per_sweep"]
-            row["speedup_vs_1core"] = baseline / row["ms_per_sweep"]
+            kind_rows.append(row)
+        _add_speedups(kind_rows)
+        for cores, row in zip(args.cores, kind_rows):
             rows.append(row)
             print(f"{row['representation']:24} {cores:5d} "
-                  f"{row['ms_per_sweep']:10.3f} "
+                  f"{row['ms_per_sweep_median']:10.3f} "
+                  f"{row['ms_per_sweep_mad']:9.3f} "
                   f"{row['speedup_vs_1core']:8.2f}x "
                   f"{row['p']:9.4f}")
         print()
@@ -227,7 +269,8 @@ def main(argv=None):
     if args.csv:
         import csv
         with open(args.csv, "w", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+            writer = csv.DictWriter(handle, fieldnames=list(rows[0]),
+                                    lineterminator="\n")
             writer.writeheader()
             writer.writerows(rows)
         print(f"wrote {args.csv}")

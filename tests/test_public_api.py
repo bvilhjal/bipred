@@ -24,6 +24,7 @@ _EXPECTED = {
     "estimate_sample_overlap",
     "regional_rg",
     "RegionalRgResult",
+    "ld_consistency_screen",
     "dentist",
     "dentist_statistic",
     "implied_sample_size",

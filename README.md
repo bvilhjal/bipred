@@ -30,7 +30,9 @@ Bumping the pinned ldpred3 (the seam in `bipred/_ldpred3_compat.py` is
 private and unversioned): run the weekly `ldpred3-head` CI leg (or trigger it
 manually — it runs the suite against ldpred3@master), audit the seam for any
 drift it flags, then update `LDPRED3_REV` / `LDPRED3_VERSION` in
-`.github/workflows/ci.yml` and the git revision in the install command above.
+`.github/workflows/ci.yml`, the matching constants in
+`benchmarks/real_data_inputs.py`, and the git revision in the install command
+above. A test keeps those three pins aligned.
 
 The `[sim]` extra adds msprime, the default simulation backend for benchmarks
 (fastest: 0.80 s per 10,000-sample segment); without it, benchmark scripts fall
@@ -52,22 +54,23 @@ matrix, and prints the main estimates. Its complete source is
 [`examples/minimal.py`](examples/minimal.py).
 
 For real data, start with the input contract and blockwise call in the user
-guide. Summary statistics must already be ancestry-matched and harmonized —
-and, on real GWAS, screened for consistency with the LD reference:
+guide. Summary statistics must already be ancestry-matched, harmonized, and
+checked against the LD reference. bipred includes a lightweight
+LD-consistency sensitivity screen:
 
 ```python
-from bipred.qc import dentist
+from bipred.qc import ld_consistency_screen
 
-keep = dentist(blocks, beta_hat1 / se1) & dentist(blocks, beta_hat2 / se2)
+keep = (ld_consistency_screen(blocks, beta1 / se1)
+        & ld_consistency_screen(blocks, beta2 / se2))
 ```
 
-This is not optional boilerplate. **A bivariate fit tolerates far less
-summary-statistic error than a univariate one on the same panel**, and the
-failure is silent: on public LDL and CAD statistics the joint fit reported an
-`h2` and a causal fraction that both looked ordinary while having diverged,
-giving `rg` +0.07 against cross-trait LDSC's +0.22. Screening moved it to
-+0.28. See *Quality control before fitting real data* in
-[`docs/guide.md`](docs/guide.md).
+Here `beta/se` is the original GWAS z-score, not the standardized `beta_hat`
+passed to the fit. The routine is DENTIST-inspired rather than an implementation
+of the full published DENTIST workflow. It exposed serious file/reference
+inconsistencies in the committed real-data study; that evidence does not make it
+a universal substitute for study-specific QC. See *Quality control before
+fitting real data* in [`docs/guide.md`](docs/guide.md).
 
 ## Documentation
 
@@ -78,8 +81,7 @@ giving `rg` +0.07 against cross-trait LDSC's +0.22. Screening moved it to
 - [Benchmark guide](https://github.com/bvilhjal/bipred/blob/main/benchmarks/README.md):
   scripts and reproducibility.
 - [Benchmark results](https://github.com/bvilhjal/bipred/blob/main/benchmarks/RESULTS.md):
-  the reproducible benchmark record, fully regenerated at 0.3.0, including
-  limitations and provenance.
+  results, limitations, and per-section provenance.
 
 ## Citing and prior work
 
@@ -94,10 +96,11 @@ bipred has no paper of its own yet; cite the repository and the version you ran
 - **MiXeR** — the polygenic-overlap parameterisation behind
   `BivariateResult.mixer`. Frei et al., *Nature Communications* 10:2417 (2019).
 
-The estimators here are reimplementations, not wrappers, and their agreement
-with the originals is characterised only by the repository's own synthetic
-benchmarks. See [benchmark results](https://github.com/bvilhjal/bipred/blob/main/benchmarks/RESULTS.md)
-for what has and has not been validated.
+The estimators here are reimplementations, not wrappers. The repository's
+synthetic benchmarks characterize bipred's behavior; equivalence to the
+original cross-trait LDSC and MiXeR implementations has not been validated. See
+[benchmark results](https://github.com/bvilhjal/bipred/blob/main/benchmarks/RESULTS.md)
+for what has and has not been tested.
 
 ## License
 

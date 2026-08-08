@@ -1,33 +1,42 @@
-"""Which summary-statistic QC steps actually matter: a 2x2x2 across four trait pairs.
+"""QC sensitivity analysis: a 2x2x2 factorial across three trait pairs.
 
-Every other benchmark here except ``real_ldl_cad.py`` simulates from the model
-the sampler assumes. This one exists because that class of benchmark cannot
-answer a question that turned out to decide whether bipred works on real data
-at all: which QC steps are load-bearing, and which are folklore.
+The self-contained benchmark suite simulates from the model the sampler assumes.
+This real-data analysis exists because that class of benchmark cannot answer how
+strongly the conclusions depend on three plausible QC choices.
 
-Single-pair results are suggestive; a factorial across pairs spanning the sign
-range is what settles a design. The findings under test, each established on
-LDL x CAD alone and each needing to generalise before it goes in the docs:
+Single-pair results are suggestive, not universal. This factorial spans one
+positive, one near-null and one negative pair and asks three scoped questions:
 
-* strictness is worthless -- 0.8x/+0.03 removed a further 142,282 variants and
-  moved LDL's cancellation from 264.8 to 276.1;
-* the long-range exclusion is optional once the screen runs -- keeping it gave
-  rg +0.2831 against +0.2615, both converged, and retains APOE;
-* the screen is irreplaceable -- no per-variant configuration converged without
-  it.
+* does tightening the per-variant SD and allele-frequency thresholds matter;
+* how much does long-range-LD exclusion move each estimate after screening;
+* does the LD-consistency screen separate divergence-warning status?
 
-Each trait is verified and calibrated before any filtering, because the two
-findings that mattered most today were not filters at all: CAD's effective
-sample size is overstated by 1.76x, and its SD ratio is centred at 0.755
-instead of 1. Neither is fixable by dropping variants.
+The 24 arms are repeated analyses of three trait pairs, not 24 independent
+biological validations. They can support sensitivity claims for these files and
+this LD reference; broader recommendations need independent data.
 
-Screens are cached per (trait, strict, long-range) and reused across pairs, so
-a trait is screened four times rather than once per pair.
+The script refuses a dirty source tree and writes ``qc_factorial.provenance.json``
+beside the CSV with the clean revision, runtime versions and verified hashes.
 
-Inputs are the same ~9 GB of public downloads ``real_ldl_cad.py`` documents,
-plus GLGC HDL/TG and GIANT height/BMI; see ``ARMS`` below for the grid. Roughly
-2.5 hours, so it is not part of ``run_all.sh``. Writes one CSV row per arm as
-it completes, so a partial run is still usable.
+Each trait is checked before filtering. Absolute effective sample size is not
+identified from quantitative-trait beta/SE/frequency alone, so those traits
+retain their reported N. CAD is binary and has an identifiable implied-N
+diagnostic, which this benchmark may use to calibrate its fitting N.
+
+The LD-consistency mask is computed once per trait on the maximal set and reused
+across pairs and factorial arms.
+
+All six input files, their canonical acquisition URLs, and the pinned LD
+converter revision are recorded in ``benchmarks/README.md`` Table 4; their
+expected bytes are named in ``real_data_inputs.sha256``. The run takes about 75
+minutes and is therefore not part of ``run_all.sh``. It writes one CSV row per
+arm as it completes, so a partial run is still usable.
+
+Each arm estimates a free cross-trait LDSC intercept on that arm's exact variant
+set and passes the raw intercept as a ``cross_corr`` sensitivity value. This
+assumes the whole intercept is correlated sampling noise; confounding can also
+contribute. An intercept outside the joint fit's required ``(-1, 1)`` interval
+aborts the run; it is never clipped into a superficially valid correction.
 
     OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python benchmarks/qc_factorial.py
 """
@@ -54,7 +63,12 @@ from ldpred3.ldsc import ld_scores                                   # noqa: E40
 from bipred import ldpred3_auto_bivariate_blocks, ldsc_rg            # noqa: E402
 from bipred.bivariate import _rg_from_quadratics_array            # noqa: E402
 from bipred.qc import (                                              # noqa: E402
-    dentist, implied_sample_size, in_long_range_ld, sd_consistency,
+    implied_sample_size, in_long_range_ld, ld_consistency_screen,
+    sd_consistency,
+)
+from benchmarks.real_data_inputs import (                            # noqa: E402
+    require_clean_source, require_ldpred3_source, validate_inputs,
+    write_provenance_sidecar,
 )
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -80,25 +94,20 @@ TRAITS = {
                     beta_col="b", se_col="SE", n_col="N",
                     freq_col="Freq.Allele1.HapMapCEU", gz=True), False),
 }
-#: Three pairs spanning the sign range. BMI x CAD is left out as the most
-#: redundant -- a second positive cross-consortium case, where LDL x CAD covers
-#: that regime and has the advantage of being the pair known to diverge.
-PAIRS = [("LDL", "CAD", "+0.20..0.40 positive, disjoint consortia"),
-         ("height", "LDL", "~0.00 null test"),
-         ("HDL", "TG", "-0.50..-0.60 negative, complete overlap")]
+#: Three pairs spanning sign patterns suggested by earlier studies. These
+#: ranges are rough context, not truth labels for this analysis.
+PAIRS = [("LDL", "CAD", "rough context: positive (~+0.15 to +0.45)"),
+         ("height", "LDL", "rough context: near zero"),
+         ("HDL", "TG", "rough context: negative (~-0.5 to -0.6)")]
 
 #: The full 2x2x2 -- strict per-variant QC, long-range exclusion, LD-consistency
 #: screen -- on each pair, so main effects *and* their interactions are
 #: identified rather than inferred from a fractional design. 24 arms over three
 #: pairs.
 #:
-#: Two of the three factors were settled on LDL x CAD alone and both came out
-#: null: tightening the SD check to 0.8x/+0.03 removed a further 142,282
-#: variants and moved the cancellation ratio the wrong way (264.8 -> 276.1),
-#: and excluding the 24 long-range regions plus APOE moved rg by 0.02 with both
-#: arms converged. Running them again here tests whether those nulls hold on a
-#: negative correlation and on a true zero, which is where a QC step that
-#: quietly costs signal would show up.
+#: Arms within a pair share the same GWAS and LD reference. The factorial
+#: identifies sensitivity to these switches; it does not multiply the number
+#: of independent trait-pair validations.
 ARMS = [(strict, drop_lr, screen)                # (strict, long-range, screen)
         for strict in (False, True)
         for drop_lr in (False, True)
@@ -107,10 +116,52 @@ ARMS = [(strict, drop_lr, screen)                # (strict, long-range, screen)
 LENIENT = dict(lower=0.5, upper=0.1)
 STRICT = dict(lower=0.8, upper=0.03)
 AF_LENIENT, AF_STRICT = 0.20, 0.10
-DENTIST_ROUNDS = 4
+SCREEN_ROUNDS = 4
+
+
+def _sample_size_plan(n, sized, *, binary):
+    """Fitting N and printable diagnostics without inventing quantitative N."""
+    if not binary:
+        return n, "unidentified", "--", ""
+    implied_text = f"{sized['median']:,.0f}"
+    ratio_text = f"{sized['ratio']:.3f}"
+    adjust = np.isfinite(sized["ratio"]) and not sized["consistent"]
+    n_fit = n * sized["ratio"] if adjust else n
+    note = "   <- MISSPECIFIED" if adjust else ""
+    return n_fit, implied_text, ratio_text, note
+
+
+def _cross_corr_from_ldsc(result):
+    """Return an arm's raw intercept when it lies in the fit's domain."""
+    cross_corr = float(result.gcov_intercept)
+    if not np.isfinite(cross_corr) or not -1.0 < cross_corr < 1.0:
+        raise ValueError(
+            "arm-specific LDSC intercept must be finite and in (-1, 1); "
+            f"got {cross_corr!r}. Refusing to clip it into the fitting range")
+    return cross_corr
+
+
+def _frac_shared_trace(pi_samples):
+    """Public ``frac_shared`` estimand for every retained mixture iterate."""
+    pi = np.asarray(pi_samples, dtype=np.float64)
+    if pi.ndim != 2 or pi.shape[1] != 4:
+        raise ValueError("pi_samples must have shape (iterations, 4)")
+    smaller = np.minimum(pi[:, 1] + pi[:, 3], pi[:, 2] + pi[:, 3])
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.where(smaller > 0, pi[:, 3] / smaller, np.nan)
 
 
 def main():
+    source_revision = require_clean_source()
+    dependency_sources = {"ldpred3": require_ldpred3_source()}
+    input_hashes = validate_inputs({
+        "ldref-hm3/ldpred3_ldref_hm3.npz": REF,
+        "sumstats/jointGwasMc_LDL.txt.gz": TRAITS["LDL"][0]["path"],
+        "sumstats/cad.add.160614.website.txt": TRAITS["CAD"][0]["path"],
+        "sumstats/jointGwasMc_HDL.txt.gz": TRAITS["HDL"][0]["path"],
+        "sumstats/jointGwasMc_TG.txt.gz": TRAITS["TG"][0]["path"],
+        "sumstats/GIANT_HEIGHT_2014.txt.gz": TRAITS["height"][0]["path"],
+    })
     blocks, ids, meta = load_ld_blocks(REF, return_metadata=True)
     index = {str(r): i for i, r in enumerate(ids)}
     a1 = np.asarray(meta["counted_allele"]).astype(str)
@@ -140,13 +191,12 @@ def main():
         af_corr = float(np.corrcoef(freq[ok], af[ok])[0, 1])
         _, offset = sd_consistency(beta, se, n, af, binary=binary)
         sized = implied_sample_size(beta, se, af, binary=binary, reported_n=n)
+        n_fit, implied_text, ratio_text, note = _sample_size_plan(
+            n, sized, binary=binary)
         print(f"{name:>7} {idx.size:>9,} {af_corr:>+8.4f} {offset:>10.3f} "
-              f"{np.median(n):>11,.0f} {sized['median']:>11,.0f} "
-              f"{sized['ratio']:>7.3f}"
-              f"{'' if sized['consistent'] else '   <- MISSPECIFIED'}",
+              f"{np.median(n):>11,.0f} {implied_text:>11} "
+              f"{ratio_text:>7}{note}",
               flush=True)
-        # Calibrate: fit with the sample size the data behaves as if it had.
-        n_fit = n * sized["ratio"] if not sized["consistent"] else n
         data[name] = dict(idx=idx, beta=beta, se=se, n=n, n_fit=n_fit,
                           freq=freq, info=info, af=af, binary=binary,
                           lr=long_range[idx])
@@ -191,8 +241,9 @@ def main():
         order = {g: i for i, g in enumerate(d["idx"][mask])}
         sel = np.array([order[g] for g in kept])
         started = time.perf_counter()
-        keep = dentist(tiled, d["beta"][mask][sel] / d["se"][mask][sel],
-                       rounds=DENTIST_ROUNDS)
+        keep = ld_consistency_screen(
+            tiled, d["beta"][mask][sel] / d["se"][mask][sel],
+            rounds=SCREEN_ROUNDS)
         screens[name] = set(kept[keep].tolist())
         print(f"    screen {name}: {kept.size:,} -> {keep.sum():,} "
               f"({100*(1-keep.mean()):.1f}% dropped, "
@@ -202,28 +253,34 @@ def main():
     # LDSC's h2 is recorded alongside its rg: running the screen and not
     # keeping both halves of the comparison makes the heritability question
     # unanswerable after the fact, which is how the first version shipped.
-    fields = ["pair", "expected", "strict", "drop_long_range", "dentist", "m",
+    fields = ["pair", "expected", "strict", "drop_long_range", "ld_screen", "m",
               "ldsc_rg", "ldsc_rg_se", "ldsc_h2_1", "ldsc_h2_2", "cross_corr",
               "rg", "rg_iterate_sd", "p", "h2_1", "h2_1_iterate_sd", "h2_2", "h2_2_iterate_sd",
               "frac_shared", "frac_shared_iterate_sd", "rho_beta",
               "rg_from_overlap", "n_causal_1", "n_causal_2", "n_shared",
-              "cancel_1", "cancel_2", "max_abs_beta", "drift", "warned"]
+              "cancel_1", "cancel_2", "max_abs_beta", "drift",
+              "divergence_warned"]
     with open(OUT, "w", newline="") as handle:
-        csv.DictWriter(handle, fieldnames=fields).writeheader()
+        csv.DictWriter(handle, fieldnames=fields,
+                       lineterminator="\n").writeheader()
+    sidecar = write_provenance_sidecar(
+        OUT, source_revision=source_revision, input_hashes=input_hashes,
+        dependency_sources=dependency_sources)
+    print(f"provenance: {sidecar}", flush=True)
 
     print(f"\n=== {len(PAIRS) * len(ARMS)} arms ===", flush=True)
     for (t1, t2, expected) in PAIRS:
-        for strict, drop_lr, use_dentist in ARMS:
+        for strict, drop_lr, use_screen in ARMS:
             d1, d2 = data[t1], data[t2]
             keep1 = set(d1["idx"][per_variant(t1, strict, drop_lr)].tolist())
             keep2 = set(d2["idx"][per_variant(t2, strict, drop_lr)].tolist())
-            if use_dentist:
+            if use_screen:
                 keep1 = keep1 & screened(t1)
                 keep2 = keep2 & screened(t2)
             shared = keep1 & keep2
             if len(shared) < 10_000:
                 print(f"  {t1} x {t2} strict={strict} lr={drop_lr} "
-                      f"dentist={use_dentist}: only {len(shared):,} variants, "
+                      f"screen={use_screen}: only {len(shared):,} variants, "
                       "skipped", flush=True)
                 continue
             tiled, kept = subset_blocks(blocks, shared)
@@ -237,14 +294,16 @@ def main():
             n1, n2 = d1["n_fit"][s1], d2["n_fit"][s2]
             screen = ldsc_rg(bh1, bh2, ld_scores(tiled, n_ref=n_ref), n1, n2,
                              m_snps=m)
-            cc = float(np.clip(screen.gcov_intercept, -0.95, 0.95))
+            # Refit the sensitivity value after each filtering choice. Use the
+            # raw intercept or reject it: clipping would silently change it.
+            cc = _cross_corr_from_ldsc(screen)
             started = time.perf_counter()
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter("always")
                 res = ldpred3_auto_bivariate_blocks(
                     tiled, bh1, bh2, n1, n2, burn_in=200, num_iter=300,
                     seed=0, cross_corr=cc)
-            warned = any("diverged" in str(w.message) for w in caught)
+            divergence_warned = any("diverged" in str(w.message) for w in caught)
             c1 = float(np.sum(res.beta1_est ** 2)) / max(
                 quadratic(tiled, res.beta1_est), 1e-12)
             c2 = float(np.sum(res.beta2_est ** 2)) / max(
@@ -271,13 +330,10 @@ def main():
             rg_trace = _rg_from_quadratics_array(trace[:, 1], trace[:, 0],
                                                  trace[:, 2])
             rg_iterate_sd = float(np.nanstd(rg_trace))
-            pi = np.asarray(res.pi_samples)
-            union = pi[:, 1] + pi[:, 2] + pi[:, 3]
-            with np.errstate(divide="ignore", invalid="ignore"):
-                shared_trace = np.where(union > 0, pi[:, 3] / union, np.nan)
+            shared_trace = _frac_shared_trace(res.pi_samples)
             row = dict(
                 pair=f"{t1} x {t2}", expected=expected, strict=int(strict),
-                drop_long_range=int(drop_lr), dentist=int(use_dentist), m=m,
+                drop_long_range=int(drop_lr), ld_screen=int(use_screen), m=m,
                 ldsc_rg=round(float(screen.rg), 4),
                 ldsc_rg_se=round(float(screen.rg_se), 4),
                 ldsc_h2_1=round(float(screen.h2[0]), 4),
@@ -299,20 +355,22 @@ def main():
                 cancel_2=round(c2, 2),
                 max_abs_beta=round(max(float(np.abs(res.beta1_est).max()),
                                       float(np.abs(res.beta2_est).max())), 4),
-                # Both traits, worst case: one trait can diverge while the
-                # other is estimated correctly in the same fit, and reporting
-                # trait 1 alone made height x LDL look healthy when LDL's
-                # cancellation ratio was 150.
+                # Both traits, worst case: one trait can show severe
+                # cancellation while the other remains numerically stable in
+                # the same fit. Reporting trait 1 alone made height x LDL look
+                # healthy when LDL's cancellation ratio was 150.
                 drift=round(max(
                     float(trace[-q:, 0].mean() / max(trace[:q, 0].mean(), 1e-12)),
                     float(trace[-q:, 2].mean() / max(trace[:q, 2].mean(), 1e-12))), 3),
-                warned=int(warned))
+                divergence_warned=int(divergence_warned))
             with open(OUT, "a", newline="") as handle:
-                csv.DictWriter(handle, fieldnames=fields).writerow(row)
+                csv.DictWriter(handle, fieldnames=fields,
+                               lineterminator="\n").writerow(row)
             print(f"  {t1:>6} x {t2:<6} strict={int(strict)} lr={int(drop_lr)} "
-                  f"dentist={int(use_dentist)} | m {m:>8,} | LDSC {screen.rg:>+7.4f} "
+                  f"screen={int(use_screen)} | m {m:>8,} | LDSC {screen.rg:>+7.4f} "
                   f"| rg {res.rg:>+7.4f} | cancel {max(c1, c2):>7.1f} | "
-                  f"{'WARN' if warned else 'ok':>4} | {time.perf_counter()-started:.0f}s",
+                  f"{'DIV-WARN' if divergence_warned else 'ok':>8} | "
+                  f"{time.perf_counter()-started:.0f}s",
                   flush=True)
     print(f"\nwrote {OUT}")
 

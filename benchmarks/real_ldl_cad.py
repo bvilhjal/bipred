@@ -1,16 +1,16 @@
 """Real-data end-to-end benchmark: LDL x CAD on a UK Biobank HapMap3 reference.
 
-Every other benchmark in this directory simulates ``beta_hat ~ N(R beta, R/N)``
-from the model the sampler assumes, on well-conditioned coalescent LD. That is
-the right way to measure an estimator against a known truth, and it is
-structurally incapable of catching a failure that only appears when the summary
-statistics disagree with the LD reference. This benchmark exists because
-exactly such a failure shipped in 0.3.0: the first real GWAS bipred was ever
-pointed at produced a silently diverged fit that all thirty architecture cells
-had no way to detect.
+The self-contained simulation benchmarks draw
+``beta_hat ~ N(R beta, R/N)`` from the model the sampler assumes, on
+well-conditioned coalescent LD. That is the right way to measure an estimator
+against a known truth, and it is structurally incapable of catching a failure
+that only appears when the summary statistics disagree with the LD reference.
+This benchmark exists because exactly such a failure shipped in 0.3.0: the
+first real GWAS bipred was ever pointed at produced a silently diverged fit that
+all thirty architecture cells had no way to detect.
 
-The traits are chosen so that the *answer* is checkable against outside
-knowledge rather than against a simulation:
+The traits are chosen so prior studies provide rough context without pretending
+to supply a truth label for this analysis:
 
 * LDL  -- GLGC 2013 (Willer et al.), continuous, per-variant N.
 * CAD  -- CARDIoGRAMplusC4D 2015 (Nikpay et al.), GWAS Catalog GCST003116.
@@ -19,16 +19,21 @@ knowledge rather than against a simulation:
   h2 here is observed-scale at the study's case fraction *and* conservative. It
   is not a liability-scale heritability.
 
-The two consortia are close to disjoint, so correlated sampling error is small
-and the cross-trait LDSC intercept (~+0.02) confirms it rather than assuming
-it. Published LDL-CAD genetic correlation is around 0.2-0.4, which is the
-external anchor: a fit that lands far outside that is wrong regardless of what
-its internal diagnostics say.
+The two consortia are believed to be close to disjoint. Their cross-trait LDSC
+intercept (~+0.02) is consistent with small correlated sampling error, but an
+intercept cannot identify cohort overlap by itself. A rough 0.2-0.4 LDL-CAD
+interval used by the historical analysis is descriptive context only: studies
+differ in samples, phenotype definitions, models and QC, so it is not a
+regression oracle and cannot override internal numerical diagnostics.
 
-Inputs, none of them committed (about 9 GB together)::
+Inputs, none of them committed (about 9 GB together), are acquired as in
+``benchmarks/README.md`` Table 4. In particular, the LD converter must come
+from the tested ldpred3 revision
+``5d86ac9d97e42c57fa31d84ff093d3bf637dc0e6``::
 
     # LD reference: ldpred3's converter, from figshare 19213299 (CC BY 4.0)
-    python ~/REPOS/ldpred3/benchmarks/convert_bigsnpr_ldref.py
+    python /path/to/ldpred3/benchmarks/convert_bigsnpr_ldref.py \
+        --work /path/to/benchmark-work/ldref-hm3 --test
 
     # summary statistics
     curl -O http://csg.sph.umich.edu/willer/public/lipids2013/jointGwasMc_LDL.txt.gz
@@ -42,9 +47,14 @@ Point ``BIPRED_LDREF``, ``BIPRED_LDL`` and ``BIPRED_CAD`` at them and run::
 It is not part of ``run_all.sh`` for that reason. Roughly 25 minutes, dominated
 by the LD-consistency screen and three joint fits.
 
-Each of the three cleaning stages is fitted, because the *contrast* is the
-result: harmonisation alone is not enough, per-variant filters are not enough,
-and the LD-consistency screen is what makes the fit converge.
+The script refuses a dirty bipred or ldpred3 source tree and writes
+``real_ldl_cad.provenance.json`` beside the CSV with both clean revisions,
+runtime versions and verified hashes.
+
+Each of the three cleaning stages is fitted because their contrast is the
+result for this data set: harmonisation alone, per-variant filters, and the
+same filters followed by bipred's DENTIST-inspired LD-consistency screen. This
+single pair motivates the screen; it does not establish a universal QC rule.
 """
 
 from __future__ import annotations
@@ -66,7 +76,11 @@ from ldpred3.ld import load_ld_blocks                                # noqa: E40
 from ldpred3.ld_repr import LowRankLD, dense_ld, lowrank_ld          # noqa: E402
 from ldpred3.ldsc import ld_scores                                   # noqa: E402
 from bipred import ldpred3_auto_bivariate_blocks, ldsc_rg            # noqa: E402
-from bipred.qc import dentist, implied_sample_size                   # noqa: E402
+from bipred.qc import implied_sample_size, ld_consistency_screen     # noqa: E402
+from benchmarks.real_data_inputs import (                            # noqa: E402
+    require_clean_source, require_ldpred3_source, validate_inputs,
+    write_provenance_sidecar,
+)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WORK = os.path.expanduser("~/REPOS/ldpred3/benchmarks/.work")
@@ -87,8 +101,8 @@ BURN_IN, NUM_ITER = 200, 300
 COMP = {"A": "T", "T": "A", "C": "G", "G": "C"}
 BASES = set("ACGT")
 
-#: Published LDL-CAD genetic correlation, the outside anchor.
-RG_LITERATURE = (0.15, 0.45)
+#: Rough external LDL-CAD context, not a pass/fail interval.
+RG_CONTEXT = (0.2, 0.4)
 #: sum(beta^2)/h2 above this is a diverged fit, not an estimate.
 CANCELLATION_LIMIT = 10.0
 
@@ -219,7 +233,7 @@ def quadratic(blocks, beta):
 
 
 def fit_stage(name, blocks, bh1, bh2, n1, n2, n_ref, rows):
-    """LDSC screen plus joint fit for one cleaning stage."""
+    """LDSC estimate plus joint fit for one cleaning stage."""
     m = bh1.size
     print(f"\n=== {name}: {len(blocks)} blocks, {m:,} variants ===", flush=True)
     started = time.perf_counter()
@@ -243,7 +257,7 @@ def fit_stage(name, blocks, bh1, bh2, n1, n2, n_ref, rows):
                ldsc_h2_cad=round(float(screen.h2[1]), 4),
                ldsc_intercept=round(float(screen.gcov_intercept), 4),
                rg=round(float(res.rg), 4), p=round(float(res.p), 6),
-               warned=int(bool(diverged)))
+               divergence_warned=int(bool(diverged)))
     for label, beta, h2 in (("ldl", res.beta1_est, res.h2[0]),
                             ("cad", res.beta2_est, res.h2[1])):
         total = float(np.sum(beta ** 2))
@@ -259,7 +273,7 @@ def fit_stage(name, blocks, bh1, bh2, n1, n2, n_ref, rows):
                   / max(trace[:len(trace)//4, 0].mean(), 1e-12))
     row["trace_drift_ldl"] = round(drift, 3)
     print(f"    trace drift (last quarter / first) {drift:.2f}"
-          f"   warned: {'yes' if diverged else 'no'}")
+          f"   divergence warning: {'yes' if diverged else 'no'}")
     for w in diverged:
         print(f"    WARNING: {str(w.message)[:200]}...")
     rows.append(row)
@@ -273,9 +287,13 @@ def main(argv=None):
                         help="LD-consistency screening passes per trait")
     args = parser.parse_args(argv)
 
-    for path in (REF, LDL, CAD):
-        if not os.path.exists(path):
-            raise SystemExit(f"missing input {path}; see this module's docstring")
+    source_revision = require_clean_source()
+    dependency_sources = {"ldpred3": require_ldpred3_source()}
+    input_hashes = validate_inputs({
+        "ldref-hm3/ldpred3_ldref_hm3.npz": REF,
+        "sumstats/jointGwasMc_LDL.txt.gz": LDL,
+        "sumstats/cad.add.160614.website.txt": CAD,
+    })
 
     started = time.perf_counter()
     blocks, ids, meta = load_ld_blocks(REF, return_metadata=True)
@@ -362,12 +380,13 @@ def main(argv=None):
     tiled, kept = subset_blocks(blocks, set(shared[mask].tolist()))
     order = {g: i for i, g in enumerate(shared[mask])}
     sel = np.array([order[g] for g in kept])
-    print(f"\n=== LD-consistency screen (bipred.qc.dentist, {args.rounds} rounds) ===",
+    print(f"\n=== LD-consistency screen "
+          f"(bipred.qc.ld_consistency_screen, {args.rounds} rounds) ===",
           flush=True)
-    keep1 = dentist(tiled, b1[mask][sel] / s1[mask][sel], rounds=args.rounds,
-                    verbose=True)
-    keep2 = dentist(tiled, b2[mask][sel] / s2[mask][sel], rounds=args.rounds,
-                    verbose=True)
+    keep1 = ld_consistency_screen(
+        tiled, b1[mask][sel] / s1[mask][sel], rounds=args.rounds, verbose=True)
+    keep2 = ld_consistency_screen(
+        tiled, b2[mask][sel] / s2[mask][sel], rounds=args.rounds, verbose=True)
     both = keep1 & keep2
     print(f"  LDL dropped {(~keep1).sum():,}  CAD dropped {(~keep2).sum():,}  "
           f"union {(~both).sum():,}  remaining {both.sum():,} "
@@ -383,21 +402,26 @@ def main(argv=None):
               n1[mask][sel][sel2], np.full(sel2.size, cad_n), n_ref, rows)
 
     with open(args.csv, "w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]),
+                                lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
-    print(f"\nwrote {args.csv}")
+    sidecar = write_provenance_sidecar(
+        args.csv, source_revision=source_revision, input_hashes=input_hashes,
+        dependency_sources=dependency_sources,
+        run_controls={"rounds": args.rounds})
+    print(f"\nwrote {args.csv} and {sidecar}")
 
     final = rows[-1]
-    print("\n--- regression checks on the final stage ---")
+    print("\n--- diagnostic checks on the final stage ---")
+    print(f"  [context] rg {final['rg']:+.4f}; rough external range "
+          f"{RG_CONTEXT} is not a pass/fail check")
     checks = [
-        (f"rg {final['rg']:+.4f} within the published {RG_LITERATURE} range",
-         RG_LITERATURE[0] <= final["rg"] <= RG_LITERATURE[1]),
         (f"LDL cancellation {final['cancellation_ldl']:.1f} < {CANCELLATION_LIMIT}",
          final["cancellation_ldl"] < CANCELLATION_LIMIT),
         (f"CAD cancellation {final['cancellation_cad']:.1f} < {CANCELLATION_LIMIT}",
          final["cancellation_cad"] < CANCELLATION_LIMIT),
-        ("no divergence warning", final["warned"] == 0),
+        ("no divergence warning", final["divergence_warned"] == 0),
     ]
     failures = [text for text, ok in checks if not ok]
     for text, ok in checks:

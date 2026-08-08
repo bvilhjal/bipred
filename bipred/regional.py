@@ -16,10 +16,12 @@ and `LowRankLD` factors, for which
 
 The calculation uses the LD representation supplied to :func:`regional_rg`; it
 does not replay the fit's ``ld_int8`` policy. Under the default ``ld_int8=False``
-a fit consumes dense blocks exactly as given, so handing the same blocks to both
-calls evaluates the same LD -- the ordinary pattern is aligned. A caller who
-opts into in-fit quantisation (``ld_int8=True`` or ``None``) reintroduces the
-mismatch, because that copy is private to the fit.
+a fit preserves D8/D32 values, copying non-contiguous storage when needed, and
+normalises other dense floats and floating low-rank factors to D32. This
+function makes the same low-rank normalisation; exact dense alignment requires
+D8/D32 inputs or passing the same normalised representation to both calls.
+In-fit quantisation (``ld_int8=True`` or ``None``) creates a private copy for
+float blocks.
 
 Posterior-mean effects are used deliberately rather than the sampled-quadratic
 ratio that the genome-wide `rg` uses. The sampled ratio inflates its denominator
@@ -29,11 +31,11 @@ region has far fewer variants.
 **Two biases are known and are not corrected here.** Read them before
 interpreting output; see `docs/rg.md` for guidance.
 
-1. *Sample overlap contaminates every region identically.* If the two GWAS share
-   samples and `cross_corr` was not supplied to the fit, the same spurious
-   covariance is added to every region at once. It does not average out across
-   regions and cannot be estimated reliably within one. Supply `cross_corr` to
-   the fit whenever the cohorts may overlap.
+1. *Sample overlap contaminates every region.* If the two GWAS share samples
+   and `cross_corr` was not supplied to the fit, spurious covariance affects
+   every region, with magnitude depending on local LD, N, and shrinkage. It
+   does not average out across regions and cannot be estimated reliably within
+   one. Supply `cross_corr` to the fit whenever the cohorts may overlap.
 2. *Regional estimates are shrunk toward the genome-wide correlation.* The
    sampler carries a single effect covariance for the whole genome, so every
    per-SNP posterior borrows across traits at the genome-wide rate. This is a
@@ -60,6 +62,7 @@ from ._ldpred3_compat import (
 __all__ = ["RegionalRgResult", "regional_rg"]
 
 _Q8_SCALE = 1.0 / _Q8
+_DENSE_ROW_CHUNK = 256
 
 
 @dataclass
@@ -93,15 +96,34 @@ class RegionalRgResult:
 
 def _dense_quadratics(block, scale, sub, b1, b2):
     """Three quadratic forms on one dense sub-block, dequantising if int8."""
-    sl = block[np.ix_(sub, sub)]
-    # ``np.ix_`` always copies, so the dequantisation scale can be applied in
-    # place instead of allocating a second len(sub)^2 float64 temporary.
-    R = np.asarray(sl, dtype=np.float64)
-    if scale != 1.0:
-        R *= scale
+    # Region labels are commonly contiguous. In that case a basic slice is a
+    # view. Interleaved regions are multiplied in bounded row slabs, avoiding a
+    # len(sub)^2 gather. Neither path upcasts a quadratic-size array: a 12,169-
+    # variant float32 block would otherwise need a 1.10 GiB float64 temporary.
+    contiguous = sub.size == 1 or np.all(np.diff(sub) == 1)
     x, y = b1[sub], b2[sub]
-    Rx, Ry = R @ x, R @ y
-    return float(x @ Rx), float(x @ Ry), float(y @ Ry)
+    if contiguous:
+        start = int(sub[0])
+        sl = block[start:start + sub.size, start:start + sub.size]
+        # Mixed-dtype ``@`` materialises a float64 copy of ``sl`` in NumPy.
+        # Einsum accumulates in float64 with only O(len(sub)) outputs.
+        Rx = np.einsum("ij,j->i", sl, x, dtype=np.float64,
+                       optimize=False)
+        Ry = np.einsum("ij,j->i", sl, y, dtype=np.float64,
+                       optimize=False)
+    else:
+        Rx = np.empty(sub.size, dtype=np.float64)
+        Ry = np.empty(sub.size, dtype=np.float64)
+        for lo in range(0, sub.size, _DENSE_ROW_CHUNK):
+            hi = min(lo + _DENSE_ROW_CHUNK, sub.size)
+            rows = sub[lo:hi]
+            slab = block[np.ix_(rows, sub)]
+            Rx[lo:hi] = np.einsum(
+                "ij,j->i", slab, x, dtype=np.float64, optimize=False)
+            Ry[lo:hi] = np.einsum(
+                "ij,j->i", slab, y, dtype=np.float64, optimize=False)
+    return (scale * float(x @ Rx), scale * float(x @ Ry),
+            scale * float(y @ Ry))
 
 
 def _lowrank_quadratics(U, scale, residual, sub, b1, b2):
@@ -129,11 +151,13 @@ def regional_rg(beta1, beta2, blocks, regions, *, min_variants=1, clip=True):
         ``(R, idx)`` pairs where ``R`` is a dense float/int8 matrix or a
         :class:`LowRankLD` factor, normally the same logical blocks passed to the
         fit. This function evaluates the representation supplied here. With the
-        default ``ld_int8=False`` the fit does the same, so passing it the same
-        blocks is aligned and needs no further care. Only a fit that opted into
-        in-fit quantisation (``ld_int8=True`` or ``None``) evaluates something
-        else, and its private copy cannot be retrieved; quantise the blocks
-        yourself and pass those to both calls instead.
+        default ``ld_int8=False``, the fit preserves D8/D32 values, copying
+        non-contiguous storage when needed, but normalises other dense floats
+        and floating low-rank factors to D32. This function makes the same
+        low-rank normalisation; exact dense alignment requires supplying D8/D32
+        to both calls. In-fit quantisation (``ld_int8=True`` or ``None``)
+        creates a private copy for float blocks; quantise the blocks yourself
+        and pass those to both calls instead.
     regions : array_like
         One-dimensional length-``m`` region label per variant. Labels may be
         integers or strings; variants sharing a label form one region, and
@@ -157,7 +181,7 @@ def regional_rg(beta1, beta2, blocks, regions, *, min_variants=1, clip=True):
 
     Notes
     -----
-    See the module docstring: uncorrected sample overlap inflates **every**
+    See the module docstring: uncorrected sample overlap can bias **every**
     region, and all regional estimates are shrunk toward the genome-wide
     correlation. Neither is corrected here.
     """
@@ -176,14 +200,9 @@ def regional_rg(beta1, beta2, blocks, regions, *, min_variants=1, clip=True):
         raise ValueError("beta1 and beta2 must contain only finite values")
     m = b1.size
 
-    # No representation guard is needed for the default fit. ``ld_int8``
-    # defaults to False, so a fit consumes dense blocks in the representation it
-    # was handed and passing those same blocks here evaluates the same LD. The
-    # warning that used to live at this point existed because the fit-time
-    # default quantised float blocks into a private copy; it fired on every
-    # float block at or below the cutoff, which is now the aligned case.
-    # A caller who opts back in with ``ld_int8=True``/``None`` reintroduces the
-    # mismatch, which the parameter's own documentation states.
+    # D8 and D32 match the default fitter's numeric representation. Other dense
+    # inputs are accepted for exploration, but the fit first normalises them to
+    # D32.
 
     if (isinstance(min_variants, (bool, np.bool_))
             or not isinstance(min_variants, (int, np.integer))):
@@ -227,9 +246,11 @@ def regional_rg(beta1, beta2, blocks, regions, *, min_variants=1, clip=True):
     for R, idx in _validate_blocks(blocks, m, contiguous=True):
         idx = np.asarray(idx, dtype=np.int64).ravel()
         if isinstance(R, LowRankLD):
-            U = np.asarray(R.U)
+            raw_factor = np.asarray(R.U)
+            U = (raw_factor if raw_factor.dtype == np.int8
+                 else np.asarray(raw_factor, dtype=np.float32))
             factor_scale = float(R.scale)
-            residual = np.asarray(R.residual_diag)
+            residual = np.asarray(R.residual_diag, dtype=np.float32)
             dense = None
         else:
             arr = np.asarray(R)

@@ -19,7 +19,8 @@ Run once from the repo root::
     OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python benchmarks/make_ld_library.py
 
 ``--blocks``/``--k`` must match what the consumer expects; ``bivariate_demo.py``
-reads 12 blocks of 500.
+reads 12 blocks of 500. The archive embeds the simulator cache tag, and the
+consumer hashes the complete archive in its provenance sidecar.
 """
 
 from __future__ import annotations
@@ -103,8 +104,11 @@ def main(argv=None):
         library[b] = _population_ld(b, args.k)
         print(f"  block {b + 1}/{args.blocks}", flush=True)
 
-    # Key "R": the stacked (blocks, k, k) array bivariate_demo.py loads.
-    np.savez(args.out, R=library)
+    # Key "R": the stacked (blocks, k, k) array bivariate_demo.py loads. Keep
+    # the backend-derived cache tag beside it so the local archive is not an
+    # anonymous matrix payload; the consumer also hashes the complete file.
+    np.savez(args.out, R=library,
+             simulator_cache_tag=np.array(SIMULATOR_CACHE_TAG))
     size_mb = os.path.getsize(args.out) / 1e6
     print(f"wrote {args.out}: {args.blocks} blocks of {args.k}x{args.k} "
           f"population LD, {size_mb:.0f} MB, simulator {SIMULATOR_CACHE_TAG} "

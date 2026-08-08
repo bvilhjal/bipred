@@ -89,6 +89,8 @@ def test_estimate_sample_overlap_inversion():
     assert abs(out["overlap_frac"] - 30000.0 / n2) < 1e-6
     assert out["effective_overlap"] == pytest.approx(rho_ph * 30000.0)
     assert out["n_shared_raw"] == pytest.approx(30000.0)
+    assert out["cross_corr_valid"] is True
+    assert out["physically_consistent"] is True
     # With an unknown nonnegative phenotypic correlation, rho=1 gives the
     # overlap-only lower bound, not an upper bound.
     lower = estimate_sample_overlap(res, n1, n2)
@@ -115,6 +117,7 @@ def test_sign_mismatch_is_unidentified_rather_than_zero_overlap():
     with pytest.warns(RuntimeWarning, match="opposite sign"):
         out = estimate_sample_overlap(res, n1, n2)
     assert out["sign_consistent"] is False
+    assert out["physically_consistent"] is False
     assert np.isnan(out["n_shared"]) and np.isnan(out["overlap_frac"])
     assert out["n_shared_raw"] < 0                      # kept, for diagnosis
     assert out["overlap_corr"] == pytest.approx(-0.3521)
@@ -126,6 +129,36 @@ def test_sign_mismatch_is_unidentified_rather_than_zero_overlap():
     assert fixed["sign_consistent"] is True
     assert fixed["n_shared"] > 0
     assert 0.0 < fixed["overlap_frac"] <= 1.0
+
+
+def test_impossible_shared_count_is_nan_not_an_overlap_above_one():
+    n1, n2, rho = 100.0, 80.0, 0.1
+    res = LDSCRgResult(rg=0.0, rg_se=0.0, gcov=0.0, gcov_intercept=0.5,
+                       h2=(0.5, 0.5))
+    with pytest.warns(RuntimeWarning, match="exceeds the smaller cohort"):
+        out = estimate_sample_overlap(res, n1, n2, pheno_corr=rho)
+    assert out["sign_consistent"] is True
+    assert out["cross_corr_valid"] is True
+    assert out["physically_consistent"] is False
+    assert out["n_shared_raw"] > min(n1, n2)
+    assert np.isnan(out["n_shared"]) and np.isnan(out["overlap_frac"])
+
+
+@pytest.mark.parametrize("intercept", [-1.0, 1.0, -1.2, 1.2])
+def test_intercept_outside_fit_cross_corr_interval_is_reported(intercept):
+    res = LDSCRgResult(rg=0.0, rg_se=0.0, gcov=0.0,
+                       gcov_intercept=intercept, h2=(0.5, 0.5))
+    with pytest.warns(RuntimeWarning) as caught:
+        out = estimate_sample_overlap(
+            res, 100.0, 100.0, pheno_corr=np.copysign(1.0, intercept))
+    assert any("valid cross_corr interval" in str(w.message) for w in caught)
+    assert out["overlap_corr"] == intercept
+    assert out["cross_corr_valid"] is False
+    # Exactly +/-1 describes singular, full overlap and is physically possible,
+    # but the joint fit deliberately requires a positive-definite covariance.
+    assert out["physically_consistent"] is (abs(intercept) == 1.0)
+    if abs(intercept) > 1.0:
+        assert np.isnan(out["n_shared"]) and np.isnan(out["overlap_frac"])
 
 
 @pytest.mark.parametrize("name,bad", [

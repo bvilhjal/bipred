@@ -1,16 +1,32 @@
-# Benchmarks for bipred 0.3.1
+# Benchmark record
 
-Every self-contained script was re-run end to end for this record, against the
-same cached coalescent truths as the 2026-08-03 snapshot (revision `17d6ae2`),
-so accuracy, timing and memory all come from one sweep. Re-run with
-`bash benchmarks/run_all.sh`; the CSVs are the authoritative numbers.
+This is a cumulative record, not one version-locked regeneration. Tables 2--11
+come from `run_all.log`, which records bipred 0.3.0 at revision `7f70065` with
+uncommitted changes. Its CSVs preserve those numbers, but the dirty source tree
+cannot be reconstructed exactly from the revision alone. Table 12 is a separate
+archive-driven, provisional 0.3.4 working-tree run; its current CSV predates the
+new clean-source/library-hash sidecar. The regenerated `sweep_cost.csv` and
+`fit_memory.csv` are also provisional and do not share the historical log.
+Table 13 was added with the 0.3.1 real-data analysis, and
+Tables 14--16 with the 0.3.3 factorial; current scripts and documentation target
+0.3.4. Each section states its own design. Running
+`bash benchmarks/run_all.sh` exercises the current self-contained suite; it
+does not recreate the historical dirty snapshot.
 
-**Section 9 is new and is the most important thing here.** It is the only
-benchmark in this file that does not simulate: real LDL and CAD summary
-statistics against a real UK Biobank LD reference. It exists because 0.3.0
-shipped a defect that the thirty simulated architecture cells of Table 2 could
-not have caught, because every one of them draws `beta_hat` from the model the
-sampler assumes. Read it before trusting a joint fit on real data.
+Tables 13--16 also predate a semantic correction to the LD-consistency screen:
+the historical implementation could stop after the first empty random
+partition, whereas the current one runs every requested partition. Their CSV
+headers were migrated mechanically, but their numerical rows have not been
+regenerated and must not be read as current-screen validation. They also
+predate the manual-run provenance sidecar and therefore do not pin a clean
+source revision or package environment. Current scripts refuse dirty source
+trees and record that metadata for future runs; no sidecars were backfilled.
+
+Sections 9 and 10 are the only non-simulated studies. They use public summary
+statistics against a UK Biobank LD reference and expose file/reference
+mismatches that simulations drawing `beta_hat` from the fitted model cannot.
+They are diagnostic case studies, not independent population samples or a
+universal QC validation.
 
 Two things moved materially in the simulated record:
 
@@ -34,12 +50,12 @@ bundled Numba coalescent (`benchmarks/_coalescent.py`) is available when
 msprime is absent; it draws different events from the same model, so cached
 segments are tagged per backend and never mix.
 
-**Table 1. Recorded environment.**
+**Table 1. Environment recorded by the historical `run_all.log`.**
 
 | Component | Value |
 |---|---|
 | Python | 3.14.6 |
-| bipred | 0.3.1 |
+| bipred | 0.3.0 (`7f70065`, dirty) |
 | ldpred3 | 0.4.5 |
 | NumPy / Numba | 2.4.6 / 0.66.0 |
 | msprime / Matplotlib | 1.4.2 / 3.11.1 |
@@ -179,10 +195,11 @@ Each size runs in a fresh subprocess and reports one realized draw.
 
 Peak RSS grows sublinearly across this range (0.23 GB to 0.63 GB for a 16x
 variant count). LDSC time grows faster than the joint fit's and overtakes it
-between 20k and 40k variants. An earlier record showed a 2.51 GB spike at 80k;
-no run since has reproduced it, so treat single-run memory figures as machine-
-and allocator-dependent rather than as a property of the method. This sweep measures the default dense/Q8 path, not million-variant LR8
-production behavior.
+between 20k and 40k variants. One earlier run produced 2.51 GB at 80k, whereas
+the committed row is 0.63 GB; single-run RSS is machine- and allocator-dependent
+rather than a fixed property of the method. This sweep
+measures the default dense D32 path, not million-variant LR8 production
+behavior.
 
 **Figure 4. Running time, memory, and single-draw recovery.**
 
@@ -324,36 +341,39 @@ python benchmarks/bivariate_demo.py
 ```
 
 Trait 2 is deliberately under-powered (`N=2,000` against trait 1's `100,000`,
-h²=0.5 each, m=6,000, six replicates). The question is whether fitting it
-jointly with the strong trait beats fitting it alone.
+h²=0.5 each, m=6,000, six paired replicates). The same population effects,
+GWAS noise and finite reference-panel draw are fitted twice: as the raw sample
+correlation matrix and after 5% shrinkage toward the identity. The CSV records
+every replicate at full precision.
 
-**Table 12. Trait-2 genetic R² alone and jointly.**
+**Table 12. Trait-2 genetic R² under paired reference-LD regularisation.**
 
-| Architecture | Alone | Joint | Gain | Estimated r_g |
-|---|---:|---:|---:|---:|
-| shared causal, target r_g 0.0 | 0.583 | 0.596 | +0.013 | +0.00 |
-| shared causal, target r_g 0.3 | 0.581 | 0.609 | +0.028 | +0.29 |
-| shared causal, target r_g 0.6 | 0.577 | 0.660 | +0.082 | +0.55 |
-| shared causal, target r_g 0.9 | 0.570 | 0.771 | +0.200 | +0.77 |
-| disjoint causal variants | 0.584 | 0.584 | +0.000 | −0.03 |
+| Reference shrinkage | Architecture | Realized r_g | Alone | Joint | Gain | Estimated r_g | Joint fits with implausibility warning |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 0% | shared, target 0.0 | -0.015 | 0.685 | 0.689 | +0.0044 | -0.016 | 6 / 6 |
+| 0% | shared, target 0.3 | +0.282 | 0.681 | 0.691 | +0.0098 | +0.208 | 6 / 6 |
+| 0% | shared, target 0.6 | +0.585 | 0.677 | 0.649 | -0.0282 | +0.497 | 6 / 6 |
+| 0% | shared, target 0.9 | +0.895 | 0.674 | 0.650 | -0.0241 | +0.812 | 6 / 6 |
+| 0% | disjoint causal support | +0.017 | 0.644 | 0.643 | -0.0012 | +0.023 | 6 / 6 |
+| 5% | shared, target 0.0 | -0.015 | 0.684 | 0.694 | +0.0105 | -0.016 | 3 / 6 |
+| 5% | shared, target 0.3 | +0.282 | 0.681 | 0.700 | +0.0180 | +0.254 | 2 / 6 |
+| 5% | shared, target 0.6 | +0.585 | 0.675 | 0.730 | +0.0550 | +0.522 | 1 / 6 |
+| 5% | shared, target 0.9 | +0.895 | 0.673 | 0.796 | +0.1232 | +0.774 | 2 / 6 |
+| 5% | disjoint causal support | +0.017 | 0.644 | 0.644 | -0.0004 | +0.031 | 3 / 6 |
 
-The gain rises monotonically with shared signal and is exactly zero when the
-causal sets are disjoint — the joint fit does not borrow strength that is not
-there.
+Every raw-reference fit triggers the sampler's implausibility diagnostic, and
+the high-correlation rows lose prediction accuracy jointly. The zero-shrinkage
+arm is therefore a failed stability control, not evidence about whether joint
+fitting helps. Five-percent shrinkage improves this fixture, but 11 of its 30
+fits still warn. Table 12 includes those warned fits in its means so the
+failure is visible; the positive pattern is conditional on this regularisation,
+panel size and simulation, not a general gain estimate.
 
-**The 0.2.1 record of this run said the LD library needed 5% spectral
-shrinkage to fit at all. It does not, and that claim was another instance of
-Bug 1.** Three runs separate the two causes. Holding the old shrunk library
-fixed and restoring the 0.2.1 `ld_int8` default reproduces the 0.2.1 row
-exactly (+0.006 / +0.014 / +0.034 / +0.082, `rg_est` −0.02 / +0.23 / +0.49 /
-+0.79); the same library under the current default gives +0.011 / +0.018 /
-+0.055 / +0.123; and the unshrunk library `make_ld_library.py` actually
-produces gives the table above. So in-fit quantization cost this demo roughly
-a third of its gain at r_g 0.9, and the committed generator's library — 59 to
-96 of 500 eigenvalues below 1e-4 per block, near-singular by any
-reading — fits without shrinkage and scores best of the three. The library
-that collapsed at 0.2.1 was a different, more degenerate artifact than the one
-the committed script builds, which is the reason that script now exists.
+The causal supports in the last row are exactly disjoint, but LD connects the
+two supports and their mean realized genetic correlation is +0.017. Its small
+negative mean gain is likewise not exactly zero. The former claims that this
+library fits best without shrinkage and that the disjoint arm proves “no harm”
+are not supported by the regenerated artifact.
 
 ## 9. Real GWAS: LDL x CAD
 
@@ -367,10 +387,16 @@ drawing both from one model cannot produce.
 LDL from GLGC 2013 (Willer et al., per-variant N) and CAD from
 CARDIoGRAMplusC4D 2015 (Nikpay et al., GCST003116), on the bigsnpr HapMap3
 European LD reference (362,320 UK Biobank individuals, 1,054,330 variants, 625
-blocks). The consortia are close to disjoint, and the cross-trait LDSC
-intercept of +0.02 confirms that rather than assuming it. Reproduce with
+blocks). The consortia are believed to be close to disjoint; the cross-trait
+LDSC intercept of +0.02 is consistent with small correlated sampling error but
+does not identify cohort overlap. Reproduce with
 [`real_ldl_cad.py`](real_ldl_cad.py) (about 9 GB of inputs, 22 minutes); it is
 excluded from `run_all.sh` for that reason.
+
+**Historical-screen note.** The three rows below were produced before the
+screen's always-run partition correction. They document the failure that
+motivated the current implementation, but only a fresh run can measure the
+current screen on these files.
 
 CAD's sample size is calibrated rather than taken as published, which is the
 first thing the benchmark does. `bipred.qc.implied_sample_size` returns 92,966
@@ -380,13 +406,14 @@ and neither is separable from the file. Since `n_eff` scales every standardized
 effect, the reported figure understated CAD's `h2` by that factor. Every number
 below uses the implied value for CAD, for both bipred and LDSC.
 
-Two anchors make this checkable without a simulated truth: cross-trait LDSC on
-the identical data, and the published LDL-CAD genetic correlation of roughly
-0.2 to 0.4.
+Two comparisons provide context without supplying a truth label: cross-trait
+LDSC on the identical data, and a rough external LDL-CAD interval of 0.2 to 0.4.
+They differ in model, samples, phenotype definition and QC, so neither is a
+pass/fail oracle for this fit.
 
 **Table 13. The same analysis at three levels of cleaning.**
 
-| Stage | Variants | LDSC r_g | Joint r_g | h2 LDL | h2 CAD | sum(b^2)/h2 LDL | max abs b LDL | Trace drift | Warned |
+| Stage | Variants | LDSC r_g | Joint r_g | h2 LDL | h2 CAD | sum(b^2)/h2 LDL | max abs b LDL | Trace drift | Divergence warning |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|:---:|
 | harmonised only | 924,254 | +0.2238 | +0.0558 | 0.6732 | 0.1713 | 255.2 | 3.1929 | 1.63 | yes |
 | + per-variant QC | 887,361 | +0.1973 | +0.1390 | 0.5688 | 0.0594 | 271.0 | 3.3215 | 1.78 | yes |
@@ -394,7 +421,7 @@ the identical data, and the published LDL-CAD genetic correlation of roughly
 
 **Harmonisation alone produces a silently diverged fit.** Stage one reports an
 `h2` of 0.67 and a causal fraction of 0.00076, both inside every bound, and
-under 0.3.0 returned no warning at all. It had diverged: posterior means reach
+under 0.3.0 returned no divergence warning. It had diverged: posterior means reach
 3.19 against the 0.031 per-causal effect SD the fit itself inferred, the sum of
 squared effects is 255 times the genetic variance, and that variance is still
 climbing at the last iteration. The runaway effects sit on variants in
@@ -408,17 +435,20 @@ its `median_info` column was doing the work, with 27.3% of variants below 0.9 --
 while LDL's goes from 255 to 271, untouched. LDL's problem is not a property of
 any single variant, so no filter that judges variants one at a time can see it.
 
-**The LD-consistency screen repairs it.** `bipred.qc.dentist` removes a further
-4.7% (LDL 30,481, CAD 12,541) and every diagnostic resolves at once: the
-cancellation ratio drops from 271 to 0.7, the largest effect falls 139-fold to
-0.0239, the variance trace settles, and the divergence warning stops firing.
-The joint `rg` of +0.2856 sits inside the published range, as does LDSC's
-+0.1851 at 3.5 standard errors from zero.
+**The historical LD-consistency screen resolves the saved fit diagnostics.**
+The DENTIST-inspired screen removes a further 4.7% (LDL 30,481, CAD 12,541):
+the cancellation ratio drops from 271 to 0.7, the largest effect falls
+139-fold to 0.0239, saved trace drift is 0.92, and the divergence warning does
+not fire. This is not the complete published DENTIST procedure, and one
+historical case does not calibrate the current screen. The joint `rg` of
++0.2856 and LDSC's +0.1851 happen to fall inside that rough external interval;
+that agreement is context, not validation.
 
 Note that LDSC's own numbers move as the data is cleaned -- its LDL `h2` halves
 from 0.2308 to 0.1155 -- so the target is not fixed. Both estimators end within
-the literature; they disagree by 1.9 standard errors, which is a real question
-about the two estimators and not evidence that either has failed.
+the rough historical range; they disagree by 1.9 standard errors. That is a
+descriptive comparison between estimators, not evidence that either has passed
+or failed.
 
 The `h2` figures for CAD are observed-scale at the study's case fraction, not
 liability-scale, and the genomic-control correction on the SE column biases them
@@ -427,31 +457,50 @@ also not a reconciliation between the two estimators: LDSC rescales with `n_eff`
 exactly as bipred does, so correcting it moved LDSC's CAD `h2` from 0.0687 to
 0.1205 at the same time, and bipred's 0.0706 stays at 0.59 of it.
 
-## 10. Which QC steps matter: a 24-arm factorial
+## 10. QC sensitivity: a 24-arm factorial
 
-Section 9 showed that an LD-consistency screen rescued one real fit. This
-section asks which QC steps are load-bearing in general, by fitting three trait
-pairs under every combination of three factors: strict per-variant thresholds,
-long-range LD exclusion, and the screen. Reproduce with
+Section 9's historical artifact showed improved diagnostics after screening one
+real pair. This section applies that same historical screen under every
+combination of three factors:
+strict per-variant thresholds, long-range LD exclusion, and the screen.
+Reproduce with
 [`qc_factorial.py`](qc_factorial.py) (about 75 minutes; not in `run_all.sh`).
 
-The pairs span the sign range so that a step which quietly costs signal has
-somewhere to show: LDL x CAD (positive, disjoint consortia), height x LDL (a
-true null, cross-domain), HDL x TG (strongly negative, complete sample
-overlap). Every arm records bipred and cross-trait LDSC on identical variants
-and identical sample sizes.
+**Historical-screen note.** These 24 rows use the same pre-correction screen
+semantics as Table 13 and have not been regenerated. The current script also
+rejects an invalid LDSC intercept instead of clipping it into the joint fit's
+`cross_corr` interval.
 
-**Table 14. Divergence rate by factor, 24 arms.**
+The pairs span the sign range: LDL x CAD (positive, disjoint consortia), height
+x LDL (near null, cross-domain), and HDL x TG (strongly negative, complete
+sample overlap). All three contain at least one GLGC file; the 24 arms are eight
+perturbations of each pair, not 24 independent validations. Every arm records
+bipred and cross-trait LDSC on identical variants and sample sizes.
+
+Each arm refits a free LDSC intercept after its filtering choices and passes
+that raw, arm-specific value as a `cross_corr` sensitivity value; the saved
+values range from -0.3574 to +0.0294. This assumes the whole intercept is
+correlated sampling noise, although confounding can also contribute. Thus the
+correction varies with the variant set rather than being a fixed factorial
+input. All saved values were already inside `(-1, 1)`.
+
+**Table 14. Divergence-warning count by factor, 24 historical arms.**
 
 | Factor | off | on |
 |---|---:|---:|
 | strict per-variant thresholds | 6 / 12 | 6 / 12 |
 | long-range LD exclusion | 6 / 12 | 6 / 12 |
-| **LD-consistency screen** | **12 / 12 diverged** | **0 / 12 diverged** |
+| **LD-consistency screen** | **12 / 12 triggered** | **0 / 12 triggered** |
 
-One factor separates the outcome completely and the other two do nothing.
+The historical screen separates the divergence-warning outcome in these files.
+Equal marginal counts for the other factors mean only that they did not change
+that binary diagnostic;
+they do not establish that those choices are inert. Among screened arms,
+long-range-LD exclusion shifts `rg` by 0.0001--0.0067 for LDL x CAD, about
+0.012 for height x LDL, and 0.021--0.023 for HDL x TG. Treat exclusion as an
+estimator-specific sensitivity, especially where a major locus could dominate.
 
-**Table 15. Converged-arm means, bipred against LDSC on the same data.**
+**Table 15. No-divergence-warning arm means on the historical screen.**
 
 | Pair | LDSC r_g | Joint r_g | LDSC h2 (1, 2) | Joint h2 (1, 2) |
 |---|---:|---:|---:|---:|
@@ -459,25 +508,27 @@ One factor separates the outcome completely and the other two do nothing.
 | height x LDL | -0.095 | **-0.040** | 0.264, 0.118 | **0.415**, 0.095 |
 | HDL x TG | -0.692 | **-0.534** | 0.126, 0.119 | 0.100, 0.090 |
 
-Genetic correlation agrees to about one LDSC standard error on the two pairs
-with real signal, and the joint estimate shrinks toward zero on the null --
-which is the behaviour that makes the null test pass and the same behaviour
-that under-reports a weak correlation.
+Across the four screened arms, the joint and LDSC estimates differ by
+1.16--1.43 LDSC standard errors for LDL x CAD and 2.93--4.74 for HDL x TG. The
+height x LDL joint estimate is nearer zero in this case, but three related pairs
+cannot establish a general shrinkage law.
 
 **Heritability disagrees, and not in one direction.** The joint fit is below
-LDSC for LDL and CAD and 57% *above* it for height, where 0.415 sits against a
-published SNP heritability near 0.45 and LDSC's 0.264 looks low. An earlier
+LDSC for LDL and CAD and 57% *above* it for height. Its 0.415 can be compared
+with rough external context near 0.45; that does not establish that LDSC's
+0.264 is biased. An earlier
 draft of this record claimed a systematic downward bias in the joint estimate;
 height refutes that, and no single mechanism explains both directions.
 
-A trait's h2 also depends on its partner: LDL is 0.079 beside CAD and 0.095
-beside height, on identical summary statistics. LDSC shows the same direction
-more weakly (0.107 against 0.118). Heritability is a property of a trait, so
-this is a property of the joint model rather than of the data.
+LDL h2 is 0.079 beside CAD and 0.095 beside height; LDSC moves from 0.107 to
+0.118 in the same direction. The source summary file is unchanged, but each
+pair has a different variant intersection, filtered set and arm-specific
+`cross_corr`. This is sensitivity to the combined pair design and estimator,
+not evidence that partner conditioning alone changed heritability.
 
-**Table 16. HDL x TG, where the diverged fit looks better than the correct one.**
+**Table 16. Historical HDL x TG diagnostics by screening choice.**
 
-| Arm | Variants | Joint r_g | Cancellation | Warned |
+| Arm | Variants | Joint r_g | Cancellation | Divergence warning |
 |---|---:|---:|---:|:---:|
 | no screen | 917,879 | -0.5687 | 246 | yes |
 | no screen, -LR | 892,062 | -0.6544 | 256 | yes |
@@ -488,24 +539,30 @@ this is a property of the joint model rather than of the data.
 | **screen, strict** | 811,011 | **-0.5256** | 0.5 | no |
 | **screen, strict -LR** | 788,382 | **-0.5466** | 0.5 | no |
 
-Cross-trait LDSC on this pair reports -0.64 to -0.73 and the published value is
--0.5 to -0.6. The four diverged arms land closer to both than the four correct
-ones do. No comparison against an external reference distinguishes them; only
-the cancellation ratio does.
+Cross-trait LDSC on this pair reports -0.64 to -0.73; roughly -0.5 to -0.6 is
+useful historical context, not ground truth. All four screened estimates fall
+inside that rough range;
+only one of four unscreened estimates does. That agreement is reassuring but
+cannot certify convergence: external ranges are broad, LDSC is not a gold
+standard, and fit diagnostics carry different information.
 
-**The failure follows the file.** Both GLGC lipid files diverged in every
-pairing, height and CAD in none. On height x LDL one trait diverged
-(cancellation 150-212) while the other was estimated correctly in the same fit
-(0.3-0.5, h2 0.41 against a literature ~0.45), so a fit-level diagnostic would
-have missed it and the per-trait ratios are what caught it.
+**Within these pairs, the divergence warning follows the file.** All three GLGC
+lipid files triggered it in every unscreened pairing, while height and CAD did
+not. On height x LDL one trait had cancellation ratios of 150--212 while the
+other retained ratios of 0.3--0.5 and h2 near 0.41. The latter is numerically
+stable and close to rough external context near 0.45; neither observation
+establishes correctness. A fit-level diagnostic would have missed the first
+trait, and the per-trait ratios are what caught it. Because every pair contains
+a GLGC file, this design cannot estimate a general bivariate-versus-univariate
+tolerance difference.
 
 **Overlap readouts are least stable where the overlap is weakest.** Across the
-four converged LDL x CAD arms `frac_shared` ranges 0.33 to 0.59 and `rho_beta`
+four screened LDL x CAD arms `frac_shared` ranges 0.33 to 0.59 and `rho_beta`
 0.56 to 0.92 while `rg` moves by 0.004 -- the data constrains the product much
 better than the decomposition. On HDL x TG, where the two lipid fractions are
 measured in the same individuals, `frac_shared` is 0.94 to 0.95 and
 `rg_from_overlap` (-0.53 to -0.56) agrees with `rg` (-0.52 to -0.55): the
-decomposition is well identified exactly where the overlap is genuine.
+decomposition is more stable in this example. It is not a calibration study.
 
 Note also that `mixer_overlap.py` selects causal variants uniformly at random,
 which is the exchangeability the model assumes. Real causal variants are not

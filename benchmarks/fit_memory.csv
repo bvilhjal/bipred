@@ -1,9 +1,9 @@
-representation,m,k,ld_int8,payload_mb,fit_peak_mb,fit_peak_bytes_per_variant
-dense_f32,50000,500,default,1.0,6.059741,121.19482
-dense_f32,50000,500,True,1.0,31.064929,621.29858
-dense_f32,100000,500,default,1.0,12.097639,120.97639
-dense_f32,100000,500,True,1.0,62.122903,621.22903
-dense_i8,50000,500,default,0.25,6.051153,121.02306
-dense_i8,100000,500,default,0.25,12.096362,120.96362
-lr8_0.99 (rank 481),50000,500,default,0.2425,7.033957,140.67914
-lr8_0.99 (rank 481),100000,500,default,0.2425,13.097248,130.97248
+representation,m,k,blocks,block_storage,ld_int8,payload_mb,fit_peak_mb,fit_peak_bytes_per_variant
+dense_f32,50000,500,100,distinct,default,100.0,6.457874,129.15748
+dense_f32,50000,500,100,distinct,True,100.0,31.463998,629.27996
+dense_f32,100000,500,200,distinct,default,200.0,12.893917,128.93917
+dense_f32,100000,500,200,distinct,True,200.0,62.921995,629.21995
+dense_i8,50000,500,100,distinct,default,25.0,6.450311,129.00622
+dense_i8,100000,500,200,distinct,default,50.0,12.896305,128.96305
+lr8_0.99 (rank 481),50000,500,100,distinct,default,24.25,7.442091,148.84182
+lr8_0.99 (rank 481),100000,500,200,distinct,default,48.5,13.896033,138.96033

@@ -25,49 +25,24 @@ bipred does not harmonize summary statistics or build LD. Blocks may be dense
 float/int8 matrices or ldpred3 `LowRankLD` objects, including LR8, and
 representations may be mixed.
 
-The default `ld_int8=False` consumes every dense block in the representation it
-arrives in — int8 stays int8, float32 stays float32 — and copies nothing.
-Quantize when the LD is *built*, with `ldpred3.compute_ld_blocks(quantize=True)`,
-rather than in the fit: quantizing here allocates a second genome-scale payload
-while your panel is still alive (62.1 MB of peak against 12.1 MB at m=100,000
-with 500-variant blocks, from [`benchmarks/fit_memory.csv`](../benchmarks/fit_memory.csv)). `ld_int8=True` and `None` are retained for that older
-behaviour. This option does not change low-rank factors.
-
-**Table 1. Choosing a dense or low-rank representation.** Per-sweep cost at
-m=20,000 with 500-variant blocks, one core, fitting a sparse causal model
-(p ≈ 0.01, h² = 0.4), from
-[`benchmarks/sweep_cost.py`](../benchmarks/sweep_cost.py).
-
-| Representation | ms/sweep | Bytes per variant |
-|---|---:|---|
-| dense int8 (D8) | 0.82 | `k` = 500 |
-| dense float32 (D32) | 0.83 | `4k` = 2,000 |
-| low-rank float32, rank 481 | 2.49 | `4·rank` = 1,924 |
-| low-rank int8, rank 481 (LR8) | 2.95 | `rank` = 481 |
-
-Dense int8 and float32 sweep within a few per cent of each other, so **int8 is
-a memory choice and costs nothing meaningful in time**. The dequantization sits in the
-O(k) row update, which is guarded on a variant's effect changing and so fires on
-roughly the causal fraction of visits — about 1% here. That guard is why this
-table is sensitive to the fit: on a degenerate one, where nearly every variant is
-called causal, the same comparison makes int8 look 1.5× slower. Timings taken
-against unstructured noise will mislead you for that reason, and quantizing the
-LD *inside* the fit does more than mislead — see `benchmarks/RESULTS.md` Table 11.
-
-Low-rank cost scales with rank rather than block size, so it wins on large
-blocks and loses on small ones. This benchmark uses a near-full rank (481 of a
-500-variant block) to stress the projection dots, which is the *worst* case for
-low-rank — at that rank it is both slower than dense and saves nothing over D8.
-Use it when `rank ≪ k`.
+With the default `ld_int8=False`, contiguous D8 and D32 blocks are reused.
+Non-contiguous D8/D32 inputs are copied once to contiguous storage; other dense
+float inputs are converted once to contiguous D32.
+Quantize while building the LD, with
+`ldpred3.compute_ld_blocks(quantize=True)`, rather than inside the fit:
+`ld_int8=True` and `None` create a private second payload for float blocks and
+are retained only for compatibility. D8 uses one quarter of D32's storage. Low-rank storage is
+useful when its rank is much smaller than block size; otherwise D8 is usually
+smaller. Treat representation timings as machine- and architecture-specific;
+the scripts and their limitations are in the
+[benchmark record](https://github.com/bvilhjal/bipred/blob/main/benchmarks/RESULTS.md).
 
 ## Quality control before fitting real data
 
-Real summary statistics need a screening step that simulations never do, and
-skipping it does not degrade the answer gracefully — it produces a fit that has
-diverged while still reporting an `h2` and a causal fraction inside every
-bound. This section is the recommended procedure and the evidence for it, from
-a 24-arm factorial over three trait pairs in
-[`benchmarks/qc_factorial.py`](../benchmarks/qc_factorial.py).
+Real summary statistics can disagree with the fitted LD reference in ways that
+model-matched simulations cannot reproduce. The result may be a divergent fit
+whose `h2` and causal fraction still look ordinary. Use the checks below before
+interpreting a real-data fit, and always heed the fit's own warnings.
 
 ### The recommended procedure
 
@@ -78,46 +53,64 @@ a 24-arm factorial over three trait pairs in
    frequency against the reference's own. Near +1 is aligned, near −1 inverted.
    The flip *rate* cannot distinguish those — a legitimate effect-allele
    convention produces any rate at all (one real file flipped 69.7%).
-2. **Calibrate the effective sample size.** `n_eff` scales every standardized
-   effect, so getting it wrong rescales `h2` directly.
-   [`bipred.qc.implied_sample_size`](../bipred/qc.py) recovers the sample size
-   the data behaves as if it had. On four of five real GWAS it matched the
-   reported value within 1%; on CARDIoGRAMplusC4D CAD the ratio was **0.570**,
-   reported 162,973 against 92,966 implied, which understated that trait's `h2`
-   by the same factor (0.0401 to 0.0706). Two causes are indistinguishable from the file alone and
-   both apply there: genomic control inflating the standard errors, and the
-   pooled `4/(1/n_case + 1/n_ctrl)` formula, which overstates a meta-analysis
-   unless every cohort shares the same case/control ratio.
-3. **Filter per variant, at published thresholds.** Minor allele frequency
+2. **Check the effective sample size.** `n_eff` scales every standardized effect.
+   For case-control data,
+   [`bipred.qc.implied_sample_size`](../bipred/qc.py) can compare the reported
+   value with the genotype scale implied by `beta`, `se`, and allele frequency.
+   It found 92,966 versus 162,973 for the tested CAD file. For quantitative
+   traits, absolute N and phenotype scale are not separately identifiable from
+   these columns; the function reports N as unidentified rather than calibrating
+   itself to the reported value.
+3. **Filter per variant using study-appropriate thresholds.** Minor allele frequency
    ≥ 0.01, allele-frequency concordance, imputation quality where the file
    carries it, a chi-square cap, per-variant sample size, and
-   [`bipred.qc.sd_consistency`](../bipred/qc.py). Do not tighten these — see
-   below.
-4. **Screen for LD consistency** with [`bipred.qc.dentist`](../bipred/qc.py).
-   This is the step nothing else substitutes for.
+   [`bipred.qc.sd_consistency`](../bipred/qc.py) are useful inputs. Thresholds
+   must reflect the study and reference; the committed factorial does not
+   establish a universal optimum.
+4. **Compare an LD-consistency screen** with
+   [`bipred.qc.ld_consistency_screen`](../bipred/qc.py). This lightweight,
+   block-based routine is inspired by the DENTIST statistic but does not
+   implement the published DENTIST windowing and protected-removal procedure.
 
 ```python
-from bipred.qc import dentist, implied_sample_size
+from ldpred3 import standardize_betas
+from bipred.qc import implied_sample_size, ld_consistency_screen
 
 sized = implied_sample_size(beta2, se2, ref_af, binary=True, reported_n=n2)
 if not sized["consistent"]:
     n2 = n2 * sized["ratio"]          # fit what the data behaves like
 
-keep = dentist(blocks, beta_hat1 / se1) & dentist(blocks, beta_hat2 / se2)
+# Standardized effects depend on N: recompute them after any N adjustment.
+beta_hat1 = standardize_betas(beta1, se1, n1)[0]
+beta_hat2 = standardize_betas(beta2, se2, n2)[0]
+
+z1, z2 = beta1 / se1, beta2 / se2     # original GWAS columns
+keep = (ld_consistency_screen(blocks, z1)
+        & ld_consistency_screen(blocks, z2))
 ```
 
-Run the screen once per trait against the blocks you will fit with, on the
-largest variant set available, and intersect the masks. Screening the larger
-set is the better test — a variant's z-score is predicted from its neighbours,
-so more neighbours means a fairer test.
+Use raw GWAS z-scores here, not standardized `beta_hat / se`. After intersecting
+the masks, subset and reindex every LD block, both standardized effects, and any
+per-variant sample-size arrays before calling the fit. Recompute standardized
+effects whenever N changes. With the default fit policy, D8, D32, and low-rank
+blocks match the screen numerically; other dense floats are normalised to D32 in
+both. The screen cannot replay the private D8 copy made by legacy in-fit
+quantisation, so pre-quantise when exact alignment matters. `dentist` remains a
+compatibility alias for this routine; it does not turn the approximation into
+the full DENTIST method.
 
 ### What the factorial established
 
-Three trait pairs spanning the sign range — LDL × CAD (+0.26), height × LDL
-(≈ 0, a null), HDL × TG (−0.53) — each fitted under all eight combinations of
-strict per-variant thresholds, long-range LD exclusion, and the screen.
+Three related trait pairs spanning the sign range — LDL × CAD (+0.26), height ×
+LDL (≈ 0), and HDL × TG (−0.53) — were each fitted under all eight
+combinations of stricter per-variant thresholds, long-range-LD exclusion, and
+the screen. Every pair contains at least one GLGC lipid file, so these 24 arms
+are repeated perturbations of three file combinations, not independent
+validation across 24 settings. The saved rows also predate the correction that
+runs every requested random partition; they are a historical case study, not a
+validation of the current screen.
 
-**Table 2. Divergence rate across 24 arms.**
+**Table 1. Historical divergence warnings across 24 arms.**
 
 | factor | off | on |
 |---|---:|---:|
@@ -125,47 +118,38 @@ strict per-variant thresholds, long-range LD exclusion, and the screen.
 | long-range LD exclusion | 6/12 | 6/12 |
 | **LD-consistency screen** | **12/12 diverged** | **0/12 diverged** |
 
-Perfect separation on one factor and none on the other two. With the screen,
-`rg` is stable to ±0.004 across variant counts spanning 15%; without it, `rg`
-ranges over 0.094 on the same pair depending on arbitrary filter choices.
+In that run, the screen separated the warnings in these file/reference
+combinations. The other factors did not change the warning count, but they did
+change estimates; Table 1 cannot establish that they "do nothing." Among its
+screened fits,
+long-range exclusion moved `rg` by about 0.012 for height × LDL, 0.021–0.023
+for HDL × TG, and 0.0001–0.0067 for LDL × CAD. Use
+[`bipred.qc.in_long_range_ld`](../bipred/qc.py) as an estimator-specific
+sensitivity analysis. Exclusion may protect genome-wide moments, while retaining
+APOE may matter for prediction; the appropriate choice depends on the target.
 
-**Tighter thresholds are worse than useless.** Raising the SD check to
-0.8×/+0.03 and the frequency-concordance bound to 0.10 removed a further
-142,282 variants — 22% of the genome across all filters — and moved LDL's
-cancellation ratio from 264.8 to 276.1. Below a 0.10 concordance bound the
-filter stops removing errors and starts removing ordinary panel difference:
-median discordance against a UK Biobank reference is 0.013 to 0.018 by
-construction, so a 0.02 bound would discard a third of the genome.
+### Why diagnostics matter
 
-**The long-range LD exclusion is optional.** Removing the 24 Price et al.
-regions plus APOE changed `rg` by 0.0001 once the screen had run
-([`bipred.qc.in_long_range_ld`](../bipred/qc.py) implements it if you want it).
-Keep them by default: excluding APOE improves nothing measurable and discards
-the strongest lipid locus, which matters if you are also using `beta1_est` for
-prediction. The screen and the exclusion are orthogonal — the screen's drop
-rate inside long-range regions is 4.7%, identical to outside.
-
-### Why the screen is not optional
-
-**A diverged fit can produce a *better-looking* answer than a correct one.** On
-HDL × TG the four diverged arms gave `rg` between −0.57 and −0.65; the four
-converged arms gave −0.52 to −0.55. Cross-trait LDSC said −0.69 and the
-published value is −0.5 to −0.6, so the broken fits sat *closer* to both
-external references. Nothing in the estimate reveals the problem.
+A diverged fit can still look plausible. On HDL × TG, all four screened
+estimates and only one of four unscreened estimates lay in a rough external
+range of −0.5 to −0.6 used by the historical study. That uncited context is not
+ground truth, and agreement with any external point or interval cannot by
+itself certify a fit.
 
 Nor is the failure uniform. On LDL × CAD divergence halved `rg`; on height ×
 LDL it shrank it toward zero; on HDL × TG it inflated it. And it can strike one
 trait while sparing the other in the same fit — height × LDL diverged at
-cancellation 150–212 on the LDL side while height was estimated correctly at
-0.3–0.5, with an `h2` of 0.41 against a literature ~0.45.
+cancellation 150–212 on the LDL side while height remained in the rough
+external range 0.3–0.5, with `h2` 0.41 against rough context around 0.45.
 
-The failure tracks the *summary-statistic file*, not the trait pairing or
-bivariate fitting in general: both GLGC lipid files diverged in every pairing,
-height and CAD never did.
+Within this study, warning status tracked the *summary-statistic file*: all
+three GLGC lipid files diverged in every pairing, while height and CAD did not.
+Three related pairs do not establish that pattern generally.
 
-Since 0.3.1 a fit that diverges raises a `RuntimeWarning` naming which check
-failed. **Do not interpret `h2`, `rg` or the overlap readouts from a fit that
-warns.**
+Since 0.3.1 a fit that trips a divergence diagnostic raises a `RuntimeWarning`
+naming the check. Do not interpret `h2`, `rg`, or the overlap readouts until the
+data/LD mismatch has been investigated; passing the diagnostic is necessary
+evidence, not proof of correctness.
 
 ## Fit one chain
 
@@ -224,7 +208,7 @@ require different trace contracts. The pooled posterior records
 
 ## Read the result
 
-**Table 3. Main `BivariateResult` fields.**
+**Table 2. Main `BivariateResult` fields.**
 
 | Field | Meaning |
 |---|---|
@@ -251,9 +235,10 @@ mx["n_causal"], mx["n_shared"]
 
 Ratios avoid the literal causal-count interpretation but still need calibration.
 LD can spread inclusion mass to correlated neighbours, while reference mismatch
-can add inflation. `frac_shared` runs high by an amount that grows with
-polygenicity — +0.03 at a 3% causal fraction, +0.23 at 30% — so read it beside
-the fitted `p` rather than as a fixed offset; see [`rg.md`](rg.md). For
+can add inflation. In the committed sweep, mean `frac_shared` bias was
+nonmonotonic: +0.05, +0.03, +0.09, and +0.23 at causal fractions 1%, 3%, 10%,
+and 30%. Very sparse traits are not exempt. Read the estimate beside fitted `p`
+rather than applying a fixed offset; see [`rg.md`](rg.md). For
 count-sensitive work, compare `noise_inflation=True` and
 `res.mixer_calibrated(infer1, infer2)` with the unadjusted result; neither is
 guaranteed to improve calibration at every power setting.
@@ -279,11 +264,13 @@ local = regional_rg(
 )
 ```
 
-Pass the same blocks you fitted with. Under the default `ld_int8=False` the fit
-evaluates them as given, so this is aligned with no further care. Only a fit
-that opted into in-fit quantization (`ld_int8=True` or `None`) evaluates
-something else, and that copy is private: pre-quantize the blocks yourself
-(`ldpred3.compute_ld_blocks(..., quantize=True)`) and pass those to both calls.
+Pass the same effective LD representation you fitted with. Under the default,
+D8 and D32 retain their numeric values (a non-contiguous input may be copied);
+other dense float inputs are normalized to D32. Exact alignment therefore
+requires passing D8/D32, or the same normalized D32, to both calls. In-fit
+quantization (`ld_int8=True` or `None`) creates a private copy for float blocks:
+prefer pre-quantizing with `ldpred3.compute_ld_blocks(..., quantize=True)` and
+passing those blocks to both.
 
 `region_labels` has one label per variant; labels need not be contiguous.
 Regional estimates use posterior-mean effects and expose `rg`, `gcov`, `gvar1`,
@@ -293,7 +280,7 @@ shrinks local estimates toward the genome-wide correlation.
 
 ## Options
 
-**Table 4. Main fitting options.** Unless the *Scope* column says otherwise, an
+**Table 3. Main fitting options.** Unless the *Scope* column says otherwise, an
 option is accepted by both `ldpred3_auto_bivariate[_blocks]` and
 `ldpred3_auto_bivariate_chains`. Options marked *single* are rejected by the
 chains driver, which reserves them for its own dispersal.
@@ -313,7 +300,7 @@ chains driver, which reserves them for its own dispersal.
 | `h2_cap` | `None` | both | optional expert ceiling on the per-trait slab variance, enforced *inside* the sampler. Unlike `h2_bounds` it changes the fitted effects, so it moves `rg` and `h2` alike whenever it binds |
 | `iw_df` | `10` | both | covariance shrinkage strength |
 | `sample_every` | `5` | both | thinning for the effect states the decorrelated `rg` uses; no effect otherwise |
-| `ld_int8` | `False` | both | dense storage policy. The default copies nothing; `True`/`None` quantize inside the fit and build a second payload |
+| `ld_int8` | `False` | both | dense storage policy. Contiguous D8/D32 are reused; non-contiguous blocks are copied and other float types normalized to D32. `True`/`None` quantize float blocks inside the fit and build a second payload |
 | `ncores` | `1` | both | within-chain block threads |
 | `chain_ncores` | `1` | chains | multi-chain concurrency; cannot combine with `ncores>1` |
 | `tol` | `0` | single | optional stabilization heuristic; chains rejects `tol>0` |
@@ -343,10 +330,11 @@ by multi-chain inference; use dispersed full-length chains for diagnostics.
   `h2` bound was hit on a sizeable panel. Inspect LD quality, reference size,
   block size, and regularization before interpreting or timing that fit.
 - A warning that the fit *appears to have diverged* is stronger: the effects
-  are cancelling through LD, or exceed the slab the fit itself inferred, or the
-  genetic variance never settled. Do not interpret `h2` or `rg` from it. The
-  usual cause is summary statistics inconsistent with the LD reference, not the
-  reference — screen them with `bipred.qc.dentist` before anything else.
+  are cancelling through LD, exceed the inferred slab, or the genetic variance
+  never settled. Do not interpret `h2` or `rg` from it. Recheck harmonization,
+  scaling, sample size, and reference compatibility, then compare
+  `bipred.qc.ld_consistency_screen`; passing that approximate screen is not a
+  certificate of correctness.
 - `ldpred3.shrink_ld_blocks` keys its shrinkage on `k / n_ref`, which assumes
   the distortion is finite-panel noise. Against a reference whose correlations
   were thresholded to zero outside a window, the distortion is structural and

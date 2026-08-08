@@ -1,4 +1,4 @@
-stage,m,ldsc_rg,ldsc_rg_se,ldsc_h2_ldl,ldsc_h2_cad,ldsc_intercept,rg,p,warned,h2_ldl,cancellation_ldl,max_abs_beta_ldl,h2_cad,cancellation_cad,max_abs_beta_cad,trace_drift_ldl
+stage,m,ldsc_rg,ldsc_rg_se,ldsc_h2_ldl,ldsc_h2_cad,ldsc_intercept,rg,p,divergence_warned,h2_ldl,cancellation_ldl,max_abs_beta_ldl,h2_cad,cancellation_cad,max_abs_beta_cad,trace_drift_ldl
 harmonised,924254,0.2238,0.0434,0.2308,0.1458,0.02,0.0558,0.000763,1,0.6732,255.16,3.1929,0.1713,91.18,2.3799,1.627
 per-variant QC,887361,0.1973,0.0484,0.1562,0.1309,0.019,0.139,0.001134,1,0.5688,270.98,3.3215,0.0594,4.94,0.0992,1.777
 + LD-consistency screen,845623,0.1851,0.0522,0.1155,0.1205,0.0234,0.2856,0.003025,0,0.0882,0.65,0.0239,0.0706,0.44,0.019,0.923

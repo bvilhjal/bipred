@@ -16,6 +16,10 @@ try:
 except ImportError:                                # pragma: no cover
     HAVE_NUMBA = False
 
+HAVE_JIT_DISPATCHERS = HAVE_NUMBA and all(
+    hasattr(kernel, "targetoptions")
+    for kernel in (_bivar_one_sweep_jit, _bivar_one_sweep_lowrank_jit))
+
 
 def _panel(nb=3, k=40, n_ind=400, seed=0):
     rng = np.random.default_rng(seed)
@@ -50,7 +54,9 @@ def problem():
 KW = dict(n_chains=4, seed=7, num_iter=20, burn_in=10)
 
 
-@pytest.mark.skipif(not HAVE_NUMBA, reason="nogil only applies to the JIT kernels")
+@pytest.mark.skipif(
+    not HAVE_JIT_DISPATCHERS,
+    reason="nogil only applies when Numba JIT dispatchers are active")
 def test_sweep_kernels_release_the_gil():
     """Without nogil, threading the chain driver is a pessimisation."""
     for kernel in (_bivar_one_sweep_jit, _bivar_one_sweep_lowrank_jit):

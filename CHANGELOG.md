@@ -1,28 +1,65 @@
 # Changelog
 
 User-visible changes to **bipred** are recorded here. The project is currently
-`0.3.3`.
+`0.3.4`.
+
+## [0.3.4] - 2026-08-08
+
+This release tightens the contracts exposed by the 0.3.3 real-data review and
+corrects claims that the evidence did not support.
+
+### Fixed
+
+- The LD-consistency screen now dequantizes dense D8 blocks, slices a window
+  before widening it, runs every requested random partition, and validates
+  finite inputs and controls. Dense floats and floating low-rank factors are
+  normalised to the fitter's D32 values. The old dense path could both
+  misclassify D8 LD and allocate a float64 copy of an entire block per window.
+- `implied_sample_size` no longer reports an absolute effective sample size for
+  a quantitative trait. Its phenotype scale is unidentified from `beta`, `se`,
+  and allele frequency alone; calibrating that scale from the reported N made
+  the earlier agreement circular. The binary-trait inversion remains available.
+- `estimate_sample_overlap` now distinguishes an intercept inside the numeric
+  domain of `cross_corr` from a physically possible shared-person inversion.
+  Domain validity does not prove that the intercept is sampling noise. Counts
+  with the wrong sign or larger than the smaller cohort are reported as `nan`,
+  while raw diagnostic quantities remain visible.
+- Dense regional quadratics avoid quadratic temporaries. Contiguous regions use
+  a view; interleaved regions are multiplied in bounded row slabs. Floating
+  low-rank factors are evaluated after the same D32 normalisation as the fit.
+
+### Changed
+
+- `ld_consistency_screen` is the primary name for the lightweight,
+  DENTIST-inspired diagnostic. `dentist` remains a compatibility alias; neither
+  name claims reproduction or calibration of the full published procedure.
+- Benchmark controls now distinguish exact zero shrinkage and genuinely
+  disjoint causal supports, preserve small CSV effects, avoid repeated-block and
+  hot-cache timing artifacts. Core-count speedups use the actual one-core arm;
+  peak RSS is reported only at process scope. The self-contained runner records
+  clean-source provenance, including the exact ldpred3 source identity, and
+  real-data scripts checksum externally sourced inputs whose acquisition record
+  is explicit; historical artifacts retain their own snapshot identity.
+- Real-data conclusions are scoped to three related pairs that all contain a
+  GLGC file. Long-range-LD exclusion is an estimator-specific sensitivity, and
+  external-value agreement is not a convergence diagnostic. Their saved rows
+  predate the always-run partition correction and were not relabelled as a
+  current-screen validation.
 
 ## [0.3.3] - 2026-08-08
 
-A 24-arm factorial over three real trait pairs, settling which summary-statistic
-QC steps are load-bearing. The recommended procedure is now evidence-based
-rather than assembled from convention, and two claims made earlier today are
-withdrawn.
+A 24-arm factorial over three related real-data pairs tested three
+summary-statistic QC choices. The result motivated a narrower diagnostic; it did
+not settle a universal QC procedure.
 
 ### Added
 
-- **`bipred.qc.implied_sample_size`** recovers the effective sample size the
-  summary statistics behave as if they had, by inverting the SD relation. This
-  is not a filter and it was the highest-yield check found: four of five real
-  GWAS matched their reported `n_eff` within 1%, while CARDIoGRAMplusC4D CAD
-  came out at **0.570** -- 162,973 reported against 92,966 implied. Since
-  `n_eff` scales every standardized effect, fitting the reported value
-  understated that trait's h2 by the same factor, 0.0401 to 0.0706. Cross-trait
-  LDSC rescales with it and so does not serve as an independent check. Two causes apply and are
-  indistinguishable from the file: genomic control inflating the standard
-  errors, and the pooled `4/(1/n_case + 1/n_ctrl)` formula, which overstates a
-  meta-analysis of cohorts with differing case/control ratios.
+- **`bipred.qc.implied_sample_size`** introduced an inversion of the SD
+  relation. Its binary-trait use identified a 0.570 ratio for the
+  CARDIoGRAMplusC4D file (162,973 reported against 92,966 implied). The four
+  quantitative-trait matches were not independent checks: their unknown scale
+  had been calibrated from the reported N, forcing agreement. Version 0.3.4
+  makes that unidentified contract explicit.
 - **`bipred.qc.sd_consistency`** -- LDpred2's SD check with both trait types put
   on a common scale. The published form normalises only quantitative traits, on
   the reasoning that a binary trait's effective N fixes the scale; on
@@ -37,38 +74,38 @@ withdrawn.
 
 ### Changed
 
-- **The recommended QC is lenient per-variant thresholds, long-range regions
-  kept, and the LD-consistency screen.** The screen separates the outcome
-  completely -- 12/12 arms diverged without it, 0/12 with it -- while strict
-  thresholds and long-range exclusion each split 6/12 either way. Tightening
-  removed a further 142,282 variants and moved the cancellation ratio the wrong
-  way; excluding the long-range regions changed `rg` by 0.0001.
+- In these 24 arms, the LD-consistency screen separated the warning outcome:
+  12/12 unscreened arms warned and 0/12 screened arms did. Strict thresholds
+  and long-range exclusion did not change the warning count, but long-range
+  exclusion shifted screened `rg` by 0.0001--0.0067 for LDL x CAD, about 0.012
+  for height x LDL, and 0.021--0.023 for HDL x TG.
 - `docs/guide.md`'s QC section is rewritten around that result.
 
 ### Withdrawn
 
 - **"A bivariate fit tolerates less summary-statistic error than a univariate
-  one" was too general.** The failure follows the *file*: both GLGC lipid files
+  one" was too general.** The failure follows the *file*: all three GLGC lipid files
   diverged in every pairing, height and CAD in none, and on height x LDL one
   trait diverged while the other was estimated correctly in the same fit.
 - **"bipred's h2 runs systematically below LDSC" is false.** It is below for
-  LDL and CAD and 57% *above* for height, where 0.415 sits against a published
-  ~0.45 and LDSC's 0.264 looks low. The truncated-LD-score mechanism proposed
+  LDL and CAD and 57% *above* for height, where 0.415 sits against rough
+  external context around 0.45 and LDSC's 0.264 looks low. The
+  truncated-LD-score mechanism proposed
   for it cannot produce both directions.
 
 ### Measured
 
 Reported and corrected: an earlier note claimed the effective-N fix reconciled
 CAD's h2 with LDSC. It does not -- the correction moves both estimates and the
-ratio stays near 0.58. On matched variants and sample sizes, genetic
-correlation agrees to about one LDSC standard error while heritability does
-not.
+ratio stays near 0.58. Across the four screened arms, the joint and LDSC `rg`
+estimates differ by 1.16--1.43 LDSC standard errors for LDL x CAD and
+2.93--4.74 for HDL x TG.
 
-The sharpest single result is HDL x TG, where the four diverged arms give `rg`
--0.57 to -0.65 and the four converged arms -0.52 to -0.55. LDSC says -0.69 and
-the literature -0.5 to -0.6, so the broken fits sit *closer* to both external
-references. No comparison against an outside value distinguishes them; only the
-cancellation ratio does.
+For HDL x TG, all four screened arms fall inside the rough external range of
+-0.5 to -0.6 used by the historical study, while only one of four unscreened
+arms does. That uncited range is context rather than ground truth. External
+agreement alone still cannot establish convergence; fit diagnostics and data
+checks are required.
 
 ## [0.3.2] - 2026-08-08
 
@@ -83,7 +120,8 @@ calibrated against. But the run exposed two further things.
 **Uncorrected sample overlap produces a converged fit with a wrong answer.**
 The cross-trait LDSC intercept is -0.352 here, against +0.02 for the disjoint
 consortia. Fitting with `cross_corr=0` gives `rg` -0.90; supplying the
-intercept gives **-0.52**, against a published -0.5 to -0.6. Neither fit warned,
+intercept gives **-0.52**, against rough external context of -0.5 to -0.6.
+Neither fit warned,
 and neither should have: cancellation was 0.3, the trace was flat, the sampler
 did its job on the inputs it was given. Divergence detection cannot see
 mis-specification, and the two failures need separate treatment.
@@ -98,10 +136,12 @@ mis-specification, and the two failures need separate treatment.
   `N_shared * rho_pheno`, so when its sign disagrees with `pheno_corr` there is
   no solution; `n_shared` and `overlap_frac` are now `nan`, a `RuntimeWarning`
   names the likely cause, and a new `sign_consistent` key lets callers branch.
-  With the real phenotypic correlation supplied (`pheno_corr=-0.45`) the same
-  data identifies 72,454 shared samples, 78% of each study.
-- Documented that `overlap_corr` is the output to pass as `cross_corr`: it
-  needs no assumption about `rho_pheno` and is always defined.
+  Under the overlap-only model, supplying an external sensitivity value
+  (`pheno_corr=-0.45`) gives 72,454 shared samples, 78% of each study. The
+  intercept does not identify that phenotypic correlation.
+- Documented `overlap_corr` as the direct intercept, independent of
+  `rho_pheno`. Version 0.3.4 adds the missing open-interval gate before it can
+  be used as a `cross_corr` sensitivity value.
 
 ## [0.3.1] - 2026-08-08
 
@@ -127,15 +167,17 @@ from the same model cannot produce.
 
 ### Added
 
-- **`bipred.qc`** — `dentist` and `dentist_statistic`, the LD-consistency
-  screen of Chen et al. 2021. Within a window it splits variants at random,
+- **`bipred.qc`** — `dentist` and `dentist_statistic`, a lightweight
+  DENTIST-inspired LD-consistency screen. Within a window it splits variants at
+  random,
   predicts each z-score from the opposite half through the LD, and drops those
   too far from their neighbourhood's prediction. This is the only check that
   can see the failure: frequency, imputation-quality and chi-square filters all
   judge a variant in isolation. It runs against the blocks you will fit with,
   because an inconsistency only means anything relative to the LD the model
-  actually uses. Low-rank blocks are screened through their factor and never
-  densified.
+  actually uses. Among the listed per-variant filters, this is the check that
+  sees neighbourhood disagreement. Low-rank blocks are screened through their
+  factor and never densified.
 - **Divergence detection.** A fit now warns when effects are cancelling through
   LD (`sum(beta^2)` against the genetic variance), when a posterior mean
   exceeds the slab the fit itself inferred, or when the retained genetic
@@ -147,15 +189,15 @@ from the same model cannot produce.
 - **`benchmarks/real_ldl_cad.py`** — an end-to-end real-data benchmark on
   public GWAS (GLGC 2013 LDL, CARDIoGRAMplusC4D 2015 CAD) against a UK Biobank
   HapMap3 LD reference, fitting all three cleaning stages so the contrast is
-  the result. It asserts the final `rg` lands in the published range and that
-  no stage-three fit warns. Not part of `run_all.sh`: it needs about 9 GB of
-  downloads.
+  the result. At that release it asserted the final `rg` landed in an external
+  range; 0.3.4 recasts that range as rough context rather than a pass/fail
+  check. Not part of `run_all.sh`: it needs about 9 GB of downloads.
 
 ### Changed
 
 - `docs/guide.md` gains a *Quality control before fitting real data* section.
-  A bivariate fit tolerates far less summary-statistic error than a univariate
-  one on the same panel; that asymmetry was undocumented and is not intuitive.
+  Its original general claim that bivariate fitting tolerates less error was
+  withdrawn in 0.3.3: the observed failure followed one GLGC file.
 - The divergence warning reports the largest block size when one is large.
   Block size alone is deliberately *not* warned about: the same reference, with
   a 12,169-variant MHC block, fitted cleanly once the summary statistics were
@@ -168,6 +210,8 @@ from the same model cannot produce.
 ### Measured
 
 The same fit at three levels of cleaning, 924,254 variants before filtering:
+
+**Table 1. Historical LDL x CAD analysis by cleaning stage.**
 
 | | harmonised | + per-variant QC | + LD-consistency screen |
 |---|---:|---:|---:|
@@ -182,21 +226,22 @@ The same fit at three levels of cleaning, 924,254 variants before filtering:
 Per-variant filters removed 4.0% and repaired CAD alone (cancellation 91.2 to
 4.9) while leaving LDL untouched (255 to 271) — LDL's problem is not a property
 of any single variant. The LD-consistency screen removed a further 4.7% and
-repaired the fit outright. CAD is fitted at its implied effective sample size
-throughout, which is why its `h2` differs from the figures published for 0.3.0.
+resolved this case's diagnostics. CAD is fitted at its implied effective sample
+size throughout, which is why its `h2` differs from the figures published for
+0.3.0.
 
 ## [0.3.0] - 2026-08-07
 
 Performance and benchmark-evidence release. **The minor version moves because
-two changes are not backward compatible**: the `ld_int8` default now consumes
-dense blocks as given rather than quantising them inside the fit, which changes
+two changes are not backward compatible**: the `ld_int8` default now uses the
+dense D32 representation rather than quantising it inside the fit, which changes
 results for callers who passed float blocks, and the `ldpred3` floor rises to
 `>=0.4.5`. The sampler's estimates are otherwise unchanged except where a defect
-made them wrong. Every benchmark artifact in `benchmarks/` was regenerated for
-this version from a single sweep.
+made them wrong. The self-contained artifact log records one 0.3.0 dirty-tree
+sweep; later real-data sections were added separately.
 
 The `ld_int8` change also retires the package's worst documented failure mode;
-see the environmental-overlap note below and `benchmarks/RESULTS.md` Table 10.
+see the environmental-overlap note below and `benchmarks/RESULTS.md` Table 11.
 
 ### Performance
 
@@ -260,7 +305,7 @@ see the environmental-overlap note below and `benchmarks/RESULTS.md` Table 10.
 
 - **`ld_int8` now defaults to `False`, which also resolves the package's worst
   documented failure mode.** The environmental-overlap stress test
-  (`benchmarks/RESULTS.md` Table 10) recorded joint-fit MAE up to 0.86 under
+  (`benchmarks/RESULTS.md` Table 11) recorded joint-fit MAE up to 0.86 under
   strong shared environment, and that was read as a limit of the model. It was
   not: it was in-fit LD quantization. Re-running the current code with
   `ld_int8=True` reproduces the old row byte for byte (0.1733 / 0.0166 / 0.3101
@@ -295,7 +340,7 @@ see the environmental-overlap note below and `benchmarks/RESULTS.md` Table 10.
 - Documentation corrections: `docs/rg.md` said a degenerate `rg_decorrelated`
   fit raises (it warns and returns NaN); `docs/guide.md` and `docs/rg.md`
   offered "pass the fit's prepared blocks" as a remedy with no public API
-  behind it; `docs/guide.md` Table 2 now marks which options the chains driver
+  behind it; `docs/guide.md` Table 3 now marks which options the chains driver
   accepts, rejects, or renames, documents `sample_every`, and gives the chains
   `seed` contract; `ldsc_rg` documents that it is one-step and unfiltered (no
   chi-square cap, so single large-effect loci keep full leverage) and that
@@ -413,7 +458,7 @@ Review-hardening release: no estimator changes, no public-API changes.
   `RESULTS.md` Table 4, and states the multichain/adaptive-stopping
   incompatibility.
 - The environmental-overlap failure mode (joint-fit MAE up to 0.86 in the 0.2.0
-  stress test, `RESULTS.md` Table 10) is cross-referenced wherever
+  stress test, `RESULTS.md` Table 11) is cross-referenced wherever
   `cross_corr` is documented, with the set-from-external-evidence instruction.
 - `test_public_api.py` asserts the exact 13-name public surface instead of
   non-None resolution.

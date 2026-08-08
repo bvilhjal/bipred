@@ -11,14 +11,18 @@ timing table.
 Two numbers are reported per cell:
 
 ``payload``
-    Bytes the caller's own LD blocks occupy, computed from the arrays. The
-    baseline the fit is measured against.
+    Bytes the caller's own LD blocks occupy, computed from distinct arrays. The
+    synthetic blocks have the same spectrum but never alias one payload: a
+    100,000-variant D32 panel with k=500 therefore occupies about 200 MB, not
+    the 1 MB an accidentally repeated object would report. This is the baseline
+    the fit is measured against.
 ``fit peak``
     ``tracemalloc`` peak *inside* the ``ldpred3_auto_bivariate_blocks`` call,
     which is what the fit adds. Python-level allocation only -- Numba's
     workspaces are native and do not appear -- so read it as the allocation the
-    driver is responsible for, not as process RSS. ``--rss`` adds the process
-    high-water mark for a whole-process figure.
+    driver is responsible for, not as process RSS. ``--rss`` prints one process
+    high-water mark for the entire invocation; it is deliberately not attached
+    to individual rows because ``ru_maxrss`` is cumulative.
 
 Usage::
 
@@ -44,7 +48,12 @@ from benchmarks.sweep_cost import _blocks, _sumstats                 # noqa: E40
 
 
 def _payload_bytes(blocks):
-    """Resident bytes of the caller's LD, counting each distinct array once."""
+    """Resident bytes of the caller's LD, counting each storage owner once."""
+    def owner(array):
+        while isinstance(array.base, np.ndarray):
+            array = array.base
+        return array
+
     seen = {}
     for block, _idx in blocks:
         factor = getattr(block, "U", None)
@@ -53,7 +62,8 @@ def _payload_bytes(blocks):
         else:
             arrays = [np.asarray(factor), np.asarray(block.residual_diag)]
         for array in arrays:
-            seen[id(array.base if array.base is not None else array)] = array.nbytes
+            root = owner(array)
+            seen[id(root)] = root.nbytes
     return sum(seen.values())
 
 
@@ -65,7 +75,7 @@ def _peak_rss_bytes():
     return usage if sys.platform == "darwin" else usage * 1024
 
 
-def _cell(kind, m, k, ld_int8, want_rss):
+def _cell(kind, m, k, ld_int8):
     from bipred import ldpred3_auto_bivariate_blocks
 
     n_eff = 100_000.0
@@ -92,11 +102,10 @@ def _cell(kind, m, k, ld_int8, want_rss):
     _, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
     row = {"representation": label, "m": m, "k": k,
+           "blocks": len(blocks), "block_storage": "distinct",
            "ld_int8": "default" if ld_int8 is None else str(ld_int8),
            "payload_mb": payload / 1e6, "fit_peak_mb": peak / 1e6,
            "fit_peak_bytes_per_variant": peak / m}
-    if want_rss:
-        row["process_peak_rss_mb"] = _peak_rss_bytes() / 1e6
     return row
 
 
@@ -107,7 +116,7 @@ def main(argv=None):
     parser.add_argument("--kinds", nargs="+",
                         default=["dense_f32", "dense_i8", "lr8_0.99"])
     parser.add_argument("--rss", action="store_true",
-                        help="also report the process high-water mark")
+                        help="report one high-water mark for the whole run")
     parser.add_argument("--csv")
     args = parser.parse_args(argv)
 
@@ -119,11 +128,12 @@ def main(argv=None):
     print("-" * len(header))
     for kind in args.kinds:
         for m in args.m:
-            # The default is only interesting where it differs: it quantises
-            # float blocks, and leaves int8 and low-rank ones alone.
+            # The current default consumes D32 as supplied. Explicit True is
+            # retained on float blocks to measure the legacy private D8 copy;
+            # it cannot change an already-D8 or low-rank payload.
             settings = [None] if kind != "dense_f32" else [None, True]
             for ld_int8 in settings:
-                row = _cell(kind, m, args.k, ld_int8, args.rss)
+                row = _cell(kind, m, args.k, ld_int8)
                 rows.append(row)
                 print(f"{row['representation']:22} {row['m']:7d} "
                       f"{row['ld_int8']:>8} {row['payload_mb']:11.2f} "
@@ -131,9 +141,13 @@ def main(argv=None):
                       f"{row['fit_peak_bytes_per_variant']:10.1f}")
         print()
 
+    if args.rss:
+        print(f"whole-process peak RSS: {_peak_rss_bytes() / 1e6:.2f} MB\n")
+
     if args.csv:
         with open(args.csv, "w", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+            writer = csv.DictWriter(handle, fieldnames=list(rows[0]),
+                                    lineterminator="\n")
             writer.writeheader()
             writer.writerows(rows)
         print(f"wrote {args.csv}")

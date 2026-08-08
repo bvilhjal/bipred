@@ -1,48 +1,48 @@
 """Summary-statistic quality control against the LD reference you will fit with.
 
 bipred does not harmonize summary statistics or build LD, and this module does
-not change that. What it adds is the one check that cannot be done without the
-LD: whether a variant's reported effect is *consistent with the variants
+not change that. What it adds is an LD-dependent check: whether a variant's
+reported effect is *consistent with the variants
 correlated with it*. Every filter a user can apply beforehand -- minor allele
 frequency, imputation quality, a chi-square cap, per-variant sample size --
-judges a variant in isolation. None of them can see that a variant disagrees
-with its own neighbourhood, and that disagreement is what makes a bivariate
-Gibbs sampler place large opposing effects on variants in near-perfect LD.
+judges a variant in isolation and therefore cannot see disagreement with its
+neighbourhood. Such disagreement can make a bivariate Gibbs sampler place large
+opposing effects on variants in near-perfect LD.
 
-The check is the one introduced by DENTIST (Chen et al. 2021,
-*Nature Communications* 12:7117). Within a window, split the variants at random
-into two halves and predict each z-score in one half from the other half
-through the LD::
+The LD-consistency screen is inspired by DENTIST (Chen et al. 2021,
+*Nature Communications* 12:7117). It uses DENTIST's central split-half
+statistic: within a window, split the variants at random into two halves and
+predict each z-score in one half from the other half through the LD::
 
     zhat_a = R[a,B] pinv(R[B,B]) z_B
     T_a    = (z_a - zhat_a)^2 / (1 - R[a,B] pinv(R[B,B]) R[B,a])   ~ chi2_1
 
 Variants whose observed z is far from what their neighbours predict are
 dropped, and the split is repeated so each variant is tested from several
-directions.
+directions. This is not a reproduction of the published DENTIST pipeline: its
+window construction, repeated-partition schedule, eigenvalue regularisation,
+and removal policy differ. Published calibration of that full procedure does
+not transfer automatically to this smaller screen.
 
-Running the statistic against the blocks you will fit with is deliberate, not a
-simplification of the published tool. An inconsistency only means anything
-relative to the LD the model will actually use; testing against a third-party
-panel measures a matrix the sampler never sees.
+Running the statistic against the blocks you will fit with is deliberate. Under
+the default fit policy, the screen evaluates the same numeric D8, D32, or
+low-rank representation: other dense floats are first rounded to D32, as in the
+fitter. The legacy in-fit quantisation options create a private D8 copy that the
+screen cannot replay; pre-quantise when exact alignment matters.
 
 Why this is in bipred at all, given the package otherwise refuses to touch
-summary statistics: a bivariate fit tolerates far less LD inconsistency than a
-univariate one. On a real LDL x CAD analysis, ldpred3's univariate sampler
-consumed entirely unfiltered summary statistics without trouble
-(``sum(beta^2)`` 0.22) while the bivariate fit on the identical blocks diverged
-(``sum(beta^2)`` 157.5, posterior means 110 times the slab SD it had itself
-inferred, genetic variance still climbing at the last iteration). Removing the
-41,775 LD-inconsistent variants this module finds -- 4.7% of 887,361 -- moved
-that fit from divergent to converged, with r_g going from +0.12 to +0.28
-against a cross-trait LDSC screen of +0.19.
+summary statistics: one real LDL x CAD analysis exposed LD inconsistency that
+made the bivariate fit diverge while the corresponding univariate fit remained
+stable. That case motivates an explicit pre-fit screen; it does not establish a
+general ordering of bivariate and univariate tolerance.
 
 Typical use, before either :func:`bipred.ldpred3_auto_bivariate_blocks` or a
 univariate fit::
 
-    from bipred.qc import dentist
+    from bipred.qc import ld_consistency_screen
 
-    keep = dentist(blocks, beta_hat1 / se1) & dentist(blocks, beta_hat2 / se2)
+    keep = (ld_consistency_screen(blocks, z1)
+            & ld_consistency_screen(blocks, z2))
     # then subset blocks and both traits to `keep` before fitting
 """
 
@@ -52,13 +52,23 @@ import numpy as np
 
 from ldpred3 import LowRankLD
 
-__all__ = ["dentist", "dentist_statistic", "in_long_range_ld",
+from ._ldpred3_compat import (
+    _Q8,
+    _finite_control,
+    _integer_at_least,
+    _validate_blocks,
+    _validate_boolean_controls,
+    _validate_seed,
+)
+
+__all__ = ["ld_consistency_screen", "dentist", "dentist_statistic",
+           "in_long_range_ld",
            "sd_consistency", "implied_sample_size",
            "LONG_RANGE_LD_HG19", "APOE_HG19"]
 
-#: Variants per window. The split-half uses about half of this a side, so the
-#: pseudo-inverse stays small enough to be cheap while the window still spans
-#: more LD than any realistic correlation reaches.
+#: Variants per window. The split-half uses about half of this a side, which
+#: bounds the pseudo-inverse cost. A count window has no fixed physical width;
+#: use long-range-LD exclusions as a separate sensitivity analysis.
 DEFAULT_WINDOW = 1000
 #: Windows below this are skipped: the split-half has too few variants a side
 #: for the prediction to mean anything.
@@ -68,16 +78,18 @@ MIN_WINDOW = 50
 #: block manufactures an enormous prediction, which would make this test
 #: generate the pathology it exists to detect.
 DEFAULT_EIGENVALUE_FLOOR = 1e-3
-#: chi2_1 at p = 5e-8, DENTIST's own default.
+#: chi2_1 at p = 5e-8. This calibrates the split-half statistic, not the full
+#: screening pipeline; validate the resulting mask for the study at hand.
 DEFAULT_THRESHOLD = 29.72
 DEFAULT_ROUNDS = 4
 
 #: Long-range LD regions, GRCh37/hg19, as ``(chrom, start, end, label)``.
 #:
-#: The 24 regions of Price et al. 2008 (*Am J Hum Genet* 83:132-135), which are
-#: the conventional exclusion list for anything that models LD: inversions and
-#: other segments where correlation extends far beyond the usual few hundred
-#: kilobases, so a block-diagonal or windowed LD approximation is worst there.
+#: The 24 regions of Price et al. 2008 (*Am J Hum Genet* 83:132-135): inversions
+#: and other segments where correlation extends far beyond the usual few hundred
+#: kilobases, so a block-diagonal or windowed LD approximation is weakest there.
+#: Use the mask for estimator-specific sensitivity analysis, not as a universal
+#: exclusion rule.
 #: The MHC is only the most famous of them -- on real LDL x CAD data the full
 #: list removed 6,461 variants against the MHC's 2,159.
 #:
@@ -110,7 +122,7 @@ LONG_RANGE_LD_HG19 = (
     ("12", 109_500_000, 112_000_000, "12q24"),
     ("20", 32_000_000, 34_500_000, "20p11 / 20q11"),
 )
-#: APOE, hg19. Excluded for genome-wide *estimation*; keep it for prediction.
+#: APOE, hg19. Optional sensitivity locus; inclusion depends on the target.
 APOE_HG19 = ("19", 44_912_079, 45_912_079, "APOE")
 
 
@@ -123,24 +135,37 @@ def _window_ld(block, local):
     no more here than any other.
     """
     if isinstance(block, LowRankLD):
-        factor = block.U[local].astype(np.float64) * (block.scale or 1.0)
+        raw_factor = np.asarray(block.U)[local]
+        if raw_factor.dtype == np.int8:
+            factor = raw_factor.astype(np.float64) * block.scale
+        else:
+            # The fitter normalises every floating factor to contiguous D32.
+            # Round only the requested rows before widening, matching that
+            # payload without copying the full factor.
+            factor = (raw_factor.astype(np.float32).astype(np.float64)
+                      * block.scale)
         out = factor @ factor.T
         out[np.diag_indices(len(local))] += np.asarray(
             block.residual_diag, dtype=np.float64)[local]
         return out
-    return np.asarray(block, dtype=np.float64)[np.ix_(local, local)]
+    raw = np.asarray(block)
+    # Slice in the storage dtype before widening.  Casting a whole D32 block
+    # here made every 1,000-variant window allocate a float64 copy of the full
+    # block; on the largest public panels that temporary exceeded a gigabyte.
+    window = raw[np.ix_(local, local)]
+    if raw.dtype == np.int8:
+        # Dense D8 uses ldpred3's round(R * 127) representation.  Treating its
+        # stored integers as correlations makes an otherwise clean panel look
+        # maximally inconsistent.
+        return np.asarray(window, dtype=np.float64) * (1.0 / _Q8)
+    # The default fitter normalises non-D8 dense input to D32 once. Cast the
+    # window through float32 before widening so QC evaluates those same values
+    # without allocating a full-block copy.
+    return np.asarray(window, dtype=np.float32).astype(np.float64)
 
 
-def dentist_statistic(ld, z, predictors, targets, *,
-                      eigenvalue_floor=DEFAULT_EIGENVALUE_FLOOR):
-    """DENTIST ``T`` for ``targets``, predicted from ``predictors``.
-
-    ``ld`` is a dense correlation submatrix, ``z`` the matching z-scores, and
-    the two index arrays are disjoint positions into both. Returns one
-    chi2_1-distributed statistic per target.
-    """
-    ld = np.asarray(ld, dtype=np.float64)
-    z = np.asarray(z, dtype=np.float64)
+def _dentist_statistic(ld, z, predictors, targets, eigenvalue_floor):
+    """Unchecked split-half statistic used inside the screened window loop."""
     within = ld[np.ix_(predictors, predictors)]
     across = ld[np.ix_(targets, predictors)]
     values, vectors = np.linalg.eigh(within)
@@ -155,22 +180,75 @@ def dentist_statistic(ld, z, predictors, targets, *,
     return (z[targets] - predicted) ** 2 / np.clip(1.0 - leverage, 1e-6, None)
 
 
-def dentist(blocks, z, *, rounds=DEFAULT_ROUNDS, window=DEFAULT_WINDOW,
-            threshold=DEFAULT_THRESHOLD,
-            eigenvalue_floor=DEFAULT_EIGENVALUE_FLOOR, seed=0, verbose=False):
-    """Boolean keep-mask over the variants ``blocks`` spans.
+def dentist_statistic(ld, z, predictors, targets, *,
+                      eigenvalue_floor=DEFAULT_EIGENVALUE_FLOOR):
+    """DENTIST-inspired ``T`` for ``targets``, predicted from ``predictors``.
+
+    ``ld`` is a dense correlation submatrix, ``z`` the matching z-scores, and
+    the two index arrays are disjoint positions into both. Under the working
+    Gaussian model and exact LD, each returned statistic is approximately
+    chi2_1. Estimated or quantized LD and eigenvalue truncation change that
+    calibration.
+    """
+    ld = np.asarray(ld, dtype=np.float64)
+    z = np.asarray(z, dtype=np.float64)
+    if ld.ndim != 2 or ld.shape[0] != ld.shape[1] or ld.shape[0] == 0:
+        raise ValueError("ld must be a non-empty square matrix")
+    if z.shape != (ld.shape[0],) or not np.all(np.isfinite(z)):
+        raise ValueError("z must be a matching finite vector")
+    if not np.all(np.isfinite(ld)):
+        raise ValueError("ld must contain only finite values")
+
+    def indices(value, name):
+        value = np.asarray(value)
+        if (value.ndim != 1 or value.size == 0
+                or not np.issubdtype(value.dtype, np.integer)):
+            raise ValueError(f"{name} must be a non-empty integer vector")
+        value = value.astype(np.int64, copy=False)
+        if (np.any((value < 0) | (value >= z.size))
+                or np.unique(value).size != value.size):
+            raise ValueError(f"{name} contains invalid or repeated indices")
+        return value
+
+    predictors = indices(predictors, "predictors")
+    targets = indices(targets, "targets")
+    if np.intersect1d(predictors, targets).size:
+        raise ValueError("predictors and targets must be disjoint")
+    eigenvalue_floor = _finite_control(
+        "eigenvalue_floor", eigenvalue_floor, lower=0.0)
+    if eigenvalue_floor >= 1:
+        raise ValueError("eigenvalue_floor must be < 1")
+    return _dentist_statistic(
+        ld, z, predictors, targets, eigenvalue_floor)
+
+
+def ld_consistency_screen(
+        blocks, z, *, rounds=DEFAULT_ROUNDS, window=DEFAULT_WINDOW,
+        threshold=DEFAULT_THRESHOLD,
+        eigenvalue_floor=DEFAULT_EIGENVALUE_FLOOR, seed=0, verbose=False):
+    """DENTIST-inspired keep-mask over the variants ``blocks`` spans.
+
+    This uses DENTIST's split-half statistic, but it is not the complete
+    published DENTIST procedure. See the module documentation for the scope of
+    the name and the differences that matter for calibration.
 
     Parameters
     ----------
     blocks : list of (R, idx)
         The same blocks you will fit with, indices partitioning ``0..m-1``.
+        D8, D32, and low-rank values match the default fitter; other dense
+        floats are normalised to D32. Legacy in-fit quantisation is not replayed.
     z : array_like (m,)
         Z-scores for one trait, ``beta / se``, in the blocks' variant order.
-        Run this once per trait and intersect the masks.
+        Run this once per trait and intersect the masks. The split-half model
+        assumes broadly comparable per-variant sample sizes within a window;
+        substantial N variation needs study-specific validation or
+        stratification.
     rounds : int
         Passes with fresh random splits. Outliers are removed as they are
         found, so a later pass can see variants that were masked by a bad
-        neighbour in an earlier one. Stops early when a pass drops nothing.
+        neighbour in an earlier one. Every requested pass is run: a split that
+        drops nothing says nothing about a later, independent split.
     window, threshold, eigenvalue_floor, seed
         See the module constants.
 
@@ -180,16 +258,33 @@ def dentist(blocks, z, *, rounds=DEFAULT_ROUNDS, window=DEFAULT_WINDOW,
         ``True`` for variants to keep. Counts per round go to stdout under
         ``verbose``.
     """
-    total = sum(len(idx) for _, idx in blocks)
+    try:
+        blocks = list(blocks)
+        total = sum(len(idx) for _block, idx in blocks)
+    except (TypeError, ValueError):
+        raise ValueError(
+            "blocks must be a sequence of (LD, index) pairs") from None
     z = np.asarray(z, dtype=np.float64)
     if z.shape != (total,):
         raise ValueError(
-            f"z has {z.shape} entries but the blocks span {total} variants")
+            f"z has shape {z.shape}, but the blocks span {total} variants")
     if not np.all(np.isfinite(z)):
         raise ValueError("z contains non-finite values; filter them first")
+    blocks = _validate_blocks(blocks, total)
+    _validate_boolean_controls(verbose=verbose)
+    seed = _validate_seed(seed)
+    rounds = _integer_at_least("rounds", rounds, 1)
+    window = _integer_at_least("window", window, MIN_WINDOW)
+    threshold = _finite_control("threshold", threshold)
+    if threshold <= 0:
+        raise ValueError("threshold must be > 0")
+    eigenvalue_floor = _finite_control(
+        "eigenvalue_floor", eigenvalue_floor, lower=0.0)
+    if eigenvalue_floor >= 1:
+        raise ValueError("eigenvalue_floor must be < 1")
     rng = np.random.default_rng(seed)
     keep = np.ones(total, dtype=bool)
-    for round_no in range(int(rounds)):
+    for round_no in range(rounds):
         dropped = 0
         for block, idx in blocks:
             live = np.where(keep[idx])[0]
@@ -205,33 +300,43 @@ def dentist(blocks, z, *, rounds=DEFAULT_ROUNDS, window=DEFAULT_WINDOW,
                 half = local.size // 2
                 first, second = order[:half], order[half:]
                 for targets, predictors in ((first, second), (second, first)):
-                    stat = dentist_statistic(
-                        ld, zw, predictors, targets,
-                        eigenvalue_floor=eigenvalue_floor)
+                    stat = _dentist_statistic(
+                        ld, zw, predictors, targets, eigenvalue_floor)
                     bad = targets[stat > threshold]
                     if bad.size:
                         keep[idx[local[bad]]] = False
                         dropped += int(bad.size)
         if verbose:
-            print(f"  dentist round {round_no + 1}: dropped {dropped:,}, "
+            print(f"  LD screen round {round_no + 1}: dropped {dropped:,}, "
                   f"{keep.sum():,} remain", flush=True)
-        if dropped == 0:
-            break
     return keep
+
+
+def dentist(blocks, z, *, rounds=DEFAULT_ROUNDS, window=DEFAULT_WINDOW,
+            threshold=DEFAULT_THRESHOLD,
+            eigenvalue_floor=DEFAULT_EIGENVALUE_FLOOR, seed=0, verbose=False):
+    """Compatibility name for :func:`ld_consistency_screen`.
+
+    No warning is emitted: existing pipelines keep working, while new code can
+    use the more accurate name without implying the full published procedure.
+    """
+    return ld_consistency_screen(
+        blocks, z, rounds=rounds, window=window, threshold=threshold,
+        eigenvalue_floor=eigenvalue_floor, seed=seed, verbose=verbose)
 
 
 def in_long_range_ld(chrom, pos, *, include_apoe=True, regions=None):
     """Mask of variants inside a long-range LD region (hg19).
 
-    Exclude these before estimating ``rg`` or ``h2``: they are where a
-    block-diagonal or windowed LD approximation is least accurate, so they
-    contribute the largest discrepancies between the summary statistics and the
-    reference. On real LDL x CAD data the full list removed 6,461 variants,
-    three times what the MHC alone accounted for.
+    These regions are where a block-diagonal or windowed LD approximation is
+    least accurate, so exclusion is a useful sensitivity analysis for
+    genome-wide ``rg`` or ``h2``. It is not a universal repair: in the
+    historical three-pair study, screened estimates moved by amounts ranging
+    from 0.0001 to about 0.023 after exclusion.
 
-    **Do not exclude them when the output is a polygenic score.** APOE is the
-    strongest lipid locus in the genome; dropping it improves a genome-wide
-    variance-component estimate and throws away real predictive signal. Since
+    Exclusion also changes the prediction target. APOE is a strong lipid locus,
+    so dropping it can discard predictive signal even when it stabilises a
+    genome-wide moment. Since
     :class:`~bipred.bivariate.BivariateResult` carries both ``rg`` and
     ``beta1_est``/``beta2_est``, the right answer differs by what you are going
     to use, and the two uses may need two fits.
@@ -253,6 +358,7 @@ def in_long_range_ld(chrom, pos, *, include_apoe=True, regions=None):
     ndarray of bool
         ``True`` where the variant falls inside a listed region.
     """
+    _validate_boolean_controls(include_apoe=include_apoe)
     chrom = np.asarray(chrom).astype(str)
     pos = np.asarray(pos, dtype=np.int64)
     if chrom.shape != pos.shape:
@@ -295,17 +401,17 @@ def sd_consistency(beta, se, n_eff, af, *, binary=False, lower=0.5, upper=0.1,
     """LDpred2's SD check, with both trait types put on a common scale.
 
     Compares the genotype SD implied by ``beta``/``se``/``n_eff`` against the
-    one implied by the reference allele frequency. Catches a wrong sample size,
-    a wrong standard error or a wrong frequency -- combinations that no single
-    threshold can see, because each number is individually plausible and only
-    their product is impossible.
+    one implied by the reference allele frequency. It detects disagreement among
+    those columns, but does not identify which input is wrong. In particular,
+    quantitative-trait phenotype scale and absolute N are confounded unless the
+    scale is supplied externally.
 
-    Keep the published thresholds. Tightening them is measurably worthless: on
-    real LDL x CAD data, ``lower=0.8, upper=0.03`` removed a further 142,282
-    variants and moved the fit's cancellation ratio from 264.8 to 276.1, which
-    is to say it removed a fifth of the genome and made the answer slightly
-    worse. What the check cannot do is detect an inconsistency that is not a
-    property of any single variant; that is :func:`dentist`'s job.
+    The defaults follow the usual LDpred2-style check, but thresholds remain
+    study- and reference-specific. The historical factorial changed warning
+    separation under one UK Biobank reference; it does not identify a universal
+    optimum or validate the current screen semantics. What this check cannot
+    see is neighbourhood-level disagreement; compare
+    :func:`ld_consistency_screen` for that diagnostic.
 
     Apply a MAF filter first. ``sd_ref`` is unstable at low frequency, and the
     normalisation is a quantile of whatever variants survive, so filtering
@@ -316,11 +422,37 @@ def sd_consistency(beta, se, n_eff, af, *, binary=False, lower=0.5, upper=0.1,
     (ndarray of bool, float)
         The keep mask, and the *unnormalised* median of
         ``sd_ss / sd_ref``. That second value is a diagnostic in its own
-        right: ~1.0 means the reported sample size and standard errors are
-        mutually consistent, and a large departure means they are not. See
+        right. For binary or externally standardised traits, a large departure
+        can diagnose inconsistent N/SE scaling. For an otherwise unscaled
+        quantitative trait it is only a relative scale diagnostic; see
         :func:`implied_sample_size`.
     """
+    _validate_boolean_controls(binary=binary, normalise=normalise)
+    beta = np.asarray(beta, dtype=np.float64)
+    se = np.asarray(se, dtype=np.float64)
     af = np.asarray(af, dtype=np.float64)
+    if (beta.ndim != 1 or se.ndim != 1 or af.ndim != 1
+            or beta.size == 0 or se.shape != beta.shape or af.shape != beta.shape):
+        raise ValueError("beta, se and af must be non-empty equal-length vectors")
+    n_eff = np.asarray(n_eff, dtype=np.float64)
+    if n_eff.ndim == 0:
+        n_eff = np.full(beta.shape, float(n_eff))
+    elif n_eff.shape != beta.shape:
+        raise ValueError("n_eff must be a scalar or a vector matching beta")
+    if not np.all(np.isfinite(beta)):
+        raise ValueError("beta contains non-finite values; filter them first")
+    if not np.all(np.isfinite(se)) or np.any(se <= 0):
+        raise ValueError("se must contain finite positive values")
+    if not np.all(np.isfinite(n_eff)) or np.any(n_eff <= 0):
+        raise ValueError("n_eff must contain finite positive values")
+    if not np.all(np.isfinite(af)) or np.any((af < 0) | (af > 1)):
+        raise ValueError("af must contain finite values in [0, 1]")
+    lower = _finite_control("lower", lower)
+    upper = _finite_control("upper", upper)
+    if not 0 < lower <= 1:
+        raise ValueError("lower must be finite and in (0, 1]")
+    if upper < 0:
+        raise ValueError("upper must be finite and non-negative")
     sd_ref = np.sqrt(2.0 * af * (1.0 - af))
     raw = _sd_from_sumstats(beta, se, n_eff, binary=binary, normalise=False)
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -344,13 +476,10 @@ def implied_sample_size(beta, se, af, *, binary=False, reported_n=None):
     one it reports.
 
     This matters because ``n_eff`` enters the model directly through
-    ``ldpred3.standardize_betas``. On four real GWAS the implied and reported
-    values agreed to within 1%. On CARDIoGRAMplusC4D CAD the ratio was 0.570 --
-    reported 162,973 against an implied 92,966 -- and fitting the reported
-    value understated that trait's h2 by the same factor: 0.0401 became 0.0706.
-    Cross-trait LDSC moves with it, since ``n_eff`` scales its estimate too, so
-    the correction does not reconcile the two -- LDSC on the same corrected data
-    gives 0.1205, and bipred's 0.0706 remains 0.59x of it.
+    ``ldpred3.standardize_betas``. For the tested binary CARDIoGRAMplusC4D CAD
+    file the ratio was 0.570: reported 162,973 against an implied 92,966. That
+    comparison is identifiable because the case/control scale fixes ``c``;
+    quantitative-trait comparisons do not provide the same check.
 
     Two causes produce this and cannot be separated from the file alone:
     genomic control inflating the standard errors (``se_dgc`` and similar), and
@@ -360,41 +489,58 @@ def implied_sample_size(beta, se, af, *, binary=False, reported_n=None):
     effective sizes. The implied value absorbs both without needing to know
     which applies.
 
-    For a quantitative trait the phenotype scale is unknown, so only the
-    *ratio* to ``reported_n`` is meaningful; ``c`` is calibrated from the median
-    when ``reported_n`` is given, and the returned median is then reported on
-    that calibrated scale.
+    For a quantitative trait the phenotype scale is unknown. Neither an
+    absolute effective N nor its ratio to ``reported_n`` is identifiable from
+    ``beta``, ``se`` and allele frequency alone: calibrating the unknown scale
+    from ``reported_n`` would force the ratio to one by construction. The
+    function therefore returns ``nan`` for ``median`` and ``ratio``, and
+    ``False`` for ``consistent``, when ``binary=False``. Use externally
+    standardised effects or a trait-specific method when absolute quantitative
+    N is required.
 
     Returns
     -------
     dict
         ``median`` (implied effective N), ``ratio`` (to ``reported_n``, or
-        ``nan``), and ``consistent`` (ratio within 0.9 to 1.1).
+        ``nan``), and ``consistent`` (ratio within 0.9 to 1.1). For a
+        quantitative trait the first two are ``nan`` and the last is ``False``
+        because the absolute scale is unidentified.
     """
+    _validate_boolean_controls(binary=binary)
     beta = np.asarray(beta, dtype=np.float64)
     se = np.asarray(se, dtype=np.float64)
     af = np.asarray(af, dtype=np.float64)
+    if (beta.ndim != 1 or se.ndim != 1 or af.ndim != 1
+            or beta.size == 0 or se.shape != beta.shape or af.shape != beta.shape):
+        raise ValueError("beta, se and af must be non-empty equal-length vectors")
+    if not np.all(np.isfinite(beta)):
+        raise ValueError("beta contains non-finite values; filter them first")
+    if not np.all(np.isfinite(se)) or np.any(se <= 0):
+        raise ValueError("se must contain finite positive values")
+    if not np.all(np.isfinite(af)) or np.any((af <= 0) | (af >= 1)):
+        raise ValueError("af must contain finite values strictly between 0 and 1")
     sd_ref = np.sqrt(2.0 * af * (1.0 - af))
-    usable = (sd_ref > 0) & np.isfinite(se) & (se > 0) & np.isfinite(beta)
-    if not usable.any():
-        raise ValueError("no usable variants: need finite beta, se > 0, 0 < af < 1")
+    usable = np.ones(beta.size, dtype=bool)
+    reported = None
+    if reported_n is not None:
+        reported = np.asarray(reported_n, dtype=np.float64)
+        if reported.ndim == 0:
+            reported = np.full(usable.shape, float(reported))
+        elif reported.shape != usable.shape:
+            raise ValueError(
+                "reported_n must be a scalar or a vector matching beta")
+        if not np.all(np.isfinite(reported)) or np.any(reported <= 0):
+            raise ValueError("reported_n must contain finite positive values")
     beta, se, sd_ref = beta[usable], se[usable], sd_ref[usable]
-    if binary:
-        c = 2.0
-    elif reported_n is not None:
-        n = np.broadcast_to(np.asarray(reported_n, dtype=np.float64),
-                            usable.shape)[usable]
-        c = float(np.median(sd_ref * np.sqrt(n * se ** 2 + beta ** 2)))
-    else:
-        c = 1.0
+    if not binary:
+        return {"median": float("nan"), "ratio": float("nan"),
+                "consistent": False}
+    c = 2.0
     implied = (c ** 2 / sd_ref ** 2 - beta ** 2) / se ** 2
     median = float(np.median(implied))
     ratio = float("nan")
-    if reported_n is not None:
-        reported_median = float(np.median(
-            np.broadcast_to(np.asarray(reported_n, dtype=np.float64),
-                            usable.shape)[usable]))
-        if reported_median > 0:
-            ratio = median / reported_median
+    if reported is not None:
+        reported_median = float(np.median(reported[usable]))
+        ratio = median / reported_median
     return {"median": median, "ratio": ratio,
             "consistent": bool(np.isfinite(ratio) and 0.9 <= ratio <= 1.1)}

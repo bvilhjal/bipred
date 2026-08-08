@@ -25,14 +25,15 @@ chain.
 Per-locus structure comes from :func:`~bipred.regional.regional_rg`, which turns
 a fit into a **regional** genetic correlation. Read its docstring first: it
 documents two biases it does not correct (uncorrected sample overlap inflates
-every region, and regional estimates are shrunk toward the genome-wide value).
+or deflates regional covariance, and regional estimates are shrunk toward the
+genome-wide value).
 
-Before fitting real summary statistics, screen them with
-:func:`~bipred.qc.dentist`, which drops variants whose z-scores are
-inconsistent with their own LD neighbourhood. A bivariate fit tolerates much
-less of that inconsistency than a univariate one does on the same panel, and no
-per-variant filter (frequency, imputation quality, a chi-square cap) can detect
-it.
+Before fitting real summary statistics, perform study-appropriate QC and inspect
+their consistency with the fitted LD reference. The lightweight
+:func:`~bipred.qc.ld_consistency_screen` detects neighbourhood-level
+disagreement that per-variant filters cannot see. It is DENTIST-inspired, not a
+full implementation of the published DENTIST workflow; ``dentist`` remains as a
+compatibility alias.
 
 For a fast, moment-based genetic-correlation estimate (the cross-check on the
 joint fit), :func:`~bipred.ldsc.ldsc_rg` implements cross-trait LD Score
@@ -47,7 +48,7 @@ from ldpred3's ``[fast]`` extra.
 
 import importlib
 
-__version__ = "0.3.3"
+__version__ = "0.3.4"
 
 # public name -> submodule it lives in. No module name may equal one of its own
 # exported names: importing a submodule binds it on this package, and the cache
@@ -62,7 +63,8 @@ _EXPORTS = {
                    "BivariateBasicSplitRHat"],
     "ldsc": ["ldsc_rg", "LDSCRgResult", "estimate_sample_overlap"],
     "regional": ["regional_rg", "RegionalRgResult"],
-    "qc": ["dentist", "dentist_statistic", "in_long_range_ld",
+    "qc": ["ld_consistency_screen", "dentist", "dentist_statistic",
+           "in_long_range_ld",
            "implied_sample_size", "sd_consistency"],
 }
 

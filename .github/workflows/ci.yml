@@ -294,6 +294,8 @@ jobs:
         run: |
           python - <<'PY'
           import glob
+          import posixpath
+          import re
           import tarfile
 
           required = {
@@ -308,6 +310,12 @@ jobs:
           archive, = glob.glob("dist/*.tar.gz")
           with tarfile.open(archive) as tf:
               names = {name.split("/", 1)[1] for name in tf.getnames() if "/" in name}
+              markdown = {
+                  name: tf.extractfile(member).read().decode()
+                  for member in tf.getmembers()
+                  if "/" in member.name
+                  and (name := member.name.split("/", 1)[1]).endswith(".md")
+              }
           missing = required - names
           if missing:
               raise SystemExit(f"sdist is missing: {sorted(missing)}")
@@ -318,6 +326,19 @@ jobs:
               raise SystemExit(
                   f"sdist contains repository-only benchmark material: {unexpected}"
               )
+          broken = []
+          for source, text in markdown.items():
+              for target in re.findall(r"\[[^]]+\]\(([^)]+)\)", text):
+                  target = target.split("#", 1)[0]
+                  if not target or target.startswith(("http://", "https://", "mailto:")):
+                      continue
+                  resolved = posixpath.normpath(
+                      posixpath.join(posixpath.dirname(source), target)
+                  )
+                  if resolved not in names:
+                      broken.append(f"{source} -> {target}")
+          if broken:
+              raise SystemExit(f"broken relative links in sdist docs: {broken}")
           PY
 
       - name: Build a wheel from the sdist

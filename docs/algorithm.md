@@ -6,16 +6,21 @@ API and implementation options.
 
 ## Summary-statistic model
 
-For trait `t`, standardized marginal effects follow the usual LDpred model:
+For trait `t`, standardized marginal effects follow the usual LDpred working
+model. With scalar sample sizes:
 
 **Equation 1. Per-trait summary-statistic model.**
 
 ```text
-beta_hat_t = R beta_t + error_t
+beta_hat_t = R beta_t + epsilon_t
+Cov(epsilon_t) = R / N_t
+Cov(epsilon_1, epsilon_2) = cross_corr R / sqrt(N_1 N_2)
 ```
 
 `R` is the LD correlation matrix and `beta_t` is the vector of joint effects.
-At variant `j`, bipred uses the following two-trait sampling-noise covariance:
+The LD correlation in the sampling noise is why a coordinate's conditional
+variance is `1 / N`, not an assumption that marginal errors are independent.
+At variant `j`, bipred uses the following conditional two-trait covariance:
 
 **Equation 2. Per-variant sampling-noise covariance.**
 
@@ -25,9 +30,9 @@ E_j = [[1 / N_1j,                         cross_corr / sqrt(N_1j N_2j)],
 ```
 
 `cross_corr=0` assumes uncorrelated cross-trait sampling errors. Non-overlapping
-GWAS samples are sufficient, but not necessary, for that condition. The SNPwise
-conditional update uses this two-trait covariance but otherwise makes LDpred's
-diagonal sampling-noise approximation across variants.
+GWAS samples are sufficient, but not necessary, for that condition. Equation 2
+is the per-coordinate conditional covariance implied by Equation 1 for scalar
+N. Supplying SNP-varying N is a working generalization of that likelihood.
 
 The `1 / N` sampler variance is a weak-effect approximation. Cross-trait LDSC is
 a separate estimator: it reconstructs exact signed z scores from
@@ -161,6 +166,7 @@ The four-state prior yields a MiXeR-style decomposition.
 ```text
 pi1             = pi10 + pi11
 pi2             = pi01 + pi11
+frac_shared     = pi11 / min(pi1, pi2)
 rho_beta        = s12 / sqrt(s1 s2)
 rg_from_overlap = rho_beta pi11 / sqrt(pi1 pi2)
 ```

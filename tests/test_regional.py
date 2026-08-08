@@ -1,5 +1,7 @@
 """Regional genetic correlation: exactness, LD-representation agreement, recovery."""
 
+import tracemalloc
+
 import numpy as np
 import pytest
 
@@ -10,7 +12,7 @@ from bipred import (
     ldpred3_auto_bivariate_blocks,
     regional_rg,
 )
-from bipred.regional import _Q8_SCALE
+from bipred.regional import _Q8_SCALE, _dense_quadratics
 
 
 def _ar1(rho, k):
@@ -40,6 +42,44 @@ def test_matches_hand_computed_quadratics():
         assert res.gcov[c] == pytest.approx(q12)
         assert res.gvar2[c] == pytest.approx(q22)
         assert res.rg[c] == pytest.approx(q12 / np.sqrt(q11 * q22))
+
+
+def test_interleaved_region_matches_indexed_submatrix():
+    R = _ar1(0.4, 7)
+    rng = np.random.default_rng(71)
+    x, y = rng.normal(size=7), rng.normal(size=7)
+    sub = np.array([0, 2, 5])
+    got = _dense_quadratics(R, 1.0, sub, x, y)
+    Rs = R[np.ix_(sub, sub)].astype(np.float64)
+    expected = (x[sub] @ Rs @ x[sub], x[sub] @ Rs @ y[sub],
+                y[sub] @ Rs @ y[sub])
+    np.testing.assert_allclose(got, expected, rtol=1e-14, atol=1e-14)
+
+
+def test_interleaved_region_avoids_a_quadratic_gather():
+    k = 2048
+    R = np.eye(k, dtype=np.float32)
+    x = np.linspace(-1.0, 1.0, k)
+    y = x[::-1].copy()
+    sub = np.arange(0, k, 2)
+
+    already_tracing = tracemalloc.is_tracing()
+    if not already_tracing:
+        tracemalloc.start()
+    before, _ = tracemalloc.get_traced_memory()
+    tracemalloc.reset_peak()
+    try:
+        got = _dense_quadratics(R, 1.0, sub, x, y)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        if not already_tracing:
+            tracemalloc.stop()
+
+    expected = (float(x[sub] @ x[sub]), float(x[sub] @ y[sub]),
+                float(y[sub] @ y[sub]))
+    np.testing.assert_allclose(got, expected, rtol=1e-14, atol=1e-14)
+    gathered_bytes = sub.size * sub.size * R.itemsize
+    assert peak - before < gathered_bytes
 
 
 def test_block_diagonal_sum_is_exact_across_blocks():
@@ -74,6 +114,41 @@ def test_int8_blocks_track_float_blocks():
     assert _Q8_SCALE == pytest.approx(1.0 / 127.0)
 
 
+@pytest.mark.parametrize("dtype,scale", [
+    (np.float32, 1.0),
+    (np.int8, _Q8_SCALE),
+])
+def test_dense_quadratics_avoid_a_quadratic_float64_temporary(dtype, scale):
+    # The input is allocated before tracing. A float64 upcast of this submatrix
+    # would peak at twice ``R.nbytes`` for float32 and eight times for int8.
+    # The implementation instead keeps a contiguous-region view and allocates
+    # only O(k) float64 matvec outputs.
+    k = 512
+    if dtype == np.int8:
+        R = np.eye(k, dtype=np.int8) * 127
+    else:
+        R = np.eye(k, dtype=dtype)
+    x = np.linspace(-1.0, 1.0, k)
+    y = x[::-1].copy()
+    sub = np.arange(k)
+
+    already_tracing = tracemalloc.is_tracing()
+    if not already_tracing:
+        tracemalloc.start()
+    before, _ = tracemalloc.get_traced_memory()
+    tracemalloc.reset_peak()
+    try:
+        got = _dense_quadratics(R, scale, sub, x, y)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        if not already_tracing:
+            tracemalloc.stop()
+
+    expected = (float(x @ x), float(x @ y), float(y @ y))
+    np.testing.assert_allclose(got, expected, rtol=1e-14, atol=1e-14)
+    assert peak - before < R.nbytes
+
+
 def test_lowrank_matches_its_dense_equivalent():
     # A LowRankLD factor and the dense matrix it represents must give the same
     # regional quadratics, without the low-rank path densifying anything.
@@ -97,6 +172,55 @@ def test_lowrank_matches_its_dense_equivalent():
     ref = regional_rg(b1, b2, [(dense, np.arange(k))], reg)
     np.testing.assert_allclose(got.rg, ref.rg, rtol=1e-5, atol=1e-6)
     np.testing.assert_allclose(got.gcov, ref.gcov, rtol=1e-5, atol=1e-6)
+
+
+def test_lowrank_float_factor_matches_the_fit_d32_values():
+    rng = np.random.default_rng(82)
+    k, rank = 12, 3
+    factor32 = (rng.normal(size=(k, rank)) * 0.1).astype(np.float32)
+    factor64 = factor32.astype(np.float64) + 1e-10
+    normalized = factor64.astype(np.float32).astype(np.float64)
+    residual = (1.0 - np.einsum(
+        "ij,ij->i", factor64, factor64)).astype(np.float32)
+    lowrank = LowRankLD(
+        U=factor64, m=k, scale=1.0, residual_diag=residual)
+    b1, b2 = rng.normal(size=(2, k))
+    labels = np.repeat([0, 1], k // 2)
+
+    got = regional_rg(
+        b1, b2, [(lowrank, np.arange(k))], labels, clip=False)
+    expected = []
+    for label in (0, 1):
+        sub = np.flatnonzero(labels == label)
+        R = (normalized[sub] @ normalized[sub].T
+             + np.diag(residual[sub].astype(np.float64)))
+        x, y = b1[sub], b2[sub]
+        expected.append((x @ R @ x, x @ R @ y, y @ R @ y))
+    expected = np.asarray(expected)
+    np.testing.assert_allclose(got.gvar1, expected[:, 0], rtol=1e-14)
+    np.testing.assert_allclose(got.gcov, expected[:, 1], rtol=1e-14)
+    np.testing.assert_allclose(got.gvar2, expected[:, 2], rtol=1e-14)
+
+
+def test_lr8_factor_scale_is_applied_twice_in_quadratics():
+    rng = np.random.default_rng(72)
+    k, rank = 40, 5
+    raw = rng.integers(-20, 21, size=(k, rank), dtype=np.int8)
+    scale = 0.003
+    factor = raw.astype(np.float64) * scale
+    residual = np.maximum(1.0 - np.einsum("ij,ij->i", factor, factor), 0.05)
+    lr8 = LowRankLD(U=raw, m=k, scale=scale, residual_diag=residual)
+    R = factor @ factor.T + np.diag(residual)
+    b1, b2 = rng.normal(size=(2, k))
+    labels = np.repeat(np.arange(4), 10)
+
+    compact = regional_rg(b1, b2, [(lr8, np.arange(k))], labels, clip=False)
+    dense = regional_rg(b1, b2, [(R, np.arange(k))], labels, clip=False)
+    # LowRankLD stores the residual diagonal at its compact precision. This
+    # tolerance is far tighter than the once-versus-twice scale distinction.
+    np.testing.assert_allclose(compact.gvar1, dense.gvar1, rtol=1e-6)
+    np.testing.assert_allclose(compact.gcov, dense.gcov, rtol=1e-6)
+    np.testing.assert_allclose(compact.gvar2, dense.gvar2, rtol=1e-6)
 
 
 def test_recovers_heterogeneous_regional_rg():
@@ -213,12 +337,12 @@ def test_clip_flag_exposes_out_of_range_values():
 
 
 def test_default_fit_and_regional_rg_evaluate_the_same_dense_blocks():
-    """The fit consumes dense blocks as given, so passing them here is aligned.
+    """Contiguous D32 and D8 are reused, so passing them here is aligned.
 
     ``ld_int8`` defaulted to auto-quantising float blocks at or below a cutoff,
     which meant the ordinary call pattern -- the same float blocks to both --
     silently evaluated different LD in each, and regional_rg warned about it.
-    The fit now copies nothing, so that call pattern is correct and silent.
+    The fit now reuses these representations, so that pattern is silent.
     """
     import warnings as _w
 
@@ -239,7 +363,7 @@ def test_default_fit_and_regional_rg_evaluate_the_same_dense_blocks():
                     np.repeat(np.arange(nb), k))
     assert caught == [], [str(w.message) for w in caught]
 
-    # The fit holds the caller's own block object, not a converted copy -- which
+    # The fit holds this contiguous D32 block, not a converted copy -- which
     # is both what makes the two calls agree and what keeps the fit from
     # allocating a second genome-scale payload.
     from bipred.bivariate import _prepare_block

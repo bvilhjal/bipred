@@ -11,12 +11,24 @@
 # falls back to the bundled simulator and none of the cached population-LD
 # segments (which are tagged by backend) will hit.
 
-set -u -o pipefail
+set -euo pipefail
 
 PY="${BIPRED_PYTHON:-python}"
 LOG="${1:-benchmarks/run_all.log}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+
+# An artifact cannot identify its source if tracked edits, staged edits or
+# untracked source files are mixed into HEAD. Check before opening the log --
+# the generated artifacts themselves are expected to dirty the tree afterward.
+SOURCE_STATUS="$(git status --porcelain --untracked-files=normal)"
+if [ -n "$SOURCE_STATUS" ]; then
+  echo "refusing benchmark regeneration from a dirty source tree" >&2
+  echo "commit or stash all changes, then rerun; use individual scripts for exploratory work" >&2
+  exit 2
+fi
+SOURCE_REVISION="$(git rev-parse HEAD)"
+LDPRED3_SOURCE="$("$PY" -c 'import json; from benchmarks.real_data_inputs import require_ldpred3_source; print(json.dumps(require_ldpred3_source(), sort_keys=True))')"
 
 export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
 export NUMBA_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
@@ -45,7 +57,9 @@ SCRIPTS=(
   echo "python:   $($PY -c 'import sys; print(sys.executable)')"
   echo "versions: $($PY -c 'import numpy,numba,ldpred3,bipred; print(f"numpy {numpy.__version__} numba {numba.__version__} ldpred3 {ldpred3.__version__} bipred {bipred.__version__}")' 2>/dev/null)"
   echo "backend:  $($PY -c 'import benchmarks.simulate as s; print(s._backend(), s.SIMULATOR_CACHE_TAG)' 2>/dev/null)"
-  echo "revision: $(git rev-parse --short HEAD)$(git diff --quiet || echo ' (dirty)')"
+  echo "revision: $SOURCE_REVISION"
+  echo "source:   clean"
+  echo "ldpred3 source: $LDPRED3_SOURCE"
   echo
 } | tee "$LOG"
 
