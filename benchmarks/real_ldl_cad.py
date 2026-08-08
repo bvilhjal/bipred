@@ -49,7 +49,11 @@ by the LD-consistency screen and three joint fits.
 
 The script refuses a dirty bipred or ldpred3 source tree and writes
 ``real_ldl_cad.provenance.json`` beside the CSV with both clean revisions,
-runtime versions and verified hashes.
+runtime versions and verified hashes. It also writes
+``real_ldl_cad_timing.csv``: a long-form, six-decimal wall-time record for
+input checks, harmonisation, preparation, screening, LD scores, LDSC, each
+joint fit, diagnostics and output. The overall total is the only overlapping
+row; the leaf steps can therefore be added without double counting.
 
 Each of the three cleaning stages is fitted because their contrast is the
 result for this data set: harmonisation alone, per-variant filters, and the
@@ -77,6 +81,7 @@ from ldpred3.ld_repr import LowRankLD, dense_ld, lowrank_ld          # noqa: E40
 from ldpred3.ldsc import ld_scores                                   # noqa: E402
 from bipred import ldpred3_auto_bivariate_blocks, ldsc_rg            # noqa: E402
 from bipred.qc import implied_sample_size, ld_consistency_screen     # noqa: E402
+from benchmarks._benchmark_utils import StepTimings                 # noqa: E402
 from benchmarks.real_data_inputs import (                            # noqa: E402
     require_clean_source, require_ldpred3_source, validate_inputs,
     write_provenance_sidecar,
@@ -105,6 +110,17 @@ BASES = set("ACGT")
 RG_CONTEXT = (0.2, 0.4)
 #: sum(beta^2)/h2 above this is a diverged fit, not an estimate.
 CANCELLATION_LIMIT = 10.0
+
+THREAD_ENV = ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS",
+              "NUMBA_NUM_THREADS", "NUMEXPR_NUM_THREADS")
+
+
+def _timing_path(csv_path, timing_csv=None):
+    """Return an explicit timing path or derive ``<csv stem>_timing.csv``."""
+    if timing_csv is not None:
+        return os.fspath(timing_csv)
+    stem, _ = os.path.splitext(os.fspath(csv_path))
+    return f"{stem}_timing.csv"
 
 
 def read_aligned(path, index, a1_ref, a0_ref, *, rsid_col, a1_col, a2_col,
@@ -232,25 +248,39 @@ def quadratic(blocks, beta):
     return total
 
 
-def fit_stage(name, blocks, bh1, bh2, n1, n2, n_ref, rows):
+def fit_stage(name, blocks, bh1, bh2, n1, n2, n_ref, rows, timings):
     """LDSC estimate plus joint fit for one cleaning stage."""
     m = bh1.size
     print(f"\n=== {name}: {len(blocks)} blocks, {m:,} variants ===", flush=True)
     started = time.perf_counter()
-    screen = ldsc_rg(bh1, bh2, ld_scores(blocks, n_ref=n_ref), n1, n2, m_snps=m)
+    scores = ld_scores(blocks, n_ref=n_ref)
+    score_seconds = timings.add(
+        "fit", name, "ld_scores", time.perf_counter() - started,
+        m=m, n_blocks=len(blocks))
+    started = time.perf_counter()
+    screen = ldsc_rg(bh1, bh2, scores, n1, n2, m_snps=m)
+    ldsc_seconds = timings.add(
+        "fit", name, "ldsc_regression", time.perf_counter() - started,
+        m=m, n_blocks=len(blocks))
+    del scores
     print(f"  LDSC  : rg {screen.rg:+.4f} (se {screen.rg_se:.4f})  "
           f"h2 ({screen.h2[0]:.4f}, {screen.h2[1]:.4f})  "
           f"intercept {screen.gcov_intercept:+.4f}  "
-          f"({time.perf_counter()-started:.0f}s)", flush=True)
+          f"(scores {score_seconds:.3f}s, regression {ldsc_seconds:.3f}s)",
+          flush=True)
     started = time.perf_counter()
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         res = ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, n1, n2,
                                             burn_in=BURN_IN, num_iter=NUM_ITER,
                                             seed=0)
+    fit_seconds = timings.add(
+        "fit", name, "bivariate_fit", time.perf_counter() - started,
+        m=m, n_blocks=len(blocks))
     diverged = [w for w in caught if "diverged" in str(w.message)]
     print(f"  bipred: rg {res.rg:+.4f}  p {res.p:.5f}  "
-          f"({time.perf_counter()-started:.0f}s)")
+          f"({fit_seconds:.3f}s)")
+    started = time.perf_counter()
     row = dict(stage=name, m=m, ldsc_rg=round(float(screen.rg), 4),
                ldsc_rg_se=round(float(screen.rg_se), 4),
                ldsc_h2_ldl=round(float(screen.h2[0]), 4),
@@ -277,23 +307,33 @@ def fit_stage(name, blocks, bh1, bh2, n1, n2, n_ref, rows):
     for w in diverged:
         print(f"    WARNING: {str(w.message)[:200]}...")
     rows.append(row)
+    timings.add("fit", name, "diagnostics", time.perf_counter() - started,
+                m=m, n_blocks=len(blocks))
     return res
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--csv", default=os.path.join(HERE, "real_ldl_cad.csv"))
+    parser.add_argument(
+        "--timing-csv",
+        help="long-form step timings (default: <csv stem>_timing.csv)")
     parser.add_argument("--rounds", type=int, default=4,
                         help="LD-consistency screening passes per trait")
     args = parser.parse_args(argv)
+    timing_csv = _timing_path(args.csv, args.timing_csv)
+    timings = StepTimings(timing_csv)
 
-    source_revision = require_clean_source()
-    dependency_sources = {"ldpred3": require_ldpred3_source()}
-    input_hashes = validate_inputs({
-        "ldref-hm3/ldpred3_ldref_hm3.npz": REF,
-        "sumstats/jointGwasMc_LDL.txt.gz": LDL,
-        "sumstats/cad.add.160614.website.txt": CAD,
-    })
+    with timings.measure("preflight", "bipred", "source_check"):
+        source_revision = require_clean_source()
+    with timings.measure("preflight", "ldpred3", "source_check"):
+        dependency_sources = {"ldpred3": require_ldpred3_source()}
+    with timings.measure("preflight", "inputs", "checksum_validation"):
+        input_hashes = validate_inputs({
+            "ldref-hm3/ldpred3_ldref_hm3.npz": REF,
+            "sumstats/jointGwasMc_LDL.txt.gz": LDL,
+            "sumstats/cad.add.160614.website.txt": CAD,
+        })
 
     started = time.perf_counter()
     blocks, ids, meta = load_ld_blocks(REF, return_metadata=True)
@@ -304,19 +344,29 @@ def main(argv=None):
     chrom = np.asarray(meta["chrom"]).astype(str)
     pos = np.asarray(meta["pos"], dtype=np.int64)
     n_ref = meta["n_ref"]
+    load_seconds = timings.add(
+        "input", "LD reference", "load_and_index",
+        time.perf_counter() - started, m=len(ids), n_blocks=len(blocks))
     print(f"reference: {len(blocks)} blocks, {len(ids):,} variants, "
-          f"n_ref {n_ref:,}  ({time.perf_counter()-started:.0f}s)\n", flush=True)
+          f"n_ref {n_ref:,}  ({load_seconds:.3f}s)\n", flush=True)
 
+    started = time.perf_counter()
     ldl = read_aligned(LDL, index, a1_ref, a0_ref, rsid_col="rsid", a1_col="A1",
                        a2_col="A2", beta_col="beta", se_col="se", n_col="N",
                        freq_col="Freq.A1.1000G.EUR", gz=True,
                        label="LDL (GLGC 2013)")
+    timings.add("input", "LDL", "harmonize", time.perf_counter() - started,
+                m=len(ldl), n_blocks=len(blocks))
+    started = time.perf_counter()
     cad = read_aligned(CAD, index, a1_ref, a0_ref, rsid_col="markername",
                        a1_col="effect_allele", a2_col="noneffect_allele",
                        beta_col="beta", se_col="se_dgc", n_const=CAD_NEFF,
                        freq_col="effect_allele_freq", extra_col="median_info",
                        label=f"CAD (Nikpay 2015, N_eff {CAD_NEFF:,.0f})")
+    timings.add("input", "CAD", "harmonize", time.perf_counter() - started,
+                m=len(cad), n_blocks=len(blocks))
 
+    started = time.perf_counter()
     shared = np.array(sorted(set(ldl) & set(cad)), dtype=np.int64)
 
     def column(source, k):
@@ -327,6 +377,9 @@ def main(argv=None):
     b2, s2, f2 = column(cad, 0), column(cad, 1), column(cad, 3)
     info = column(cad, 4)
     af = ref_af[shared]
+    timings.add("preparation", "shared", "materialize_intersection",
+                time.perf_counter() - started, m=shared.size,
+                n_blocks=len(blocks))
 
     # Calibrate the effective sample size before anything else, because it
     # scales every standardized effect and therefore every h2. CAD's published
@@ -336,14 +389,19 @@ def main(argv=None):
     # sample size the data behaves as if it had: 162,973 reported against
     # 92,966 implied. Fitting the reported value understated CAD's h2 by that
     # factor -- the 0.0401 this benchmark recorded before this stage existed.
+    started = time.perf_counter()
     reported = np.full(shared.size, CAD_NEFF)
     sized = implied_sample_size(b2, s2, af, binary=True, reported_n=reported)
     cad_n = CAD_NEFF * (1.0 if sized["consistent"] else sized["ratio"])
+    timings.add("preparation", "CAD", "sample_size_calibration",
+                time.perf_counter() - started, m=shared.size,
+                n_blocks=len(blocks))
     print(f"\nCAD effective N: reported {CAD_NEFF:,.0f}, implied "
           f"{sized['median']:,.0f} (ratio {sized['ratio']:.3f})"
           f"{'' if sized['consistent'] else '  <- MISSPECIFIED, fitting the implied value'}",
           flush=True)
 
+    started = time.perf_counter()
     print("\nallele-alignment check against the reference's own af "
           "(near +1 aligned, near -1 inverted -- the flip rate cannot tell):")
     for label, freq in (("LDL", f1), ("CAD", f2)):
@@ -363,55 +421,105 @@ def main(argv=None):
         & (np.abs(f1 - af) <= AF_DIFF) & (np.abs(f2 - af) <= AF_DIFF)
         & ~((chrom[shared] == MHC_CHROM) & (pos[shared] >= MHC_START)
             & (pos[shared] <= MHC_END)))
+    timings.add("preparation", "shared", "per_variant_qc",
+                time.perf_counter() - started, m=shared.size,
+                n_blocks=len(blocks))
 
     for name in ("harmonised", "per-variant QC"):
         mask = stages[name]
+        started = time.perf_counter()
         tiled, kept = subset_blocks(blocks, set(shared[mask].tolist()))
         order = {g: i for i, g in enumerate(shared[mask])}
         sel = np.array([order[g] for g in kept])
-        fit_stage(name, tiled,
-                  standardize_betas(b1[mask][sel], s1[mask][sel], n1[mask][sel])[0],
-                  standardize_betas(b2[mask][sel], s2[mask][sel],
-                                    np.full(sel.size, cad_n))[0],
-                  n1[mask][sel], np.full(sel.size, cad_n), n_ref, rows)
+        timings.add("fit", name, "ld_subset_retile",
+                    time.perf_counter() - started, m=kept.size,
+                    n_blocks=len(tiled))
+        started = time.perf_counter()
+        n1_stage = n1[mask][sel]
+        n2_stage = np.full(sel.size, cad_n)
+        bh1 = standardize_betas(
+            b1[mask][sel], s1[mask][sel], n1_stage)[0]
+        bh2 = standardize_betas(
+            b2[mask][sel], s2[mask][sel], n2_stage)[0]
+        timings.add("fit", name, "standardize_effects",
+                    time.perf_counter() - started, m=kept.size,
+                    n_blocks=len(tiled))
+        fit_stage(name, tiled, bh1, bh2, n1_stage, n2_stage, n_ref,
+                  rows, timings)
 
     # Stage 3: the LD-consistency screen, on top of stage 2.
     mask = stages["per-variant QC"]
+    started = time.perf_counter()
     tiled, kept = subset_blocks(blocks, set(shared[mask].tolist()))
     order = {g: i for i, g in enumerate(shared[mask])}
     sel = np.array([order[g] for g in kept])
+    timings.add("screen", "shared", "ld_subset_retile",
+                time.perf_counter() - started, m=kept.size,
+                n_blocks=len(tiled))
     print(f"\n=== LD-consistency screen "
           f"(bipred.qc.ld_consistency_screen, {args.rounds} rounds) ===",
           flush=True)
+    started = time.perf_counter()
     keep1 = ld_consistency_screen(
         tiled, b1[mask][sel] / s1[mask][sel], rounds=args.rounds, verbose=True)
+    timings.add("screen", "LDL", "ld_consistency",
+                time.perf_counter() - started, m=kept.size,
+                n_blocks=len(tiled))
+    started = time.perf_counter()
     keep2 = ld_consistency_screen(
         tiled, b2[mask][sel] / s2[mask][sel], rounds=args.rounds, verbose=True)
+    timings.add("screen", "CAD", "ld_consistency",
+                time.perf_counter() - started, m=kept.size,
+                n_blocks=len(tiled))
     both = keep1 & keep2
     print(f"  LDL dropped {(~keep1).sum():,}  CAD dropped {(~keep2).sum():,}  "
           f"union {(~both).sum():,}  remaining {both.sum():,} "
           f"({100*both.sum()/both.size:.1f}%)", flush=True)
 
+    started = time.perf_counter()
     tiled2, kept2 = subset_blocks(tiled, set(np.where(both)[0].tolist()))
     sel2 = kept2
-    fit_stage("+ LD-consistency screen", tiled2,
-              standardize_betas(b1[mask][sel][sel2], s1[mask][sel][sel2],
-                                n1[mask][sel][sel2])[0],
-              standardize_betas(b2[mask][sel][sel2], s2[mask][sel][sel2],
-                                np.full(sel2.size, cad_n))[0],
-              n1[mask][sel][sel2], np.full(sel2.size, cad_n), n_ref, rows)
+    screen_name = "+ LD-consistency screen"
+    timings.add("fit", screen_name, "ld_subset_retile",
+                time.perf_counter() - started, m=kept2.size,
+                n_blocks=len(tiled2))
+    started = time.perf_counter()
+    n1_stage = n1[mask][sel][sel2]
+    n2_stage = np.full(sel2.size, cad_n)
+    bh1 = standardize_betas(
+        b1[mask][sel][sel2], s1[mask][sel][sel2], n1_stage)[0]
+    bh2 = standardize_betas(
+        b2[mask][sel][sel2], s2[mask][sel][sel2], n2_stage)[0]
+    timings.add("fit", screen_name, "standardize_effects",
+                time.perf_counter() - started, m=kept2.size,
+                n_blocks=len(tiled2))
+    fit_stage(screen_name, tiled2, bh1, bh2, n1_stage, n2_stage, n_ref,
+              rows, timings)
 
+    started = time.perf_counter()
     with open(args.csv, "w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0]),
                                 lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
+    timings.add("output", "results", "write_csv",
+                time.perf_counter() - started, m=len(rows))
+
+    started = time.perf_counter()
     sidecar = write_provenance_sidecar(
         args.csv, source_revision=source_revision, input_hashes=input_hashes,
         dependency_sources=dependency_sources,
-        run_controls={"rounds": args.rounds})
-    print(f"\nwrote {args.csv} and {sidecar}")
+        run_controls={
+            "cpu_count": os.cpu_count(),
+            "rounds": args.rounds,
+            "thread_environment": {name: os.environ.get(name)
+                                   for name in THREAD_ENV},
+            "timing_csv": os.path.basename(timing_csv),
+        })
+    timings.add("output", "provenance", "write_json",
+                time.perf_counter() - started)
 
+    started = time.perf_counter()
     final = rows[-1]
     print("\n--- diagnostic checks on the final stage ---")
     print(f"  [context] rg {final['rg']:+.4f}; rough external range "
@@ -426,9 +534,13 @@ def main(argv=None):
     failures = [text for text, ok in checks if not ok]
     for text, ok in checks:
         print(f"  [{'ok' if ok else 'FAIL'}] {text}")
+    timings.add("output", "results", "regression_checks",
+                time.perf_counter() - started, m=final["m"])
+    total_seconds = timings.total()
+    print(f"\nwrote {args.csv}, {timing_csv}, and {sidecar}")
+    print(f"total {total_seconds:.3f}s")
     if failures:
         raise SystemExit(f"{len(failures)} regression check(s) failed")
-    print(f"\ntotal {time.perf_counter()-started:.0f}s")
     return 0
 
 

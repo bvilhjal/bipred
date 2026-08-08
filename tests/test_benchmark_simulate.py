@@ -105,6 +105,30 @@ assert simulate.SIMULATOR_CACHE_TAG == simulate._BACKEND_TAGS[simulate._backend(
     subprocess.run([sys.executable, "-c", code], check=True)
 
 
+def test_step_timings_persist_ordered_leaf_and_total_rows(tmp_path):
+    import csv
+
+    from benchmarks._benchmark_utils import StepTimings, TIMING_FIELDS
+
+    ticks = iter([0.0, 1.0, 3.5, 6.0])
+    path = tmp_path / "timing.csv"
+    timings = StepTimings(path, clock=lambda: next(ticks))
+    with timings.measure("input", "LDL", "harmonize", m=12, n_blocks=2):
+        pass
+    assert timings.total() == 6.0
+
+    rows = list(csv.DictReader(path.open()))
+    assert tuple(rows[0]) == TIMING_FIELDS
+    assert [(row["section"], row["label"], row["step"]) for row in rows] == [
+        ("input", "LDL", "harmonize"),
+        ("run", "all", "total"),
+    ]
+    assert rows[0]["m"] == "12" and rows[0]["n_blocks"] == "2"
+    assert rows[0]["seconds"] == "2.500000"
+    assert rows[1]["m"] == rows[1]["n_blocks"] == ""
+    assert rows[1]["seconds"] == "6.000000"
+
+
 def test_bivariate_demo_controls_are_literal_and_recorded(tmp_path):
     """No-shrinkage and disjoint mean those things, not rounded facsimiles."""
     import csv
@@ -752,3 +776,54 @@ def test_results_real_data_table_matches_its_csv():
     assert all(r["divergence_warned"] == "1" for r in rows[:-1]), (
         "earlier historical stages should trigger the divergence warning")
     assert float(rows[-1]["cancellation_ldl"]) < 10.0
+
+
+def test_real_data_timing_artifact_covers_each_leaf_step():
+    import csv
+    import pathlib
+
+    import pytest
+
+    from benchmarks._benchmark_utils import TIMING_FIELDS
+
+    path = (pathlib.Path(__file__).resolve().parent.parent
+            / "benchmarks" / "real_ldl_cad_timing.csv")
+    if not path.exists():
+        pytest.skip("real LDL-CAD timing artifact not generated on this host")
+    rows = list(csv.DictReader(path.open()))
+    assert rows and tuple(rows[0]) == TIMING_FIELDS
+
+    keys = {(row["section"], row["label"], row["step"]) for row in rows}
+    expected = {
+        ("preflight", "bipred", "source_check"),
+        ("preflight", "ldpred3", "source_check"),
+        ("preflight", "inputs", "checksum_validation"),
+        ("input", "LD reference", "load_and_index"),
+        ("input", "LDL", "harmonize"),
+        ("input", "CAD", "harmonize"),
+        ("preparation", "shared", "materialize_intersection"),
+        ("preparation", "CAD", "sample_size_calibration"),
+        ("preparation", "shared", "per_variant_qc"),
+        ("screen", "shared", "ld_subset_retile"),
+        ("screen", "LDL", "ld_consistency"),
+        ("screen", "CAD", "ld_consistency"),
+        ("output", "results", "write_csv"),
+        ("output", "provenance", "write_json"),
+        ("output", "results", "regression_checks"),
+        ("run", "all", "total"),
+    }
+    stage_steps = {
+        "ld_subset_retile", "standardize_effects", "ld_scores",
+        "ldsc_regression", "bivariate_fit", "diagnostics",
+    }
+    stages = {"harmonised", "per-variant QC", "+ LD-consistency screen"}
+    expected |= {("fit", stage, step)
+                 for stage in stages for step in stage_steps}
+    assert keys == expected
+    assert len(rows) == len(keys)
+
+    seconds = np.array([float(row["seconds"]) for row in rows])
+    assert np.all(np.isfinite(seconds)) and np.all(seconds >= 0)
+    total = float(next(row["seconds"] for row in rows
+                       if row["section"] == "run"))
+    assert all(total >= value for value in seconds)

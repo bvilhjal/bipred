@@ -2,8 +2,67 @@
 
 from __future__ import annotations
 
+import csv
+import math
 import os
 import sys
+import time
+from contextlib import contextmanager
+
+
+TIMING_FIELDS = ("section", "label", "step", "m", "n_blocks", "seconds")
+
+
+class StepTimings:
+    """Persist non-overlapping benchmark leaf timings as they complete.
+
+    ``total()`` is the sole inclusive row. Writing after every completed step
+    preserves useful evidence if a long external-data run later fails.
+    """
+
+    def __init__(self, path, *, clock=None):
+        self.path = os.fspath(path)
+        self._clock = time.perf_counter if clock is None else clock
+        self._run_started = self._clock()
+        self.rows = []
+
+    @contextmanager
+    def measure(self, section, label, step, *, m=None, n_blocks=None):
+        """Measure one successful leaf step and append it to ``path``."""
+        started = self._clock()
+        yield
+        self.add(section, label, step, self._clock() - started,
+                 m=m, n_blocks=n_blocks)
+
+    def add(self, section, label, step, seconds, *, m=None, n_blocks=None):
+        """Append one already measured step and flush the long-form CSV."""
+        seconds = float(seconds)
+        if not math.isfinite(seconds) or seconds < 0:
+            raise ValueError("timing seconds must be finite and nonnegative")
+        self.rows.append({
+            "section": str(section),
+            "label": str(label),
+            "step": str(step),
+            "m": "" if m is None else int(m),
+            "n_blocks": "" if n_blocks is None else int(n_blocks),
+            "seconds": f"{seconds:.6f}",
+        })
+        self.write()
+        return seconds
+
+    def total(self):
+        """Append the one inclusive row and return its duration."""
+        return self.add("run", "all", "total",
+                        self._clock() - self._run_started)
+
+    def write(self):
+        directory = os.path.dirname(os.path.abspath(self.path))
+        os.makedirs(directory, exist_ok=True)
+        with open(self.path, "w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=TIMING_FIELDS,
+                                    lineterminator="\n")
+            writer.writeheader()
+            writer.writerows(self.rows)
 
 
 def peak_rss_bytes() -> int:

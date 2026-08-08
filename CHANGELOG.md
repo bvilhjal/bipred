@@ -1,7 +1,17 @@
 # Changelog
 
 User-visible changes to **bipred** are recorded here. The project is currently
-`0.3.4`.
+`0.3.5`.
+
+## [0.3.5] - 2026-08-08
+
+### Added
+
+- The LDL-CAD real-data benchmark now persists six-decimal wall times for
+  source and input checks, reference loading, harmonisation, preparation,
+  LD-consistency screening, LD scores, LDSC, each bivariate fit, diagnostics,
+  output, and the inclusive end-to-end total. The timing artifact records the
+  same clean source, inputs, thread controls, and environment as the result.
 
 ## [0.3.4] - 2026-08-08
 

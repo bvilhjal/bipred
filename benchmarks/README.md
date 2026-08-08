@@ -98,7 +98,7 @@ alibi.
 | `fit_memory.py` | Caller LD payload and Python allocation added by a fit, again with distinct block payloads (→ `fit_memory.csv`) | — |
 | `bivariate_demo.py` | Bivariate prediction gain for a weak trait across two-trait architectures, pairing true zero- and 5%-shrinkage references and a disjoint-causal control (needs `ld_library.npz` from `make_ld_library.py`; → `bivariate_demo.csv`) | — |
 | `qc_factorial.py` | **QC sensitivity**: 2x2x2 over strict thresholds, long-range LD exclusion and the LD-consistency screen, on three real trait pairs; records bipred and LDSC on identical variants and uses each arm's raw in-range LDSC intercept as a `cross_corr` sensitivity value (→ `qc_factorial.csv`). This assumes the whole intercept is correlated sampling noise; confounding may also contribute. ~75 min, same inputs as `real_ldl_cad.py` plus GLGC HDL/TG and GIANT height | — |
-| `real_ldl_cad.py` | **Real GWAS**: LDL x CAD on a UK Biobank HapMap3 LD reference, fitted at three cleaning stages; checks numerical diagnostics and the divergence warning, with external estimates used only as rough context (→ `real_ldl_cad.csv`). Needs ~9 GB of downloads, see its docstring | — |
+| `real_ldl_cad.py` | **Real GWAS**: LDL x CAD on a UK Biobank HapMap3 LD reference, fitted at three cleaning stages; checks numerical diagnostics and the divergence warning, with external estimates used only as rough context (→ `real_ldl_cad.csv` and step-level `real_ldl_cad_timing.csv`). Needs ~9 GB of downloads, see its docstring | — |
 | `rg_env_overlap.py` | Individual-genotype stress test under **environmental** correlation on shared samples; records paired MAE and failures after the `|r_g| <= 1.5` diagnostic window (→ `rg_env_overlap.csv`) | opt |
 | `hapnest/run_bivariate.py` | rg / h² / MiXeR-overlap recovery **and** out-of-sample PRS gain (bivariate vs univariate) on **HAPNEST** genotypes+phenotypes — synthetic genomes resampled from a real 1000G+HGDP reference, so real LD/MAF/structure with known truth (→ `hapnest/run_bivariate.csv`). See [`hapnest/README.md`](hapnest/README.md). | — (needs HAPNEST) |
 
@@ -135,7 +135,7 @@ manually:
 |---|---:|---|
 | `bivariate_demo` | 60 | locally generated `ld_library.npz` |
 | `qc_factorial` | 24 | public real-GWAS inputs; about 75 minutes |
-| `real_ldl_cad` | 3 | public real-GWAS inputs; about 25 minutes |
+| `real_ldl_cad` | 3 + 34 timing rows | public real-GWAS inputs; about 25 minutes |
 
 **Table 4. Acquisition record for the six checksummed real-data inputs.**
 
@@ -192,8 +192,13 @@ revision, Python/platform and package versions, observed input hashes, and the
 loaded ldpred3 source identity. A Git checkout must be clean and at the tested
 revision; a non-VCS installation is pinned by a complete package-tree hash and,
 when available, its PEP 610 commit. The real LDL/CAD sidecar also records its
-command-line screening-round count. The committed real-data CSVs predate this
-contract and have no sidecars; none were invented after the fact.
+command-line screening-round count, CPU count, thread environment, and timing
+artifact name. Its long-form timing rows separate reference loading, GWAS
+harmonisation, preparation, both LD-consistency screens, LD scores, LDSC,
+bivariate fitting, diagnostics, and output. Only the final total overlaps the
+leaf rows; no machine-dependent pass/fail threshold is imposed. The committed
+real-data CSVs predate this contract and have no sidecars; none were invented
+after the fact.
 
 The `bivariate_demo.csv` rows retain full precision, causal-set overlap and the
 realized LD-aware genetic correlation, as well as the reference shrinkage
