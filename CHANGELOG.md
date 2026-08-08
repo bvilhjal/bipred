@@ -1,7 +1,40 @@
 # Changelog
 
 User-visible changes to **bipred** are recorded here. The project is currently
-`0.3.1`.
+`0.3.2`.
+
+## [0.3.2] - 2026-08-08
+
+A second real trait pair, chosen to test what LDL x CAD could not: GLGC HDL x
+TG, where the genetic correlation is strongly *negative* and the two GWAS share
+their individuals rather than being disjoint.
+
+Both new checks held up. The sign came back negative throughout, and the
+divergence guard fired on the harmonisation-only stage of a pair it was not
+calibrated against. But the run exposed two further things.
+
+**Uncorrected sample overlap produces a converged fit with a wrong answer.**
+The cross-trait LDSC intercept is -0.352 here, against +0.02 for the disjoint
+consortia. Fitting with `cross_corr=0` gives `rg` -0.90; supplying the
+intercept gives **-0.52**, against a published -0.5 to -0.6. Neither fit warned,
+and neither should have: cancellation was 0.3, the trace was flat, the sampler
+did its job on the inputs it was given. Divergence detection cannot see
+mis-specification, and the two failures need separate treatment.
+
+### Fixed
+
+- **`estimate_sample_overlap` reported "no overlap" for negatively correlated
+  traits.** It clipped a negative shared-sample inversion to `0.0`, so HDL x
+  TG — two lipids measured in the *same people* — came back with `n_shared`
+  0.0 and `overlap_frac` 0.0. That reads as a finding rather than as an
+  unidentified quantity. The intercept identifies only the product
+  `N_shared * rho_pheno`, so when its sign disagrees with `pheno_corr` there is
+  no solution; `n_shared` and `overlap_frac` are now `nan`, a `RuntimeWarning`
+  names the likely cause, and a new `sign_consistent` key lets callers branch.
+  With the real phenotypic correlation supplied (`pheno_corr=-0.45`) the same
+  data identifies 72,454 shared samples, 78% of each study.
+- Documented that `overlap_corr` is the output to pass as `cross_corr`: it
+  needs no assumption about `rho_pheno` and is always defined.
 
 ## [0.3.1] - 2026-08-08
 

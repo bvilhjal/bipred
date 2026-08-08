@@ -22,6 +22,7 @@ squares / regression-weight helpers (``_wls`` / ``_weights``) are imported from
 from __future__ import annotations
 
 from dataclasses import dataclass
+import warnings
 
 import numpy as np
 
@@ -325,11 +326,34 @@ def estimate_sample_overlap(rg_result, n_eff1, n_eff2, pheno_corr=1.0):
     shared-person identity for case-control effective sizes, meta-analyses, or
     SNP-varying sample sizes.
 
+    **The output you most likely want is ``overlap_corr``**, which is the
+    intercept itself and is exactly the quantity to pass as ``cross_corr`` to
+    the joint fit. It is always defined, needs no assumption about
+    ``ρ_pheno``, and it matters: on GLGC HDL x TG — the same individuals
+    measured for both lipids — the intercept is −0.352, and fitting with
+    ``cross_corr=0`` gave ``rg`` −0.90 against −0.52 with the correction, where
+    the published value is −0.5 to −0.6. Neither fit warned; an uncorrected
+    overlap produces a perfectly converged fit with a badly inflated answer.
+
+    ``N_shared`` is a different and much weaker claim, because the intercept
+    only identifies the *product* ``N_shared * ρ_pheno``. Splitting it needs
+    ``ρ_pheno`` supplied from outside, and the default of 1.0 is a placeholder
+    rather than a sensible guess for a negatively correlated pair.
+
     The returned ``effective_overlap`` is the signed quantity
     ``N_shared * ρ_pheno`` under the overlap-only assumption. If the correlation
     is unknown but nonnegative, using ``pheno_corr=1.0`` gives a lower bound on
     ``N_shared`` (not an upper bound), provided the intercept really is entirely
     due to overlap.
+
+    When the intercept's sign disagrees with ``pheno_corr`` the inversion has no
+    solution: a shared-sample count cannot be negative. That is a statement
+    about ``ρ_pheno``, not about the overlap — most often the traits are
+    negatively correlated and the default ``pheno_corr=1.0`` has the wrong sign.
+    ``n_shared`` and ``overlap_frac`` are then ``nan`` and a warning is raised,
+    because reporting zero would assert *no overlap* for data that may share
+    every individual. Earlier versions returned ``0.0`` here, which read as a
+    finding rather than as an unidentified quantity.
 
     Parameters
     ----------
@@ -343,11 +367,13 @@ def estimate_sample_overlap(rg_result, n_eff1, n_eff2, pheno_corr=1.0):
     Returns
     -------
     dict
-        ``overlap_corr`` (the cross-trait intercept, retained for compatibility),
-        ``effective_overlap`` (the signed intercept times ``sqrt(N1 N2)``),
-        ``n_shared_raw`` (the overlap-only inversion), ``n_shared`` (the same
-        estimate clipped at zero), and ``overlap_frac`` (``n_shared`` as a
-        fraction of ``min(N1, N2)``).
+        ``overlap_corr`` (the cross-trait intercept; pass this as
+        ``cross_corr``), ``effective_overlap`` (the signed intercept times
+        ``sqrt(N1 N2)``), ``n_shared_raw`` (the overlap-only inversion, which
+        may be negative), ``n_shared`` (that estimate, or ``nan`` when the sign
+        makes it unidentified), ``overlap_frac`` (``n_shared`` over
+        ``min(N1, N2)``, or ``nan``), and ``sign_consistent`` (whether the
+        intercept and ``pheno_corr`` agree in sign).
 
     Notes
     -----
@@ -369,9 +395,30 @@ def estimate_sample_overlap(rg_result, n_eff1, n_eff2, pheno_corr=1.0):
         "rg_result.gcov_intercept", rg_result.gcov_intercept)
     effective_overlap = overlap_corr * float(np.sqrt(n1) * np.sqrt(n2))
     n_shared_raw = effective_overlap / rho
-    n_shared = max(0.0, n_shared_raw)
+    sign_consistent = n_shared_raw >= 0.0
+    if sign_consistent:
+        n_shared = n_shared_raw
+        overlap_frac = n_shared / min(n1, n2)
+    else:
+        # No solution: a shared-sample count cannot be negative. Reporting 0
+        # here would claim "no overlap" for a pair that may share every
+        # individual -- which is what happened on GLGC HDL x TG, an intercept
+        # of -0.352 between two lipids measured in the same people.
+        n_shared = overlap_frac = float("nan")
+        warnings.warn(
+            f"Cross-trait intercept {overlap_corr:+.4f} has the opposite sign "
+            f"to pheno_corr {rho:+.4g}, so N_shared is not identified and is "
+            "reported as nan rather than zero. The usual cause is a negatively "
+            "correlated trait pair left on the default pheno_corr=1.0; supply "
+            "the phenotypic correlation among the shared samples to invert it. "
+            "Use overlap_corr as cross_corr regardless -- it needs no "
+            "assumption about pheno_corr.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     return {"overlap_corr": overlap_corr,
             "effective_overlap": effective_overlap,
             "n_shared_raw": n_shared_raw,
             "n_shared": n_shared,
-            "overlap_frac": n_shared / min(n1, n2)}
+            "overlap_frac": overlap_frac,
+            "sign_consistent": sign_consistent}

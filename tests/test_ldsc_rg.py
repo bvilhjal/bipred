@@ -7,6 +7,8 @@ from ldpred3. The golden value pins the iterated cross-trait LDSC variance
 weight, including the ``E[z1*z2] ** 2`` term used by reference LDSC.
 """
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -91,11 +93,39 @@ def test_estimate_sample_overlap_inversion():
     # overlap-only lower bound, not an upper bound.
     lower = estimate_sample_overlap(res, n1, n2)
     assert lower["n_shared"] == pytest.approx(rho_ph * 30000.0)
-    # non-positive intercept -> clipped to no overlap; pheno_corr=0 is rejected.
-    z = estimate_sample_overlap(LDSCRgResult(0, 0, 0, -0.01, (0.5, 0.5)), n1, n2)
-    assert z["n_shared"] == 0.0
+    assert out["sign_consistent"] is True
     with pytest.raises(ValueError):
         estimate_sample_overlap(res, n1, n2, pheno_corr=0.0)
+
+
+def test_sign_mismatch_is_unidentified_rather_than_zero_overlap():
+    """A negative intercept under the default pheno_corr is not "no overlap".
+
+    Measured on GLGC HDL x TG, two lipids assayed in the *same* individuals:
+    the intercept is -0.352 and the default pheno_corr=1.0 inverted it to a
+    negative count, which the old clip reported as ``n_shared`` 0.0 and
+    ``overlap_frac`` 0.0. Read literally that says the studies share nobody,
+    for a pair that shares everybody. The quantity is unidentified because the
+    phenotypic correlation is negative, so it is nan now, and the intercept --
+    the thing you actually pass as ``cross_corr`` -- is reported regardless.
+    """
+    n1 = n2 = 90000.0
+    res = LDSCRgResult(rg=-0.7, rg_se=0.04, gcov=-0.1, gcov_intercept=-0.3521,
+                       h2=(0.14, 0.12))
+    with pytest.warns(RuntimeWarning, match="opposite sign"):
+        out = estimate_sample_overlap(res, n1, n2)
+    assert out["sign_consistent"] is False
+    assert np.isnan(out["n_shared"]) and np.isnan(out["overlap_frac"])
+    assert out["n_shared_raw"] < 0                      # kept, for diagnosis
+    assert out["overlap_corr"] == pytest.approx(-0.3521)
+
+    # Supplying the real (negative) phenotypic correlation identifies it again.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        fixed = estimate_sample_overlap(res, n1, n2, pheno_corr=-0.45)
+    assert fixed["sign_consistent"] is True
+    assert fixed["n_shared"] > 0
+    assert 0.0 < fixed["overlap_frac"] <= 1.0
 
 
 @pytest.mark.parametrize("name,bad", [

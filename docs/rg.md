@@ -125,11 +125,29 @@ rgr = ldsc_rg(beta_hat1, beta_hat2, ld_scores, n1_scalar, n2_scalar)
 estimate_sample_overlap(rgr, n1_scalar, n2_scalar, pheno_corr=0.4)
 ```
 
-This inversion requires a non-zero assumed phenotypic correlation. The intercept
-can also contain population structure, measurement effects, and other
-confounding, so it does not identify overlap by itself. Under an overlap-only
-model with nonnegative phenotypic correlation, `pheno_corr=1` yields the minimum
-shared-sample count compatible with `0 < rho_pheno <= 1`, not an upper bound.
+**Use the returned `overlap_corr` as `cross_corr`.** It is the intercept
+itself, needs no assumption about the phenotypic correlation, and on real data
+it is not a small correction. GLGC measured HDL and triglycerides in the same
+individuals; the intercept there is **-0.352**, and the joint fit gives `rg`
+-0.90 with `cross_corr=0` against **-0.52** with the correction, where the
+published value is -0.5 to -0.6. Neither fit warned — uncorrected overlap
+produces a fully converged fit with a badly inflated answer, which is a
+different failure from a diverged one and is not detectable from inside the fit.
+
+The shared-*count* is a weaker claim, because the intercept identifies only the
+product `N_shared * rho_pheno`. Splitting it needs `rho_pheno` from outside,
+and the default `pheno_corr=1.0` is a placeholder, not a guess: for a
+negatively correlated pair it has the wrong sign, the inversion has no
+solution, and `n_shared` comes back `nan` with a warning rather than `0.0`.
+Supplying the real value identifies it — HDL x TG at `pheno_corr=-0.45` gives
+72,454 shared samples, 78% of each study, instead of the "no overlap" that a
+clipped zero used to imply.
+
+The intercept can also contain population structure, measurement effects, and
+other confounding, so it does not identify overlap by itself. Under an
+overlap-only model with nonnegative phenotypic correlation, `pheno_corr=1`
+yields the minimum shared-sample count compatible with `0 < rho_pheno <= 1`,
+not an upper bound.
 
 Environmental correlation among shared samples belongs in `cross_corr`, not in
 genetic covariance. Small-panel intercepts are noisy; use them as diagnostics,
