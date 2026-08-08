@@ -468,8 +468,18 @@ def test_run_all_refuses_an_untracked_source_file(tmp_path):
          "commit.gpgsign=false", "commit", "-qm", "fixture"],
         cwd=repo, check=True)
     (repo / "untracked.py").write_text("# changes the source tree\n")
+    bash = shutil.which("bash")
+    if sys.platform == "win32":
+        # A bare ``bash`` resolves to Windows' WSL launcher on hosted runners;
+        # no distribution is installed, so the script never starts. Git Bash
+        # is installed alongside the git.exe already used by this fixture.
+        git_executable = shutil.which("git")
+        assert git_executable is not None
+        git = pathlib.Path(git_executable)
+        bash = git.parent.parent / "bin" / "bash.exe"
+    assert bash is not None and pathlib.Path(bash).is_file()
     proc = subprocess.run(
-        ["bash", "benchmarks/run_all.sh"], cwd=repo,
+        [str(bash), "benchmarks/run_all.sh"], cwd=repo,
         capture_output=True, text=True)
     assert proc.returncode == 2
     assert "dirty source tree" in proc.stderr
