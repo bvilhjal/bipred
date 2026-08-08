@@ -1,100 +1,113 @@
 == bipred benchmark regeneration ==
 python:   /Users/au507860/anaconda3/envs/ldpred3/bin/python
-versions: numpy 2.4.6 numba 0.66.0 ldpred3 0.4.5 bipred 0.3.0
+versions: numpy 2.4.6 numba 0.66.0 ldpred3 0.4.5 bipred 0.3.5
 backend:  msprime msprime-v1
-revision: 7f70065 (dirty)
+revision: 5c06ec721f4e68ae672abe7ad1b864b51c3433a3
+source:   clean
+ldpred3 source: {"expected_revision": "5d86ac9d97e42c57fa31d84ff093d3bf637dc0e6", "identity": "installed-tree", "location": "/private/tmp/bipred-bench-pdlWFA/ldpred3-src/ldpred3", "revision": null, "source_clean": null, "source_tree_sha256": "76e2c2c2dacf8aa717e9fdad1358a479a9bf844f6651a8563c2fc21e780df260", "version": "0.4.5"}
 
---- rg_architectures : started 20:46:02 ---
+--- rg_architectures : started 20:06:32 ---
 Genetic correlation across architectures — realistic non-repeating LD (m=5000, 25 unique coalescent blocks, Nref=4000, N1=50000/N2=20000, 10 reps)
 
 OMP: Info #276: omp_set_nested routine deprecated, please use omp_set_max_active_levels instead.
-/Users/au507860/REPOS/bipred/bipred/bivariate.py:1655: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.79. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
+/Users/au507860/REPOS/bipred/bipred/bivariate.py:1765: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.79. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
   return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start)
-/Users/au507860/REPOS/bipred/bipred/bivariate.py:1655: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.71. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
+/Users/au507860/REPOS/bipred/bipred/bivariate.py:1765: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.71. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
   return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start)
-/Users/au507860/REPOS/bipred/bipred/bivariate.py:1655: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.66. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
+/Users/au507860/REPOS/bipred/bipred/bivariate.py:1765: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.66. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
   return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start)
-/Users/au507860/REPOS/bipred/bipred/bivariate.py:1655: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.64. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
+/Users/au507860/REPOS/bipred/bipred/bivariate.py:1765: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.64. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
   return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start)
-/Users/au507860/REPOS/bipred/bipred/bivariate.py:1655: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.68. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
+/Users/au507860/REPOS/bipred/bipred/bivariate.py:1765: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.68. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
   return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start)
-/Users/au507860/REPOS/bipred/bipred/bivariate.py:1655: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.83. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
+/Users/au507860/REPOS/bipred/bipred/bivariate.py:1765: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.83. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
   return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start)
-/Users/au507860/REPOS/bipred/bipred/bivariate.py:1655: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.69. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
+/Users/au507860/REPOS/bipred/bipred/bivariate.py:1765: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.69. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
   return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start)
-/Users/au507860/REPOS/bipred/bipred/bivariate.py:1655: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.72. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
+/Users/au507860/REPOS/bipred/bipred/bivariate.py:1765: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.72. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
   return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start)
-/Users/au507860/REPOS/bipred/bipred/bivariate.py:1655: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.84. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
+/Users/au507860/REPOS/bipred/bipred/bivariate.py:1765: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.84. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
   return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start)
-/Users/au507860/REPOS/bipred/bipred/bivariate.py:1655: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.62. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
+/Users/au507860/REPOS/bipred/bipred/bivariate.py:1765: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.62. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
   return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start)
-  infinitesimal target= 0.0 realized=-0.0101±0.0295 | LDSC -0.0075±0.0785 | LDpred3 -0.0126±0.0348 | t: LDSC 0.030s / LDpred3 0.19s
-/Users/au507860/REPOS/bipred/bipred/bivariate.py:1655: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.76. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
+  infinitesimal target= 0.0 realized=-0.0101±0.0295 | LDSC -0.0075±0.0785 | LDpred3 -0.0126±0.0348 | t: LDSC 0.036s / LDpred3 0.19s
+/Users/au507860/REPOS/bipred/bipred/bivariate.py:1765: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.76. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
   return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start)
-/Users/au507860/REPOS/bipred/bipred/bivariate.py:1655: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.73. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
+/Users/au507860/REPOS/bipred/bipred/bivariate.py:1765: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.73. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
   return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start)
-/Users/au507860/REPOS/bipred/bipred/bivariate.py:1655: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.75. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
+/Users/au507860/REPOS/bipred/bipred/bivariate.py:1765: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.75. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
   return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start)
-/Users/au507860/REPOS/bipred/bipred/bivariate.py:1655: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.77. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
+/Users/au507860/REPOS/bipred/bipred/bivariate.py:1765: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.77. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
   return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start)
-/Users/au507860/REPOS/bipred/bipred/bivariate.py:1655: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.59. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
+/Users/au507860/REPOS/bipred/bipred/bivariate.py:1765: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.59. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
   return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start)
-  infinitesimal target= 0.2 realized=0.2252±0.0453 | LDSC 0.2268±0.0668 | LDpred3 0.2209±0.0479 | t: LDSC 0.021s / LDpred3 0.18s
-/Users/au507860/REPOS/bipred/bipred/bivariate.py:1655: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.70. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
+  infinitesimal target= 0.2 realized=0.2252±0.0453 | LDSC 0.2268±0.0668 | LDpred3 0.2209±0.0479 | t: LDSC 0.026s / LDpred3 0.19s
+/Users/au507860/REPOS/bipred/bipred/bivariate.py:1765: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.70. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
   return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start)
-/Users/au507860/REPOS/bipred/bipred/bivariate.py:1655: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.60. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
+/Users/au507860/REPOS/bipred/bipred/bivariate.py:1765: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.60. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
   return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start)
-/Users/au507860/REPOS/bipred/bipred/bivariate.py:1655: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.61. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
+/Users/au507860/REPOS/bipred/bipred/bivariate.py:1765: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.61. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
   return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start)
-/Users/au507860/REPOS/bipred/bipred/bivariate.py:1655: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.54. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
+/Users/au507860/REPOS/bipred/bipred/bivariate.py:1765: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.54. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
   return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start)
-  infinitesimal target= 0.4 realized=0.4035±0.0166 | LDSC 0.4189±0.057 | LDpred3 0.3927±0.0229 | t: LDSC 0.025s / LDpred3 0.17s
-/Users/au507860/REPOS/bipred/bipred/bivariate.py:1655: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.57. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
+  infinitesimal target= 0.4 realized=0.4035±0.0166 | LDSC 0.4189±0.057 | LDpred3 0.3927±0.0229 | t: LDSC 0.027s / LDpred3 0.18s
+/Users/au507860/REPOS/bipred/bipred/bivariate.py:1765: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.57. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
   return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start)
-/Users/au507860/REPOS/bipred/bipred/bivariate.py:1655: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.58. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
+/Users/au507860/REPOS/bipred/bipred/bivariate.py:1765: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.58. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
   return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start)
-/Users/au507860/REPOS/bipred/bipred/bivariate.py:1655: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.55. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
+/Users/au507860/REPOS/bipred/bipred/bivariate.py:1765: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.55. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
   return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start)
-/Users/au507860/REPOS/bipred/bipred/bivariate.py:1655: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.51. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
+/Users/au507860/REPOS/bipred/bipred/bivariate.py:1765: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.51. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
   return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start)
-/Users/au507860/REPOS/bipred/bipred/bivariate.py:1655: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.65. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
+/Users/au507860/REPOS/bipred/bipred/bivariate.py:1765: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.65. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
   return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start)
-/Users/au507860/REPOS/bipred/bipred/bivariate.py:1655: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.53. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
+/Users/au507860/REPOS/bipred/bipred/bivariate.py:1765: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.53. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
   return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start)
-  infinitesimal target= 0.6 realized=0.5944±0.0166 | LDSC 0.6042±0.0276 | LDpred3 0.5762±0.0169 | t: LDSC 0.027s / LDpred3 0.17s
-/Users/au507860/REPOS/bipred/bipred/bivariate.py:1655: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.52. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
+  infinitesimal target= 0.6 realized=0.5944±0.0166 | LDSC 0.6042±0.0276 | LDpred3 0.5762±0.0169 | t: LDSC 0.026s / LDpred3 0.16s
+/Users/au507860/REPOS/bipred/bipred/bivariate.py:1765: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.52. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
   return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start)
-  infinitesimal target= 0.8 realized=0.8007±0.0142 | LDSC 0.7999±0.0308 | LDpred3 0.7697±0.0167 | t: LDSC 0.028s / LDpred3 0.15s
-  infinitesimal target=0.95 realized=0.9509±0.004 | LDSC 0.9474±0.0079 | LDpred3 0.9001±0.0042 | t: LDSC 0.028s / LDpred3 0.14s
-         sparse target= 0.0 realized=0.0268±0.0916 | LDSC 0.0891±0.1745 | LDpred3 0.0358±0.0945 | t: LDSC 0.023s / LDpred3 0.08s
-         sparse target= 0.2 realized=0.2194±0.1514 | LDSC  0.107±0.1778 | LDpred3 0.2172±0.1562 | t: LDSC 0.021s / LDpred3 0.08s
-         sparse target= 0.4 realized=0.3932±0.1876 | LDSC 0.2589±0.2436 | LDpred3  0.393±0.1909 | t: LDSC 0.024s / LDpred3 0.08s
-         sparse target= 0.6 realized=0.5618±0.1062 | LDSC 0.5333±0.1404 | LDpred3 0.5647±0.1065 | t: LDSC 0.027s / LDpred3 0.08s
-         sparse target= 0.8 realized=0.8051±0.0307 | LDSC 0.8142±0.0647 | LDpred3 0.8058±0.0332 | t: LDSC 0.028s / LDpred3 0.08s
-         sparse target=0.95 realized=0.9466±0.0145 | LDSC 0.9136±0.0597 | LDpred3 0.9454±0.0127 | t: LDSC 0.028s / LDpred3 0.08s
-       moderate target= 0.0 realized=0.0059±0.0732 | LDSC -0.0185±0.1193 | LDpred3 0.0073±0.0771 | t: LDSC 0.028s / LDpred3 0.09s
-       moderate target= 0.2 realized=0.1962±0.0582 | LDSC 0.2175±0.1333 | LDpred3 0.1961±0.0605 | t: LDSC 0.028s / LDpred3 0.09s
+  infinitesimal target= 0.8 realized=0.8007±0.0142 | LDSC 0.7999±0.0308 | LDpred3 0.7697±0.0167 | t: LDSC 0.040s / LDpred3 0.16s
+  infinitesimal target=0.95 realized=0.9509±0.004 | LDSC 0.9474±0.0079 | LDpred3 0.9001±0.0042 | t: LDSC 0.025s / LDpred3 0.14s
+         sparse target= 0.0 realized=0.0268±0.0916 | LDSC 0.0891±0.1745 | LDpred3 0.0358±0.0945 | t: LDSC 0.039s / LDpred3 0.08s
+         sparse target= 0.2 realized=0.2194±0.1514 | LDSC  0.107±0.1778 | LDpred3 0.2172±0.1562 | t: LDSC 0.035s / LDpred3 0.08s
+         sparse target= 0.4 realized=0.3932±0.1876 | LDSC 0.2589±0.2436 | LDpred3  0.393±0.1909 | t: LDSC 0.046s / LDpred3 0.08s
+         sparse target= 0.6 realized=0.5618±0.1062 | LDSC 0.5333±0.1404 | LDpred3 0.5647±0.1065 | t: LDSC 0.043s / LDpred3 0.11s
+         sparse target= 0.8 realized=0.8051±0.0307 | LDSC 0.8142±0.0647 | LDpred3 0.8058±0.0332 | t: LDSC 0.027s / LDpred3 0.08s
+         sparse target=0.95 realized=0.9466±0.0145 | LDSC 0.9136±0.0597 | LDpred3 0.9454±0.0127 | t: LDSC 0.026s / LDpred3 0.08s
+       moderate target= 0.0 realized=0.0059±0.0732 | LDSC -0.0185±0.1193 | LDpred3 0.0073±0.0771 | t: LDSC 0.050s / LDpred3 0.09s
+       moderate target= 0.2 realized=0.1962±0.0582 | LDSC 0.2175±0.1333 | LDpred3 0.1961±0.0605 | t: LDSC 0.027s / LDpred3 0.09s
        moderate target= 0.4 realized=0.3826±0.0613 | LDSC 0.3753±0.065 | LDpred3 0.3786±0.0623 | t: LDSC 0.026s / LDpred3 0.09s
-       moderate target= 0.6 realized=0.5801±0.0372 | LDSC 0.5332±0.0644 | LDpred3 0.5742±0.0402 | t: LDSC 0.024s / LDpred3 0.09s
-       moderate target= 0.8 realized=  0.78±0.0246 | LDSC 0.7467±0.0735 | LDpred3  0.775±0.0267 | t: LDSC 0.024s / LDpred3 0.09s
-       moderate target=0.95 realized=0.9503±0.0098 | LDSC 0.9494±0.0247 | LDpred3 0.9353±0.0085 | t: LDSC 0.022s / LDpred3 0.09s
-      polygenic target= 0.0 realized=0.0135±0.046 | LDSC 0.0417±0.146 | LDpred3 0.0071±0.0472 | t: LDSC 0.025s / LDpred3 0.12s
-      polygenic target= 0.2 realized=0.2116±0.0476 | LDSC 0.2025±0.108 | LDpred3 0.2078±0.051 | t: LDSC 0.026s / LDpred3 0.12s
-      polygenic target= 0.4 realized=0.4084±0.0379 | LDSC 0.4094±0.0955 | LDpred3 0.4039±0.0423 | t: LDSC 0.026s / LDpred3 0.12s
-      polygenic target= 0.6 realized=0.6044±0.0263 | LDSC 0.6065±0.0627 | LDpred3 0.6036±0.0292 | t: LDSC 0.025s / LDpred3 0.11s
-      polygenic target= 0.8 realized=0.7919±0.0177 | LDSC 0.7889±0.0501 | LDpred3 0.7791±0.0198 | t: LDSC 0.026s / LDpred3 0.11s
-      polygenic target=0.95 realized=0.9485±0.0032 | LDSC 0.9411±0.0188 | LDpred3 0.9162±0.0047 | t: LDSC 0.022s / LDpred3 0.11s
-    major_locus target= 0.0 realized=0.0781±0.1782 | LDSC 0.0027±0.2436 | LDpred3 0.0791±0.1792 | t: LDSC 0.022s / LDpred3 0.08s
-    major_locus target= 0.2 realized=0.2788±0.1091 | LDSC 0.2618±0.1627 [1 fail] | LDpred3 0.2847±0.1107 | t: LDSC 0.023s / LDpred3 0.08s
-    major_locus target= 0.4 realized=0.3502±0.2249 | LDSC 0.2867±0.3223 | LDpred3  0.355±0.226 | t: LDSC 0.020s / LDpred3 0.08s
-    major_locus target= 0.6 realized=0.6021±0.0993 | LDSC 0.5546±0.139 [1 fail] | LDpred3 0.6052±0.1013 | t: LDSC 0.019s / LDpred3 0.08s
-    major_locus target= 0.8 realized=0.7873±0.0539 | LDSC 0.7422±0.1241 [1 fail] | LDpred3 0.7838±0.0556 | t: LDSC 0.021s / LDpred3 0.08s
-    major_locus target=0.95 realized=0.9455±0.019 | LDSC 0.9672±0.0573 [1 fail] | LDpred3  0.939±0.0183 | t: LDSC 0.026s / LDpred3 0.08s
+       moderate target= 0.6 realized=0.5801±0.0372 | LDSC 0.5332±0.0644 | LDpred3 0.5742±0.0402 | t: LDSC 0.026s / LDpred3 0.09s
+       moderate target= 0.8 realized=  0.78±0.0246 | LDSC 0.7467±0.0735 | LDpred3  0.775±0.0267 | t: LDSC 0.030s / LDpred3 0.10s
+       moderate target=0.95 realized=0.9503±0.0098 | LDSC 0.9494±0.0247 | LDpred3 0.9353±0.0085 | t: LDSC 0.032s / LDpred3 0.09s
+      polygenic target= 0.0 realized=0.0135±0.046 | LDSC 0.0417±0.146 | LDpred3 0.0071±0.0472 | t: LDSC 0.043s / LDpred3 0.12s
+      polygenic target= 0.2 realized=0.2116±0.0476 | LDSC 0.2025±0.108 | LDpred3 0.2078±0.051 | t: LDSC 0.027s / LDpred3 0.12s
+      polygenic target= 0.4 realized=0.4084±0.0379 | LDSC 0.4094±0.0955 | LDpred3 0.4039±0.0423 | t: LDSC 0.032s / LDpred3 0.12s
+      polygenic target= 0.6 realized=0.6044±0.0263 | LDSC 0.6065±0.0627 | LDpred3 0.6036±0.0292 | t: LDSC 0.027s / LDpred3 0.12s
+      polygenic target= 0.8 realized=0.7919±0.0177 | LDSC 0.7889±0.0501 | LDpred3 0.7791±0.0198 | t: LDSC 0.029s / LDpred3 0.12s
+      polygenic target=0.95 realized=0.9485±0.0032 | LDSC 0.9411±0.0188 | LDpred3 0.9162±0.0047 | t: LDSC 0.033s / LDpred3 0.12s
+    major_locus target= 0.0 realized=0.0781±0.1782 | LDSC 0.0027±0.2436 | LDpred3 0.0791±0.1792 | t: LDSC 0.050s / LDpred3 0.08s
+    major_locus target= 0.2 realized=0.2788±0.1091 | LDSC 0.2618±0.1627 [1 fail] | LDpred3 0.2847±0.1107 | t: LDSC 0.046s / LDpred3 0.08s
+    major_locus target= 0.4 realized=0.3502±0.2249 | LDSC 0.2867±0.3223 | LDpred3  0.355±0.226 | t: LDSC 0.030s / LDpred3 0.09s
+    major_locus target= 0.6 realized=0.6021±0.0993 | LDSC 0.5546±0.139 [1 fail] | LDpred3 0.6052±0.1013 | t: LDSC 0.024s / LDpred3 0.08s
+    major_locus target= 0.8 realized=0.7873±0.0539 | LDSC 0.7422±0.1241 [1 fail] | LDpred3 0.7838±0.0556 | t: LDSC 0.023s / LDpred3 0.08s
+    major_locus target=0.95 realized=0.9455±0.019 | LDSC 0.9672±0.0573 [1 fail] | LDpred3  0.939±0.0183 | t: LDSC 0.023s / LDpred3 0.08s
 
-mean time/fit: LDSC 24.8 ms, bivariate LDpred3 0.11 s | peak RSS 0.37 GB
-wrote /Users/au507860/REPOS/bipred/benchmarks/rg_architectures.csv  (45s)
---- rg_architectures : ok in 48s ---
---- rg_polygenicity : started 20:46:50 ---
+Fontconfig error: No writable cache directories
+	/Users/au507860/anaconda3/var/cache/fontconfig
+	/Users/au507860/.cache/fontconfig
+	/Users/au507860/.fontconfig
+
+Fontconfig error: No writable cache directories
+	/Users/au507860/anaconda3/var/cache/fontconfig
+	/Users/au507860/.cache/fontconfig
+	/Users/au507860/.fontconfig
+Matplotlib is building the font cache; this may take a moment.
+
+mean time/fit: LDSC 32.4 ms, bivariate LDpred3 0.11 s | peak RSS 2.01 GB
+wrote /Users/au507860/REPOS/bipred/benchmarks/rg_architectures.csv  (65s)
+--- rg_architectures : ok in 86s ---
+--- rg_polygenicity : started 20:07:58 ---
 Genetic correlation vs polygenicity — realistic non-repeating LD (m=5,000 = 25x200, target effect corr=0.5, Nref=4000, N1=50000/N2=20000, 5 reps)
 
 OMP: Info #276: omp_set_nested routine deprecated, please use omp_set_max_active_levels instead.
@@ -102,57 +115,57 @@ OMP: Info #276: omp_set_nested routine deprecated, please use omp_set_max_active
 ------------------------------------------------------------------------------
      0.1 |  492.6±28.0 |  0.4935±0.0303 |  0.4681±0.0934 |  0.4964±0.0341
     0.01 |   45.2±6.9  |  0.4245±0.0707 |  0.2745±0.2061 |  0.4283±0.0658
-   0.001 |    3.6±1.0  |  0.3204±0.589  |  0.5181±0.5315 |  0.3153±0.59  
+   0.001 |    3.6±1.0  |  0.3204±0.589  |  0.5181±0.5315 |  0.3153±0.59
   0.0001 |    1.0±0.0  |     0.6±0.8    |   0.134±0.7552 [3f] |  0.5875±0.7909
 
-peak RSS 0.19 GB  (incl. the one-time LD build)  | total 2s
+peak RSS 0.24 GB  (incl. the one-time LD build)  | total 2s
 wrote /Users/au507860/REPOS/bipred/benchmarks/rg_polygenicity.csv
 --- rg_polygenicity : ok in 4s ---
---- rg_methods : started 20:46:54 ---
+--- rg_methods : started 20:08:02 ---
 Genetic-correlation estimators — realistic LD (m=5000, 25 blocks, Nref=4000)
 OMP: Info #276: omp_set_nested routine deprecated, please use omp_set_max_active_levels instead.
 
 == accuracy: symmetric (N1=50000 N2=50000, rho_beta=0.9, m=5000, 6 reps) ==
 rg target/realized |         ldsc       uni_gv       uni_r2          biv   biv_decorr
-  0.00/0.03   |   0.08±0.07    0.04±0.02    0.04±0.02    0.03±0.02    0.04±0.02 
-  0.23/0.24   |   0.25±0.12    0.23±0.05    0.23±0.05    0.24±0.05    0.24±0.05 
-  0.45/0.45   |   0.41±0.08    0.43±0.02    0.43±0.02    0.45±0.02    0.46±0.02 
-  0.68/0.65   |   0.63±0.06    0.63±0.03    0.63±0.03    0.65±0.03    0.66±0.03 
-  0.90/0.90   |   0.90±0.01    0.87±0.01    0.87±0.01    0.89±0.01    0.92±0.01 
-  mean time/fit: ldsc 0.03s uni_gv 0.97s uni_r2 0.97s biv 0.13s biv_decorr 0.13s
+  0.00/0.03   |   0.08±0.07    0.04±0.02    0.04±0.02    0.03±0.02    0.04±0.02
+  0.23/0.24   |   0.25±0.12    0.23±0.05    0.23±0.05    0.24±0.05    0.24±0.05
+  0.45/0.45   |   0.41±0.08    0.43±0.02    0.43±0.02    0.45±0.02    0.46±0.02
+  0.68/0.65   |   0.63±0.06    0.63±0.03    0.63±0.03    0.65±0.03    0.66±0.03
+  0.90/0.90   |   0.90±0.01    0.87±0.01    0.87±0.01    0.89±0.01    0.92±0.01
+  mean time/fit: ldsc 0.03s uni_gv 0.94s uni_r2 0.94s biv 0.14s biv_decorr 0.14s
 
 == accuracy: asymmetric (N1=50000 N2=10000, rho_beta=0.9, m=5000, 6 reps) ==
 rg target/realized |         ldsc       uni_gv       uni_r2          biv   biv_decorr
-  0.00/0.03   |   0.09±0.08    0.04±0.02    0.04±0.02    0.04±0.02    0.04±0.02 
-  0.23/0.24   |   0.25±0.14    0.22±0.06    0.22±0.06    0.23±0.05    0.26±0.06 
-  0.45/0.45   |   0.42±0.08    0.42±0.03    0.42±0.03    0.45±0.03    0.49±0.03 
-  0.68/0.65   |   0.63±0.07    0.59±0.03    0.59±0.04    0.63±0.03    0.68±0.03 
-  0.90/0.90   |   0.90±0.02    0.83±0.01    0.83±0.01    0.88±0.01    0.92±0.01 
-  mean time/fit: ldsc 0.03s uni_gv 0.99s uni_r2 0.99s biv 0.13s biv_decorr 0.13s
-  [accuracy done 79s]
+  0.00/0.03   |   0.09±0.08    0.04±0.02    0.04±0.02    0.04±0.02    0.04±0.02
+  0.23/0.24   |   0.25±0.14    0.22±0.06    0.22±0.06    0.23±0.05    0.26±0.06
+  0.45/0.45   |   0.42±0.08    0.42±0.03    0.42±0.03    0.45±0.03    0.49±0.03
+  0.68/0.65   |   0.63±0.07    0.59±0.03    0.59±0.04    0.63±0.03    0.68±0.03
+  0.90/0.90   |   0.90±0.02    0.83±0.01    0.83±0.01    0.88±0.01    0.92±0.01
+  mean time/fit: ldsc 0.03s uni_gv 0.94s uni_r2 0.94s biv 0.13s biv_decorr 0.13s
+  [accuracy done 77s]
 
 == timing scan vs m (rho_beta=0.9, N=50000, 1 rep) ==
        m |       ldsc     uni_gv     uni_r2        biv biv_decorr
-    5000 |     0.021s     0.903s     0.903s     0.129s     0.129s
-   20000 |     0.296s     3.350s     3.350s     0.518s     0.521s
-   50000 |     1.839s     9.060s     9.060s     1.359s     1.375s
+    5000 |     0.024s     0.887s     0.887s     0.132s     0.130s
+   20000 |     0.329s     3.341s     3.341s     0.507s     0.511s
+   50000 |     2.033s     9.177s     9.177s     1.386s     1.444s
 
 done
---- rg_methods : ok in 110s ---
---- rg_scaling : started 20:48:44 ---
+--- rg_methods : ok in 276s ---
+--- rg_scaling : started 20:12:38 ---
 Genetic-correlation scaling with m — realistic non-repeating LD (K=200/block, target effect corr=0.5, 150+180 sweeps, single core)
 
        m |  LDSC (s) | LDpred3 (s) | peak GB | realized |  rg LDSC | rg LDpred3
 -----------------------------------------------------------------------------------
-   5,000 |     0.025 |        0.12 |    0.23 |    0.511 |    0.471 |      0.494
-  10,000 |     0.070 |        0.23 |    0.23 |    0.519 |    0.460 |      0.517
-  20,000 |     0.316 |        0.47 |    0.36 |    0.513 |    0.479 |      0.513
-  40,000 |     1.256 |        0.96 |    0.42 |    0.518 |    0.531 |      0.519
-  80,000 |     4.425 |        2.06 |    0.63 |    0.519 |    0.582 |      0.487
+   5,000 |     0.027 |        0.12 |    0.21 |    0.511 |    0.471 |      0.494
+  10,000 |     0.132 |        0.26 |    0.32 |    0.519 |    0.460 |      0.517
+  20,000 |     0.307 |        0.46 |    0.33 |    0.513 |    0.479 |      0.513
+  40,000 |     1.300 |        1.06 |    0.42 |    0.518 |    0.531 |      0.519
+  80,000 |     5.358 |        2.05 |    2.56 |    0.519 |    0.582 |      0.487
 
 wrote rg_scaling.csv and rg_scaling.png
---- rg_scaling : ok in 30s ---
---- mixer_overlap : started 20:49:14 ---
+--- rg_scaling : ok in 145s ---
+--- mixer_overlap : started 20:15:03 ---
 MiXeR-style overlap recovery — realistic LD (m=5000, 25 blocks, Nref=4000, 8 reps, p=0.10/trait)
 OMP: Info #276: omp_set_nested routine deprecated, please use omp_set_max_active_levels instead.
 
@@ -170,6 +183,29 @@ rho_beta |  rho_beta_hat |   frac_shared | rg target/real        rg_hat
     0.30 |   0.26±0.063 |   0.52±0.047 |  0.15/0.15    0.14±0.035
     0.60 |   0.48±0.038 |   0.54±0.042 |  0.30/0.28    0.27±0.032
     0.90 |   0.63±0.065 |   0.64±0.038 |  0.45/0.45    0.45±0.024
+
+== polygenicity sweep (rho_beta=0.8, N=50000/20000) ==
+ p/trait  causal  target |   frac_shared    bias | rel_poly |   rg real/hat
+    0.01      50    0.25 |   0.28±0.036   +0.033 |     1.50 |  0.20/0.20
+    0.01      50    0.50 |   0.57±0.032   +0.071 |     1.57 |  0.39/0.39
+    0.01      50    0.75 |   0.80±0.062   +0.049 |     1.64 |  0.59/0.59
+                    mean |                +0.051
+    0.03     150    0.25 |   0.27±0.042   +0.022 |     1.34 |  0.20/0.20
+    0.03     150    0.50 |   0.54±0.049   +0.035 |     1.30 |  0.39/0.38
+    0.03     150    0.75 |   0.77±0.077   +0.019 |     1.36 |  0.63/0.63
+                    mean |                +0.025
+    0.10     500    0.25 |   0.30±0.046   +0.055 |     1.25 |  0.20/0.20
+    0.10     500    0.50 |   0.62±0.065   +0.117 |     1.27 |  0.39/0.39
+    0.10     500    0.75 |   0.84±0.041   +0.093 |     1.24 |  0.58/0.57
+                    mean |                +0.088
+/Users/au507860/REPOS/bipred/bipred/bivariate.py:1765: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.51. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
+  return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start)
+/Users/au507860/REPOS/bipred/bipred/bivariate.py:1765: RuntimeWarning: Implausible bivariate fit: the fitted causal fraction is 0.50. This usually means the LD reference is too small or too weakly regularised for its block size, which distorts h2 and the causal fraction. Besides being statistically suspect, it makes the sampler markedly slower, because the per-variant LD row update then fires for almost every variant. Consider a larger LD reference panel, smaller blocks, or shrinking the LD blocks (ldpred3.shrink_ld_blocks).
+  return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start)
+    0.30    1500    0.25 |   0.43±0.062   +0.180 |     0.98 |  0.23/0.23
+    0.30    1500    0.50 |   0.78±0.034   +0.280 |     1.04 |  0.41/0.40
+    0.30    1500    0.75 |   0.96±0.017   +0.214 |     1.03 |  0.59/0.59
+                    mean |                +0.225
 
 == power sweep (p=0.10/trait, frac_shared=0.5, rho_beta=0.8) ==
        N  Nh2/M |   frac_shared |      rho_beta |   rg real/hat | rel_poly
@@ -189,6 +225,8 @@ rho_beta |  rho_beta_hat |   frac_shared | rg target/real        rg_hat
 
 == count calibration + retained-iterate inclusion (ref-panel LD, p=0.10/trait, frac_shared=0.5, rho_beta=0.8) ==
        N  Nh2/M | rel off rel ON   lam | hit off hit ON | rg real rg off  rg ON
+/Users/au507860/REPOS/bipred/bipred/bivariate.py:1765: RuntimeWarning: Bivariate fit appears to have diverged: trait 1's genetic variance rose 1.28x across the retained sweeps, so the chain had not settled. Do not interpret h2 or rg from this fit. The summary statistics and LD reference are incompatible. Recheck harmonisation, reference ancestry and quality, imputation quality, per-variant sample size, and allele-frequency agreement; compare the LD-consistency sensitivity screen (bipred.qc.ld_consistency_screen). Long-range-LD exclusion is an estimator-specific sensitivity analysis, not a universal repair. Regularising the blocks (ldpred3.shrink_ld_blocks) may help, but note its size-aware rule assumes finite-panel noise: against a reference whose correlations were thresholded to zero it under-shrinks, because that distortion is structural and does not fall with reference size.
+  return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start)
     1000   0.10 |    0.81   0.70  1.08 | 5/8     4/8    |    0.43   0.33   0.34
     2500   0.25 |    0.97   0.81  1.13 | 6/8     4/8    |    0.36   0.34   0.36
     5000   0.50 |    1.06   0.90  1.15 | 6/8     6/8    |    0.44   0.42   0.43
@@ -197,20 +235,20 @@ rho_beta |  rho_beta_hat |   frac_shared | rg target/real        rg_hat
 
 == univariate-anchored calibration (ref-panel LD, p=0.10/trait, frac_shared=0.5, rho_beta=0.8, 6 reps) ==
        N  Nh2/M | joint n1/t calib n1/t | joint sh/t calib sh/t | rg real/hat
-    1000   0.10 |  0.86±0.108  0.84±0.241 |       0.98       0.91 |  0.40/0.31 
-    2500   0.25 |  0.94±0.076  0.77±0.101 |       1.39       1.11 |  0.39/0.36 
-    5000   0.50 |  1.00±0.039  0.84±0.11 |       1.31       1.03 |  0.39/0.36 
-   10000   1.00 |  1.11±0.05  0.90±0.071 |       1.48       1.17 |  0.39/0.38 
-   20000   2.00 |  1.19±0.077  0.99±0.073 |       1.46       1.20 |  0.42/0.41 
+    1000   0.10 |  0.86±0.108  0.84±0.241 |       0.98       0.91 |  0.40/0.31
+    2500   0.25 |  0.94±0.076  0.77±0.101 |       1.39       1.11 |  0.39/0.36
+    5000   0.50 |  1.00±0.039  0.84±0.11 |       1.31       1.03 |  0.39/0.36
+   10000   1.00 |  1.11±0.05  0.90±0.071 |       1.48       1.17 |  0.39/0.38
+   20000   2.00 |  1.19±0.077  0.99±0.073 |       1.46       1.20 |  0.42/0.41
 
-wrote /Users/au507860/REPOS/bipred/benchmarks/mixer_overlap.csv  (76s)
---- mixer_overlap : ok in 77s ---
---- overlap_estimation : started 20:50:31 ---
-OMP: Info #276: omp_set_nested routine deprecated, please use omp_set_max_active_levels instead.
+wrote /Users/au507860/REPOS/bipred/benchmarks/mixer_overlap.csv  (91s)
+--- mixer_overlap : ok in 93s ---
+--- overlap_estimation : started 20:16:36 ---
 Bivariate rg vs sample overlap (m=5000, N1=60000, N2=40000, 8 reps)
 
  target overlap ρ |   realized rg |  rg (cc=0) | rg (cc=true) |   Δ cc=0
 ------------------------------------------------------------------------------
+OMP: Info #276: omp_set_nested routine deprecated, please use omp_set_max_active_levels instead.
    0.00      0.00 |  0.004±0.046 |     -0.001 |       -0.001 |    0.000
    0.00      0.20 |  0.004±0.046 |      0.012 |       -0.000 |    0.013
    0.00      0.40 |  0.004±0.046 |      0.025 |       -0.000 |    0.026
@@ -221,74 +259,80 @@ Bivariate rg vs sample overlap (m=5000, N1=60000, N2=40000, 8 reps)
 The delta columns are paired against the rho=0 run. Interpret the correction from their means, SDs, and failure counts rather than as a general recovery guarantee.
 wrote overlap_estimation.csv
 --- overlap_estimation : ok in 13s ---
---- sample_overlap : started 20:50:44 ---
+--- sample_overlap : started 20:16:49 ---
 OMP: Info #276: omp_set_nested routine deprecated, please use omp_set_max_active_levels instead.
 Sample overlap (rho_e=0.5) on realistic non-repeating LD (m=5000, 25 unique coalescent blocks, N1=15000/N2=15000, 8 reps)
 
 target |   realized rg | LDSC icpt=0 | LDSC free icpt |  biv cc=0 | biv cc=rho |  t LDSC |   t biv
 --------------------------------------------------------------------------------------------------------
-  0.00 |  0.034±0.119 | 0.076±0.094 |    0.035±0.154 | 0.035±0.125 | 0.020±0.128 |  24.0ms |  0.08s
-  0.30 |  0.328±0.096 | 0.320±0.085 |    0.312±0.147 | 0.327±0.103 | 0.315±0.104 |  23.0ms |  0.08s
-  0.60 |  0.615±0.073 | 0.595±0.083 |    0.598±0.131 | 0.617±0.077 | 0.606±0.077 |  25.0ms |  0.08s
+  0.00 |  0.034±0.119 | 0.076±0.094 |    0.035±0.154 | 0.035±0.125 | 0.020±0.128 |  20.0ms |  0.08s
+  0.30 |  0.328±0.096 | 0.320±0.085 |    0.312±0.147 | 0.327±0.103 | 0.315±0.104 |  34.1ms |  0.08s
+  0.60 |  0.615±0.073 | 0.595±0.083 |    0.598±0.131 | 0.617±0.077 | 0.606±0.077 |  18.9ms |  0.08s
 
 Compare corrected and uncorrected columns against realized rg; Monte Carlo variation can dominate the expected overlap shift at this power. Inspect MAE and failure counts. (5s)
 wrote sample_overlap.csv
 --- sample_overlap : ok in 7s ---
---- rg_env_overlap : started 20:50:51 ---
-OMP: Info #276: omp_set_nested routine deprecated, please use omp_set_max_active_levels instead.
+--- rg_env_overlap : started 20:16:56 ---
 Genetic correlation under environmental overlap — real genotypes, both traits on the SAME N=20000 individuals (m=3000, h2=0.5, 20 reps)
 
 Summary means/SDs exclude non-finite estimates and |rg| > 1.5; inspect raw runs when diagnosing divergence.
 
 rg target/real   re |     LDSC free |   LDSC icpt=0 |      biv cc=0 |    biv cc=rho | LDSC icpt
 --------------------------------------------------------------------------------------------------
+OMP: Info #276: omp_set_nested routine deprecated, please use omp_set_max_active_levels instead.
  0.00/-0.02  0.0 | -0.0333±0.1336 | -0.0219±0.1325 | -0.0186±0.1092 | -0.0178±0.1066 |    0.2875
  0.00/-0.00  0.3 | -0.0223±0.1388 | 0.0105±0.1207 | 0.0085±0.1008 | -0.0008±0.0993 |    0.7895
  0.00/-0.00  0.6 | -0.0235±0.1346 | 0.0129±0.1113 | 0.0155±0.0966 | -0.0009±0.0942 |    0.8712
+/Users/au507860/REPOS/bipred/bipred/bivariate.py:1765: RuntimeWarning: Bivariate fit appears to have diverged: trait 1 has sum(beta^2) 10.6 against a genetic variance of 0.529 (ratio 20), so its effects are largely cancelling through LD rather than adding. Do not interpret h2 or rg from this fit. The summary statistics and LD reference are incompatible. Recheck harmonisation, reference ancestry and quality, imputation quality, per-variant sample size, and allele-frequency agreement; compare the LD-consistency sensitivity screen (bipred.qc.ld_consistency_screen). Long-range-LD exclusion is an estimator-specific sensitivity analysis, not a universal repair. Regularising the blocks (ldpred3.shrink_ld_blocks) may help, but note its size-aware rule assumes finite-panel noise: against a reference whose correlations were thresholded to zero it under-shrinks, because that distortion is structural and does not fall with reference size.
+  return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start)
+/Users/au507860/REPOS/bipred/bipred/bivariate.py:1765: RuntimeWarning: Bivariate fit appears to have diverged: trait 2 has sum(beta^2) 6.09 against a genetic variance of 0.52 (ratio 12), so its effects are largely cancelling through LD rather than adding. Do not interpret h2 or rg from this fit. The summary statistics and LD reference are incompatible. Recheck harmonisation, reference ancestry and quality, imputation quality, per-variant sample size, and allele-frequency agreement; compare the LD-consistency sensitivity screen (bipred.qc.ld_consistency_screen). Long-range-LD exclusion is an estimator-specific sensitivity analysis, not a universal repair. Regularising the blocks (ldpred3.shrink_ld_blocks) may help, but note its size-aware rule assumes finite-panel noise: against a reference whose correlations were thresholded to zero it under-shrinks, because that distortion is structural and does not fall with reference size.
+  return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start)
  0.50/0.49   0.0 | 0.4909±0.0874 | 0.5078±0.0981 |    0.5±0.0649 | 0.4886±0.0638 |    0.3994
+/Users/au507860/REPOS/bipred/bipred/bivariate.py:1765: RuntimeWarning: Bivariate fit appears to have diverged: trait 2 has sum(beta^2) 13.2 against a genetic variance of 0.525 (ratio 25), so its effects are largely cancelling through LD rather than adding. Do not interpret h2 or rg from this fit. The summary statistics and LD reference are incompatible. Recheck harmonisation, reference ancestry and quality, imputation quality, per-variant sample size, and allele-frequency agreement; compare the LD-consistency sensitivity screen (bipred.qc.ld_consistency_screen). Long-range-LD exclusion is an estimator-specific sensitivity analysis, not a universal repair. Regularising the blocks (ldpred3.shrink_ld_blocks) may help, but note its size-aware rule assumes finite-panel noise: against a reference whose correlations were thresholded to zero it under-shrinks, because that distortion is structural and does not fall with reference size.
+  return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start)
  0.50/0.49   0.6 |  0.481±0.0739 | 0.5237±0.0861 | 0.5184±0.0506 | 0.4947±0.0491 |    0.9727
 
 CSV MAE columns compare each retained estimate with that replicate's realized genetic rg. This stress test can expose an unstable or biased correction.
 wrote rg_env_overlap.csv
 --- rg_env_overlap : ok in 40s ---
---- sweep_cost : started 20:51:31 ---
-m=20000  k=500  best of 3  (private Numba cache per cell)
+--- sweep_cost : started 20:17:36 ---
+m=20000  k=500  median +/- MAD of 3  (private Numba cache per cell)
 
-representation           cores   ms/sweep  speed-up  fitted p
---------------------------------------------------------------
-dense_i8                     1      0.822     1.00x    0.0093
-dense_i8                     4      0.506     1.63x    0.0093
+representation           cores  median ms    MAD ms  speed-up  fitted p
+-------------------------------------------------------------------------
+dense_i8                     1      0.827     0.006     1.00x    0.0093
+dense_i8                     4      0.520     0.008     1.59x    0.0093
 
-dense_f32                    1      0.827     1.00x    0.0092
-dense_f32                    4      0.446     1.85x    0.0092
+dense_f32                    1      0.814     0.030     1.00x    0.0092
+dense_f32                    4      0.520     0.090     1.57x    0.0092
 
-lr8_0.99 (rank 481)          1      2.948     1.00x    0.0094
-lr8_0.99 (rank 481)          4      1.131     2.61x    0.0094
+lr8_0.99 (rank 481)          1      2.962     0.006     1.00x    0.0094
+lr8_0.99 (rank 481)          4      1.183     0.035     2.50x    0.0094
 
-lr32_0.99 (rank 481)         1      2.487     1.00x    0.0094
-lr32_0.99 (rank 481)         4      0.949     2.62x    0.0094
+lr32_0.99 (rank 481)         1      2.736     0.147     1.00x    0.0094
+lr32_0.99 (rank 481)         4      0.979     0.004     2.80x    0.0094
 
-mixed (rank 481)             1      1.876     1.00x    0.0093
-mixed (rank 481)             4      0.872     2.15x    0.0093
+mixed (rank 481)             1      1.914     0.000     1.00x    0.0093
+mixed (rank 481)             4      0.876     0.008     2.19x    0.0093
 
 wrote benchmarks/sweep_cost.csv
 --- sweep_cost : ok in 35s ---
---- fit_memory : started 20:52:06 ---
-OMP: Info #276: omp_set_nested routine deprecated, please use omp_set_max_active_levels instead.
+--- fit_memory : started 20:18:11 ---
 k=500   payload = the caller's own LD; fit peak = allocation inside the fit
 
 representation               m  ld_int8  payload MB  fit peak MB  B/variant
 ---------------------------------------------------------------------------
-dense_f32                50000  default        1.00         6.06      121.2
-dense_f32                50000     True        1.00        31.06      621.3
-dense_f32               100000  default        1.00        12.10      121.0
-dense_f32               100000     True        1.00        62.12      621.2
+OMP: Info #276: omp_set_nested routine deprecated, please use omp_set_max_active_levels instead.
+dense_f32                50000  default      100.00         6.46      129.2
+dense_f32                50000     True      100.00        31.47      629.3
+dense_f32               100000  default      200.00        12.89      128.9
+dense_f32               100000     True      200.00        62.92      629.2
 
-dense_i8                 50000  default        0.25         6.05      121.0
-dense_i8                100000  default        0.25        12.10      121.0
+dense_i8                 50000  default       25.00         6.45      129.0
+dense_i8                100000  default       50.00        12.90      129.0
 
-lr8_0.99 (rank 481)      50000  default        0.24         7.03      140.7
-lr8_0.99 (rank 481)     100000  default        0.24        13.10      131.0
+lr8_0.99 (rank 481)      50000  default       24.25         7.43      148.6
+lr8_0.99 (rank 481)     100000  default       48.50        13.89      138.9
 
 wrote benchmarks/fit_memory.csv
 --- fit_memory : ok in 4s ---

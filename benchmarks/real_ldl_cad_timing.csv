@@ -1,0 +1,35 @@
+section,label,step,m,n_blocks,seconds
+preflight,bipred,source_check,,,0.031111
+preflight,ldpred3,source_check,,,0.020253
+preflight,inputs,checksum_validation,,,1.112804
+input,LD reference,load_and_index,1054330,625,9.372864
+input,LDL,harmonize,928689,625,3.725274
+input,CAD,harmonize,1045618,625,8.406268
+preparation,shared,materialize_intersection,924254,625,0.937828
+preparation,CAD,sample_size_calibration,924254,625,0.022166
+preparation,shared,per_variant_qc,924254,625,0.024765
+fit,harmonised,ld_subset_retile,924254,625,2.106089
+fit,harmonised,standardize_effects,924254,625,0.034809
+fit,harmonised,ld_scores,924254,625,97.024598
+fit,harmonised,ldsc_regression,924254,625,29.432118
+fit,harmonised,bivariate_fit,924254,625,147.868594
+fit,harmonised,diagnostics,924254,625,5.240559
+fit,per-variant QC,ld_subset_retile,887361,625,2.628889
+fit,per-variant QC,standardize_effects,887361,625,0.029858
+fit,per-variant QC,ld_scores,887361,625,92.159053
+fit,per-variant QC,ldsc_regression,887361,625,30.293394
+fit,per-variant QC,bivariate_fit,887361,625,141.578911
+fit,per-variant QC,diagnostics,887361,625,4.713582
+screen,shared,ld_subset_retile,887361,625,2.523369
+screen,LDL,ld_consistency,887361,625,259.175407
+screen,CAD,ld_consistency,887361,625,264.332326
+fit,+ LD-consistency screen,ld_subset_retile,845623,625,1.766479
+fit,+ LD-consistency screen,standardize_effects,845623,625,0.057113
+fit,+ LD-consistency screen,ld_scores,845623,625,90.948696
+fit,+ LD-consistency screen,ldsc_regression,845623,625,29.292483
+fit,+ LD-consistency screen,bivariate_fit,845623,625,135.832289
+fit,+ LD-consistency screen,diagnostics,845623,625,4.664944
+output,results,write_csv,3,,0.000446
+output,provenance,write_json,,,0.206135
+output,results,regression_checks,845623,,0.000082
+run,all,total,,,1365.693022

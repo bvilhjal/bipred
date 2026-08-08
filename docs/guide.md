@@ -106,11 +106,11 @@ LDL (≈ 0), and HDL × TG (−0.53) — were each fitted under all eight
 combinations of stricter per-variant thresholds, long-range-LD exclusion, and
 the screen. Every pair contains at least one GLGC lipid file, so these 24 arms
 are repeated perturbations of three file combinations, not independent
-validation across 24 settings. The saved rows also predate the correction that
-runs every requested random partition; they are a historical case study, not a
-validation of the current screen.
+validation across 24 settings. The saved rows come from a clean 0.3.5 run in
+which every requested random partition completed. That makes them current for
+these files and this reference, not a general validation of the screen.
 
-**Table 1. Historical divergence warnings across 24 arms.**
+**Table 1. Divergence warnings across 24 current-screen arms.**
 
 | factor | off | on |
 |---|---:|---:|
@@ -118,7 +118,7 @@ validation of the current screen.
 | long-range LD exclusion | 6/12 | 6/12 |
 | **LD-consistency screen** | **12/12 diverged** | **0/12 diverged** |
 
-In that run, the screen separated the warnings in these file/reference
+In this run, the screen separated the warnings in these file/reference
 combinations. The other factors did not change the warning count, but they did
 change estimates; Table 1 cannot establish that they "do nothing." Among its
 screened fits,

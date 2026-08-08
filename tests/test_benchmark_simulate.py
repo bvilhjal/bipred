@@ -578,9 +578,10 @@ def test_results_bivariate_table_matches_per_replicate_csv():
 def test_results_scaling_table_matches_its_csv():
     """RESULTS.md's prose tables are transcriptions; keep them honest.
 
-    The 0.2.1 regeneration updated benchmarks/rg_scaling.csv but left the
-    printed timing and peak-memory columns at their 0.2.0 values, including a
-    2.51 GB memory spike the current data does not show.
+    An earlier regeneration updated benchmarks/rg_scaling.csv but left the
+    printed timing and peak-memory columns stale.  The current 0.3.5 run again
+    reaches 2.559 GB at 80k variants, so the table must follow the artifact
+    rather than any particular historical peak.
     """
     import csv
     import pathlib
@@ -731,12 +732,7 @@ assert benchmark._segment_cache_path(0).endswith(
 
 
 def test_results_real_data_table_matches_its_csv():
-    """Table 13 exactly transcribes its historical three-stage artifact.
-
-    The numerical rows predate the current always-run screen semantics. This
-    test protects the saved contrast and divergence-warning label; it does not
-    promote the old artifact into current-screen validation.
-    """
+    """Table 13 exactly transcribes the clean current-screen artifact."""
     import csv
     import pathlib
 
@@ -769,12 +765,11 @@ def test_results_real_data_table_matches_its_csv():
         assert printed[-1].strip() == (
             "yes" if record["divergence_warned"] == "1" else "no")
 
-    # Internal diagnostics recorded by this historical artifact, not an
-    # published truth-range check.
+    # Internal numerical diagnostics, not a published truth-range check.
     assert rows[-1]["divergence_warned"] == "0", (
-        "final historical stage should have no divergence warning")
+        "final screened stage should have no divergence warning")
     assert all(r["divergence_warned"] == "1" for r in rows[:-1]), (
-        "earlier historical stages should trigger the divergence warning")
+        "earlier unscreened stages should trigger the divergence warning")
     assert float(rows[-1]["cancellation_ldl"]) < 10.0
 
 

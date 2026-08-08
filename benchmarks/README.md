@@ -97,7 +97,7 @@ alibi.
 | `sweep_cost.py` | Per-sweep median ± MAD by LD representation and core count, with one distinct payload per synthetic block (→ `sweep_cost.csv`) | — |
 | `fit_memory.py` | Caller LD payload and Python allocation added by a fit, again with distinct block payloads (→ `fit_memory.csv`) | — |
 | `bivariate_demo.py` | Bivariate prediction gain for a weak trait across two-trait architectures, pairing true zero- and 5%-shrinkage references and a disjoint-causal control (needs `ld_library.npz` from `make_ld_library.py`; → `bivariate_demo.csv`) | — |
-| `qc_factorial.py` | **QC sensitivity**: 2x2x2 over strict thresholds, long-range LD exclusion and the LD-consistency screen, on three real trait pairs; records bipred and LDSC on identical variants and uses each arm's raw in-range LDSC intercept as a `cross_corr` sensitivity value (→ `qc_factorial.csv`). This assumes the whole intercept is correlated sampling noise; confounding may also contribute. ~75 min, same inputs as `real_ldl_cad.py` plus GLGC HDL/TG and GIANT height | — |
+| `qc_factorial.py` | **QC sensitivity**: 2x2x2 over strict thresholds, long-range LD exclusion and the LD-consistency screen, on three real trait pairs; records bipred and LDSC on identical variants and uses each arm's raw in-range LDSC intercept as a `cross_corr` sensitivity value (→ `qc_factorial.csv`). This assumes the whole intercept is correlated sampling noise; confounding may also contribute. ~126 min on the benchmark's 10-core Apple M2 Pro, same inputs as `real_ldl_cad.py` plus GLGC HDL/TG and GIANT height | — |
 | `real_ldl_cad.py` | **Real GWAS**: LDL x CAD on a UK Biobank HapMap3 LD reference, fitted at three cleaning stages; checks numerical diagnostics and the divergence warning, with external estimates used only as rough context (→ `real_ldl_cad.csv` and step-level `real_ldl_cad_timing.csv`). Needs ~9 GB of downloads, see its docstring | — |
 | `rg_env_overlap.py` | Individual-genotype stress test under **environmental** correlation on shared samples; records paired MAE and failures after the `|r_g| <= 1.5` diagnostic window (→ `rg_env_overlap.csv`) | opt |
 | `hapnest/run_bivariate.py` | rg / h² / MiXeR-overlap recovery **and** out-of-sample PRS gain (bivariate vs univariate) on **HAPNEST** genotypes+phenotypes — synthetic genomes resampled from a real 1000G+HGDP reference, so real LD/MAF/structure with known truth (→ `hapnest/run_bivariate.csv`). See [`hapnest/README.md`](hapnest/README.md). | — (needs HAPNEST) |
@@ -131,11 +131,17 @@ manually:
 
 **Table 3. Manually regenerated artifacts.**
 
-| Stem | CSV rows | Requirement |
-|---|---:|---|
-| `bivariate_demo` | 60 | locally generated `ld_library.npz` |
-| `qc_factorial` | 24 | public real-GWAS inputs; about 75 minutes |
-| `real_ldl_cad` | 3 + 34 timing rows | public real-GWAS inputs; about 25 minutes |
+| Stem | CSV rows | Provenance sidecar | Requirement |
+|---|---:|---|---|
+| `bivariate_demo` | 60 | `bivariate_demo.provenance.json` | locally generated `ld_library.npz` |
+| `qc_factorial` | 24 | `qc_factorial.provenance.json` | public real-GWAS inputs; ~126 min on a 10-core Apple M2 Pro |
+| `real_ldl_cad` | 3 + 34 timing rows | `real_ldl_cad.provenance.json` | public real-GWAS inputs; 1,365.693 s on the same machine |
+
+The complete 0.3.5 regeneration used clean revision `5c06ec7`, Python 3.14.6,
+NumPy 2.4.6, Numba 0.66.0, and ldpred3 0.4.5. `run_all.sh` selected msprime
+and completed all ten scripts, producing eleven CSVs and five PNGs; all three
+manual benchmarks were also regenerated. These wall times are measurements of
+that 10-core Apple M2 Pro under one-thread controls, not portable expectations.
 
 **Table 4. Acquisition record for the six checksummed real-data inputs.**
 
@@ -186,45 +192,32 @@ reference entry hashes the converted NPZ itself, not merely its download or
 converter version; this pins the bytes used by the fit even if the sibling
 ldpred3 converter later changes.
 
-Future runs also refuse staged, unstaged, or untracked source changes and write
-`<stem>.provenance.json` beside the CSV. That sidecar records the clean source
-revision, Python/platform and package versions, observed input hashes, and the
-loaded ldpred3 source identity. A Git checkout must be clean and at the tested
+The manual scripts refuse staged, unstaged, or untracked source changes and
+write the sidecars named in Table 3. Each records the clean source revision,
+Python/platform and package versions, observed input hashes, and loaded
+ldpred3 source identity. A Git checkout must be clean and at the tested
 revision; a non-VCS installation is pinned by a complete package-tree hash and,
 when available, its PEP 610 commit. The real LDL/CAD sidecar also records its
-command-line screening-round count, CPU count, thread environment, and timing
-artifact name. Its long-form timing rows separate reference loading, GWAS
-harmonisation, preparation, both LD-consistency screens, LD scores, LDSC,
-bivariate fitting, diagnostics, and output. Only the final total overlaps the
-leaf rows; no machine-dependent pass/fail threshold is imposed. The committed
-real-data CSVs predate this contract and have no sidecars; none were invented
-after the fact.
+screening-round count, CPU count, thread environment, and
+`real_ldl_cad_timing.csv`. That 34-row artifact separates reference loading,
+GWAS harmonisation, preparation, both LD-consistency screens, LD scores, LDSC,
+bivariate fitting, diagnostics, and output. Only its final total overlaps the
+leaf rows; no machine-dependent pass/fail threshold is imposed.
 
 The `bivariate_demo.csv` rows retain full precision, causal-set overlap and the
 realized LD-aware genetic correlation, as well as the reference shrinkage
 setting; [`RESULTS.md`](RESULTS.md) §8 is a rounded summary, not the primary
 evidence. A disjoint causal support need not have realized genetic correlation
-exactly zero because LD connects variants across the two supports. Future runs
-refuse dirty source and write a provenance sidecar that also hashes the local
-`ld_library.npz`. The current CSV was regenerated during the 0.3.4 working-tree
-review before that preflight existed, so it is a provisional numerical artifact
-without a clean-revision sidecar.
+exactly zero because LD connects variants across the two supports. The script
+refuses dirty source and writes a provenance sidecar that also hashes the local
+`ld_library.npz`; the current pair comes from the clean 0.3.5 regeneration.
 
-The current `sweep_cost.csv` and `fit_memory.csv` were likewise regenerated to
-repair their payload and timing contracts, but not as part of the historical
-`run_all.log`. They are provisional until the next clean `run_all.sh`
-regeneration; the log must not be cited as their provenance.
+The current `sweep_cost.csv` and `fit_memory.csv` were produced by the same
+clean `run_all.sh` regeneration recorded in `run_all.log`.
 
-The `qc_factorial.csv` header was mechanically renamed from `dentist` to
-`ld_screen` with the public API, and its `expected` labels were recast as rough
-context rather than truth ranges. In both real-data CSVs, `warned` was renamed
-to `divergence_warned`: the scripts count only warnings whose text contains
-`diverged`, not every warning emitted by a fit. Both CSVs remain numerical
-records of the earlier screen, which could stop after the first empty random
-partition; the current screen always runs every requested partition. They were not
-regenerated after that semantic correction, so treat Tables 13--16 as
-historical case studies until a clean rerun replaces the files. The factorial's
-saved `cross_corr` is the arm-specific free LDSC intercept; all saved values are
-inside `(-1, 1)`, and the current script rejects rather than clips an invalid
-one. HAPNEST and standalone `infer_vs_ldsc_sbayes.py` require the external
-inputs named in `RESULTS.md`.
+Both real-data CSVs were regenerated with the always-run partition screen.
+Their `divergence_warned` field counts only warnings whose text contains
+`diverged`. The factorial's saved `cross_corr` is the arm-specific free LDSC
+intercept; all saved values are inside `(-1, 1)`, and the script rejects rather
+than clips an invalid one. HAPNEST and standalone
+`infer_vs_ldsc_sbayes.py` require the external inputs named in `RESULTS.md`.

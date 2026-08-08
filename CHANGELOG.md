@@ -13,6 +13,17 @@ User-visible changes to **bipred** are recorded here. The project is currently
   output, and the inclusive end-to-end total. The timing artifact records the
   same clean source, inputs, thread controls, and environment as the result.
 
+### Benchmarks
+
+- The complete suite was regenerated from clean revision `5c06ec7` with
+  bipred 0.3.5: all ten `run_all.sh` scripts and the three manual benchmarks.
+  The manual outputs now include clean-source provenance sidecars; the LDL-CAD
+  run also includes its 34-row timing artifact.
+- With numerical thread counts fixed at one on the 10-core Apple M2 Pro used
+  for this refresh, LDL-CAD took 1,365.693 seconds (22.8 minutes) and the
+  24-arm QC factorial about 126 minutes. These are hardware-specific
+  measurements, not performance thresholds.
+
 ## [0.3.4] - 2026-08-08
 
 This release tightens the contracts exposed by the 0.3.3 real-data review and

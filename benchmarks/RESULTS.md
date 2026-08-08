@@ -1,26 +1,12 @@
 # Benchmark record
 
-This is a cumulative record, not one version-locked regeneration. Tables 2--11
-come from `run_all.log`, which records bipred 0.3.0 at revision `7f70065` with
-uncommitted changes. Its CSVs preserve those numbers, but the dirty source tree
-cannot be reconstructed exactly from the revision alone. Table 12 is a separate
-archive-driven, provisional 0.3.4 working-tree run; its current CSV predates the
-new clean-source/library-hash sidecar. The regenerated `sweep_cost.csv` and
-`fit_memory.csv` are also provisional and do not share the historical log.
-Table 13 was added with the 0.3.1 real-data analysis, and
-Tables 14--16 with the 0.3.3 factorial; current scripts and documentation target
-0.3.4. Each section states its own design. Running
-`bash benchmarks/run_all.sh` exercises the current self-contained suite; it
-does not recreate the historical dirty snapshot.
-
-Tables 13--16 also predate a semantic correction to the LD-consistency screen:
-the historical implementation could stop after the first empty random
-partition, whereas the current one runs every requested partition. Their CSV
-headers were migrated mechanically, but their numerical rows have not been
-regenerated and must not be read as current-screen validation. They also
-predate the manual-run provenance sidecar and therefore do not pin a clean
-source revision or package environment. Current scripts refuse dirty source
-trees and record that metadata for future runs; no sidecars were backfilled.
+All artifacts in this record were regenerated with bipred 0.3.5 from clean revision
+`5c06ec7`. Tables 2--11 and the `sweep_cost.csv` and `fit_memory.csv` artifacts
+come from the single-core `run_all.log`; all ten scripts completed. Table 12
+comes from the separate archive run, Tables 13--14 from LDL-CAD, and Tables
+15--17 from the QC factorial. Their provenance sidecars pin the same clean
+bipred revision, package environment, and input hashes. CSVs are the
+authoritative numeric record; tables below are rounded summaries.
 
 Sections 9 and 10 are the only non-simulated studies. They use public summary
 statistics against a UK Biobank LD reference and expose file/reference
@@ -28,38 +14,33 @@ mismatches that simulations drawing `beta_hat` from the fitted model cannot.
 They are diagnostic case studies, not independent population samples or a
 universal QC validation.
 
-Two things moved materially in the simulated record:
+Two findings are easy to misread:
 
-- **Table 11, the environmental-overlap stress test, is no longer a failure.**
-  Joint-fit MAE was up to 0.86 there and is now at most 0.0242. The cause was
-  the fit-time `ld_int8` default, which quantized the caller's dense LD
-  internally; it now consumes it as given. That row was measuring in-fit LD
-  quantization, not the model — see the table's own note.
-- Joint-fit timings roughly halved, from the low-rank `fastmath` and LR8
-  widening ports. Unrelated to the default change.
+- **Table 11 no longer reproduces the old aggregate failure.** Joint-fit MAE
+  is at most 0.0242 after removing fit-time LD quantisation, but three
+  individual fits still raise divergence warnings. Low mean error is not a
+  clean bill of numerical health.
+- Timings are machine-specific and were regenerated with every accuracy row in
+  the current tables.
 
-Accuracy on the well-conditioned panels barely moved: joint MAE across all 30
-architecture cells went from 0.0122 to 0.0123.
+[External runs](#external-runs): HAPNEST and GCTB still need inputs or binaries
+this host does not have, as declared there.
 
-[External runs](#external-runs): `bivariate_demo` is now regenerated from a
-committed generator and moved with the rest; HAPNEST and SBayesS still need
-inputs this host does not have, as declared there.
-
-Simulation backend: msprime 1.4.2 (default where installed). The fallback
+Simulation backend: msprime (`msprime-v1`). The fallback
 bundled Numba coalescent (`benchmarks/_coalescent.py`) is available when
 msprime is absent; it draws different events from the same model, so cached
 segments are tagged per backend and never mix.
 
-**Table 1. Environment recorded by the historical `run_all.log`.**
+**Table 1. Environment recorded by the current log and provenance sidecars.**
 
 | Component | Value |
 |---|---|
 | Python | 3.14.6 |
-| bipred | 0.3.0 (`7f70065`, dirty) |
-| ldpred3 | 0.4.5 |
+| bipred | 0.3.5 (`5c06ec7`, clean) |
+| ldpred3 | 0.4.5 (installed-tree SHA-256 `76e2c2c2dacf...`) |
 | NumPy / Numba | 2.4.6 / 0.66.0 |
-| msprime / Matplotlib | 1.4.2 / 3.11.1 |
-| Platform | Darwin 25.5.0, arm64 |
+| Simulator | msprime (`msprime-v1`) |
+| Platform | Apple M2 Pro (10 cores), macOS 26.5.2, arm64 |
 | Numerical threads | 1 |
 
 All timing runs used one OpenBLAS, OMP, MKL, Numba, and NumExpr thread. Times
@@ -91,7 +72,7 @@ Other limits are equally important:
 - the environmental-overlap run is an intentionally out-of-model stress test;
 - Monte Carlo sizes range from 5 to 20 replicates, not publication-scale
   calibration studies; and
-- external HAPNEST, cached-LD, and GCTB runs were not available.
+- external HAPNEST and GCTB runs were not available.
 
 ## 1. Genetic correlation across architectures
 
@@ -115,7 +96,9 @@ in 26 of 30 cells and lower SD in all 30. It does not win everywhere:
 high-correlation shrinkage is visible. In the infinitesimal target-0.95 cell,
 realized r_g was 0.9509, while the joint and LDSC means were 0.9001 and 0.9474.
 This is evidence for the tested model and geometry, not a universal ranking over
-real GWAS.
+real GWAS. The log records 26 implausible-fit warnings among the 300 joint
+fits; Table 2 retains them, so the paired-error ranking does not override the
+sampler's h2/polygenicity diagnostics.
 
 **Figure 1. Genetic-correlation estimates across architectures.**
 
@@ -153,11 +136,11 @@ The comparison uses five target points and six replicates at symmetric
 
 | Estimator | Symmetric MAE | Asymmetric MAE | Mean 5k fit time, symmetric |
 |---|---:|---:|---:|
-| LDSC | 0.0542 | 0.0608 | 0.028 s |
-| two univariate fits, `uni_gv` | 0.0190 | 0.0422 | 0.968 s |
-| two univariate fits, `uni_r2` | 0.0184 | 0.0420 | 0.968 s |
-| joint default | **0.0086** | **0.0174** | 0.133 s |
-| joint cross-sweep sensitivity | 0.0108 | 0.0242 | 0.133 s |
+| LDSC | 0.0542 | 0.0608 | 0.033 s |
+| two univariate fits, `uni_gv` | 0.0190 | 0.0422 | 0.942 s |
+| two univariate fits, `uni_r2` | 0.0184 | 0.0420 | 0.942 s |
+| joint default | **0.0086** | **0.0174** | 0.136 s |
+| joint cross-sweep sensitivity | 0.0108 | 0.0242 | 0.135 s |
 
 No estimator failed in these cells. The cross-sweep
 `rg_decorrelated=True` estimator did not improve on the default, including in
@@ -168,9 +151,9 @@ replacement.
 
 | Variants | Blocks | LDSC | Two univariate fits | Joint default | Joint cross-sweep |
 |---:|---:|---:|---:|---:|---:|
-| 5,000 | 25 | 0.021 s | 0.903 s | 0.129 s | 0.129 s |
-| 20,000 | 100 | 0.296 s | 3.350 s | 0.518 s | 0.521 s |
-| 50,000 | 250 | 1.839 s | 9.060 s | 1.359 s | 1.375 s |
+| 5,000 | 25 | 0.024 s | 0.887 s | 0.132 s | 0.130 s |
+| 20,000 | 100 | 0.329 s | 3.341 s | 0.507 s | 0.511 s |
+| 50,000 | 250 | 2.033 s | 9.177 s | 1.386 s | 1.444 s |
 
 `uni_gv` and `uni_r2` reuse the same two univariate fits, so their recorded cost
 is identical.
@@ -187,19 +170,17 @@ Each size runs in a fresh subprocess and reports one realized draw.
 
 | Variants | LDSC time | LDpred3 time | Peak RSS | Realized r_g | LDSC absolute error | LDpred3 absolute error |
 |---:|---:|---:|---:|---:|---:|---:|
-| 5,000 | 0.025 s | 0.116 s | 0.228 GB | 0.511 | 0.0399 | 0.0172 |
-| 10,000 | 0.070 s | 0.235 s | 0.229 GB | 0.519 | 0.0590 | 0.0024 |
-| 20,000 | 0.316 s | 0.466 s | 0.359 GB | 0.513 | 0.0332 | 0.0005 |
-| 40,000 | 1.256 s | 0.956 s | 0.416 GB | 0.517 | 0.0138 | 0.0016 |
-| 80,000 | 4.425 s | 2.064 s | 0.633 GB | 0.519 | 0.0632 | 0.0322 |
+| 5,000 | 0.027 s | 0.118 s | 0.207 GB | 0.511 | 0.0399 | 0.0172 |
+| 10,000 | 0.132 s | 0.256 s | 0.318 GB | 0.519 | 0.0590 | 0.0024 |
+| 20,000 | 0.307 s | 0.463 s | 0.328 GB | 0.513 | 0.0332 | 0.0005 |
+| 40,000 | 1.300 s | 1.056 s | 0.421 GB | 0.518 | 0.0138 | 0.0016 |
+| 80,000 | 5.358 s | 2.053 s | 2.559 GB | 0.519 | 0.0632 | 0.0322 |
 
-Peak RSS grows sublinearly across this range (0.23 GB to 0.63 GB for a 16x
-variant count). LDSC time grows faster than the joint fit's and overtakes it
-between 20k and 40k variants. One earlier run produced 2.51 GB at 80k, whereas
-the committed row is 0.63 GB; single-run RSS is machine- and allocator-dependent
-rather than a fixed property of the method. This sweep
-measures the default dense D32 path, not million-variant LR8 production
-behavior.
+LDSC time overtakes the joint fit between 20k and 40k variants. Peak RSS is
+not smooth: it rises from 0.421 GB at 40k to 2.559 GB at 80k in this single
+subprocess draw. Treat that process-wide peak as machine- and
+allocator-dependent, not as a fixed per-variant memory law. This sweep measures
+the default dense D32 path, not million-variant LR8 production behavior.
 
 **Figure 4. Running time, memory, and single-draw recovery.**
 
@@ -224,8 +205,9 @@ The shared fraction is ordered but overestimates intermediate targets, while
 `rg_from_overlap` is attenuated. Absolute-count calibration is also
 power-dependent: `noise_inflation=True` moves relative polygenicity from
 1.174 to 1.062 at `N=20k`, but from 0.974 to 0.808 at `N=2.5k`.
-Univariate anchoring shows the same mixed pattern. These are diagnostics, not
-guaranteed corrections.
+Univariate anchoring shows the same mixed pattern. The log records one
+divergence warning in the retained-iterate calibration arm. These are
+diagnostics, not guaranteed corrections.
 
 Every sweep above holds the per-trait causal fraction at 0.1, so on its own it
 cannot say whether that overestimate is a property of the estimator or of that
@@ -309,24 +291,13 @@ and correlates their residual environments.
 | 0.5 | 0.0 | 0.487 | 0.0389 / 0.0620 | 0.0147 / 0.0082 |
 | 0.5 | 0.6 | 0.494 | 0.0377 / 0.0633 | 0.0242 / 0.0072 |
 
-**This table previously recorded the package's worst failure mode, and it was
-an artifact of in-fit LD quantization rather than of the model.** Through 0.2.1
-the joint estimator was unstable here — MAE 0.31 and up to 0.86 in the
-`rg_target=0.5` cells — and the instability was read as a genuine limit under
-shared environment. It is not. The fit-time `ld_int8` default used to quantize
-these float blocks to int8 internally, and re-running the current code with
-`ld_int8=True` reproduces the old row byte for byte (0.1733 / 0.0166 / 0.3101 /
-0.8343 / 0.8603). Consuming the caller's float32 LD instead leaves every cell
-between 0.0072 and 0.0242 — a 36x improvement in the worst one.
-
-The int8 resolution (~4e-3 per LD entry) is evidently enough to destabilize the
-fit where correlated environment already stresses the conditioning, even though
-it costs nothing measurable on the well-conditioned panels of Tables 2-7.
-Supplying the mechanistic `cross_corr` still helps slightly and no longer needs
-to rescue anything. A blanket robustness claim is still not made — this is one
-simulated stress test — but the specific failure this table documented is
-resolved, and the lesson is about quantizing LD inside a fit, not about
-environmental correlation.
+The old fit-time `ld_int8` default quantised the caller's float LD and produced
+MAE as high as 0.86. Consuming the supplied float32 blocks leaves the current
+cell means between 0.0072 and 0.0242; setting the mechanistic `cross_corr`
+reduces them further in all five cells. The current log nevertheless records
+three individual divergence warnings. This stress test supports removing
+in-fit quantisation; it does not establish blanket robustness to environmental
+overlap.
 
 ## 8. Joint-fit gain on an under-powered trait
 
@@ -350,30 +321,27 @@ every replicate at full precision.
 
 | Reference shrinkage | Architecture | Realized r_g | Alone | Joint | Gain | Estimated r_g | Joint fits with implausibility warning |
 |---:|---|---:|---:|---:|---:|---:|---:|
-| 0% | shared, target 0.0 | -0.015 | 0.685 | 0.689 | +0.0044 | -0.016 | 6 / 6 |
-| 0% | shared, target 0.3 | +0.282 | 0.681 | 0.691 | +0.0098 | +0.208 | 6 / 6 |
-| 0% | shared, target 0.6 | +0.585 | 0.677 | 0.649 | -0.0282 | +0.497 | 6 / 6 |
-| 0% | shared, target 0.9 | +0.895 | 0.674 | 0.650 | -0.0241 | +0.812 | 6 / 6 |
-| 0% | disjoint causal support | +0.017 | 0.644 | 0.643 | -0.0012 | +0.023 | 6 / 6 |
-| 5% | shared, target 0.0 | -0.015 | 0.684 | 0.694 | +0.0105 | -0.016 | 3 / 6 |
-| 5% | shared, target 0.3 | +0.282 | 0.681 | 0.700 | +0.0180 | +0.254 | 2 / 6 |
-| 5% | shared, target 0.6 | +0.585 | 0.675 | 0.730 | +0.0550 | +0.522 | 1 / 6 |
-| 5% | shared, target 0.9 | +0.895 | 0.673 | 0.796 | +0.1232 | +0.774 | 2 / 6 |
-| 5% | disjoint causal support | +0.017 | 0.644 | 0.644 | -0.0004 | +0.031 | 3 / 6 |
+| 0% | shared, target 0.0 | +0.003 | 0.577 | 0.582 | +0.0048 | +0.001 | 5 / 6 |
+| 0% | shared, target 0.3 | +0.306 | 0.576 | 0.591 | +0.0143 | +0.220 | 4 / 6 |
+| 0% | shared, target 0.6 | +0.606 | 0.575 | 0.577 | +0.0025 | +0.439 | 4 / 6 |
+| 0% | shared, target 0.9 | +0.902 | 0.566 | 0.699 | +0.1330 | +0.818 | 6 / 6 |
+| 0% | disjoint causal support | -0.015 | 0.584 | 0.582 | -0.0016 | +0.001 | 6 / 6 |
+| 5% | shared, target 0.0 | +0.003 | 0.583 | 0.596 | +0.0129 | +0.000 | 0 / 6 |
+| 5% | shared, target 0.3 | +0.306 | 0.581 | 0.609 | +0.0281 | +0.295 | 0 / 6 |
+| 5% | shared, target 0.6 | +0.606 | 0.577 | 0.660 | +0.0824 | +0.546 | 0 / 6 |
+| 5% | shared, target 0.9 | +0.902 | 0.570 | 0.771 | +0.2004 | +0.767 | 0 / 6 |
+| 5% | disjoint causal support | -0.015 | 0.586 | 0.583 | -0.0032 | -0.003 | 0 / 6 |
 
-Every raw-reference fit triggers the sampler's implausibility diagnostic, and
-the high-correlation rows lose prediction accuracy jointly. The zero-shrinkage
-arm is therefore a failed stability control, not evidence about whether joint
-fitting helps. Five-percent shrinkage improves this fixture, but 11 of its 30
-fits still warn. Table 12 includes those warned fits in its means so the
-failure is visible; the positive pattern is conditional on this regularisation,
-panel size and simulation, not a general gain estimate.
+The raw-reference arm is an unstable control: 25 of 30 fits raise the
+implausibility warning and three raise a divergence warning. Its apparent gains
+are not interpretable as estimator performance. Five-percent shrinkage removes
+all warnings in this fixture; its shared-effect gain rises from +0.0129 at
+target 0 to +0.2004 at target 0.9. That pattern is conditional on this panel,
+regularisation, and simulation rather than a general gain estimate.
 
-The causal supports in the last row are exactly disjoint, but LD connects the
-two supports and their mean realized genetic correlation is +0.017. Its small
-negative mean gain is likewise not exactly zero. The former claims that this
-library fits best without shrinkage and that the disjoint arm proves “no harm”
-are not supported by the regenerated artifact.
+The last row has exactly disjoint causal supports, but LD gives it mean realized
+genetic correlation -0.015. Its small negative mean gain is likewise not
+exactly zero; the arm does not establish “no harm.”
 
 ## 9. Real GWAS: LDL x CAD
 
@@ -390,13 +358,9 @@ European LD reference (362,320 UK Biobank individuals, 1,054,330 variants, 625
 blocks). The consortia are believed to be close to disjoint; the cross-trait
 LDSC intercept of +0.02 is consistent with small correlated sampling error but
 does not identify cohort overlap. Reproduce with
-[`real_ldl_cad.py`](real_ldl_cad.py) (about 9 GB of inputs, 22 minutes); it is
+[`real_ldl_cad.py`](real_ldl_cad.py) (about 9 GB of inputs; 22.8 minutes on the
+recorded host); it is
 excluded from `run_all.sh` for that reason.
-
-**Historical-screen note.** The three rows below were produced before the
-screen's always-run partition correction. They document the failure that
-motivated the current implementation, but only a fresh run can measure the
-current screen on these files.
 
 CAD's sample size is calibrated rather than taken as published, which is the
 first thing the benchmark does. `bipred.qc.implied_sample_size` returns 92,966
@@ -435,18 +399,18 @@ its `median_info` column was doing the work, with 27.3% of variants below 0.9 --
 while LDL's goes from 255 to 271, untouched. LDL's problem is not a property of
 any single variant, so no filter that judges variants one at a time can see it.
 
-**The historical LD-consistency screen resolves the saved fit diagnostics.**
-The DENTIST-inspired screen removes a further 4.7% (LDL 30,481, CAD 12,541):
-the cancellation ratio drops from 271 to 0.7, the largest effect falls
-139-fold to 0.0239, saved trace drift is 0.92, and the divergence warning does
-not fire. This is not the complete published DENTIST procedure, and one
-historical case does not calibrate the current screen. The joint `rg` of
+**The LD-consistency screen resolves the fit diagnostics in this case.** The
+DENTIST-inspired screen removes a further 4.7% of the shared variants: the
+cancellation ratio drops from 271 to 0.7, the largest effect falls 139-fold to
+0.0239, trace drift is 0.92, and the divergence warning does not fire. This is
+not the complete published DENTIST procedure, and one case does not calibrate
+the screen. The joint `rg` of
 +0.2856 and LDSC's +0.1851 happen to fall inside that rough external interval;
 that agreement is context, not validation.
 
 Note that LDSC's own numbers move as the data is cleaned -- its LDL `h2` halves
 from 0.2308 to 0.1155 -- so the target is not fixed. Both estimators end within
-the rough historical range; they disagree by 1.9 standard errors. That is a
+the rough external range; they disagree by 1.9 standard errors. That is a
 descriptive comparison between estimators, not evidence that either has passed
 or failed.
 
@@ -457,19 +421,40 @@ also not a reconciliation between the two estimators: LDSC rescales with `n_eff`
 exactly as bipred does, so correcting it moved LDSC's CAD `h2` from 0.0687 to
 0.1205 at the same time, and bipred's 0.0706 stays at 0.59 of it.
 
+The timed run used four screening rounds and one numerical thread. Table 14
+partitions its leaf timings into non-overlapping steps; the 0.129 s remainder is
+driver overhead. The three stage fits took 281.707 s (harmonised), 271.404 s
+(per-variant QC), and 262.562 s (screened).
+
+**Table 14. Wall time of the real LDL-CAD benchmark.**
+
+| Step | Seconds | Share of total |
+|---|---:|---:|
+| Source and input checks | 1.164 | 0.09% |
+| Load LD reference and harmonise GWAS | 21.504 | 1.57% |
+| Shared-data preparation | 0.985 | 0.07% |
+| LD-consistency screening, including retile | 526.031 | 38.52% |
+| Fit-stage retile and standardisation | 6.623 | 0.48% |
+| LD-score calculation across three stages | 280.132 | 20.51% |
+| LDSC regression across three stages | 89.018 | 6.52% |
+| Bivariate fitting across three stages | 425.280 | 31.14% |
+| Fit diagnostics across three stages | 14.619 | 1.07% |
+| Write and regression-check outputs | 0.207 | 0.02% |
+| Driver overhead | 0.129 | 0.01% |
+| **Total** | **1365.693** | **100.00%** |
+
+The exact recorded total is **1365.693 s** (22 min 45.693 s). Screening and
+bivariate fitting account for 69.66% of it; LD-score calculation adds 20.51%.
+
 ## 10. QC sensitivity: a 24-arm factorial
 
-Section 9's historical artifact showed improved diagnostics after screening one
-real pair. This section applies that same historical screen under every
+Section 9 showed improved diagnostics after screening one real pair. This
+section applies the same screen under every
 combination of three factors:
 strict per-variant thresholds, long-range LD exclusion, and the screen.
 Reproduce with
-[`qc_factorial.py`](qc_factorial.py) (about 75 minutes; not in `run_all.sh`).
-
-**Historical-screen note.** These 24 rows use the same pre-correction screen
-semantics as Table 13 and have not been regenerated. The current script also
-rejects an invalid LDSC intercept instead of clipping it into the joint fit's
-`cross_corr` interval.
+[`qc_factorial.py`](qc_factorial.py) (about 126 minutes on this host; not in
+`run_all.sh`).
 
 The pairs span the sign range: LDL x CAD (positive, disjoint consortia), height
 x LDL (near null, cross-domain), and HDL x TG (strongly negative, complete
@@ -484,7 +469,7 @@ correlated sampling noise, although confounding can also contribute. Thus the
 correction varies with the variant set rather than being a fixed factorial
 input. All saved values were already inside `(-1, 1)`.
 
-**Table 14. Divergence-warning count by factor, 24 historical arms.**
+**Table 15. Divergence-warning count by factor, 24 arms.**
 
 | Factor | off | on |
 |---|---:|---:|
@@ -492,7 +477,7 @@ input. All saved values were already inside `(-1, 1)`.
 | long-range LD exclusion | 6 / 12 | 6 / 12 |
 | **LD-consistency screen** | **12 / 12 triggered** | **0 / 12 triggered** |
 
-The historical screen separates the divergence-warning outcome in these files.
+The screen separates the divergence-warning outcome in these files.
 Equal marginal counts for the other factors mean only that they did not change
 that binary diagnostic;
 they do not establish that those choices are inert. Among screened arms,
@@ -500,7 +485,7 @@ long-range-LD exclusion shifts `rg` by 0.0001--0.0067 for LDL x CAD, about
 0.012 for height x LDL, and 0.021--0.023 for HDL x TG. Treat exclusion as an
 estimator-specific sensitivity, especially where a major locus could dominate.
 
-**Table 15. No-divergence-warning arm means on the historical screen.**
+**Table 16. No-divergence-warning arm means with the screen.**
 
 | Pair | LDSC r_g | Joint r_g | LDSC h2 (1, 2) | Joint h2 (1, 2) |
 |---|---:|---:|---:|---:|
@@ -526,7 +511,7 @@ pair has a different variant intersection, filtered set and arm-specific
 `cross_corr`. This is sensitivity to the combined pair design and estimator,
 not evidence that partner conditioning alone changed heritability.
 
-**Table 16. Historical HDL x TG diagnostics by screening choice.**
+**Table 17. HDL x TG diagnostics by screening choice.**
 
 | Arm | Variants | Joint r_g | Cancellation | Divergence warning |
 |---|---:|---:|---:|:---:|
@@ -540,25 +525,23 @@ not evidence that partner conditioning alone changed heritability.
 | **screen, strict -LR** | 788,382 | **-0.5466** | 0.5 | no |
 
 Cross-trait LDSC on this pair reports -0.64 to -0.73; roughly -0.5 to -0.6 is
-useful historical context, not ground truth. All four screened estimates fall
+useful external context, not ground truth. All four screened estimates fall
 inside that rough range;
 only one of four unscreened estimates does. That agreement is reassuring but
 cannot certify convergence: external ranges are broad, LDSC is not a gold
 standard, and fit diagnostics carry different information.
 
-**Within these pairs, the divergence warning follows the file.** All three GLGC
-lipid files triggered it in every unscreened pairing, while height and CAD did
-not. On height x LDL one trait had cancellation ratios of 150--212 while the
-other retained ratios of 0.3--0.5 and h2 near 0.41. The latter is numerically
-stable and close to rough external context near 0.45; neither observation
-establishes correctness. A fit-level diagnostic would have missed the first
-trait, and the per-trait ratios are what caught it. Because every pair contains
-a GLGC file, this design cannot estimate a general bivariate-versus-univariate
-tolerance difference.
+**Within these pairs, the warning follows the unstable trait.** Every
+unscreened arm warns and every screened arm does not. On height x LDL, LDL has
+cancellation ratios of 150--212 while height retains ratios of 0.3--0.5 and h2
+near 0.41. The latter is numerically stable and close to rough external context
+near 0.45; neither observation establishes correctness. Because every pair
+contains a GLGC file, this design cannot estimate a general
+bivariate-versus-univariate tolerance difference.
 
 **Overlap readouts are least stable where the overlap is weakest.** Across the
 four screened LDL x CAD arms `frac_shared` ranges 0.33 to 0.59 and `rho_beta`
-0.56 to 0.92 while `rg` moves by 0.004 -- the data constrains the product much
+0.56 to 0.92 while `rg` spans only 0.0067 -- the data constrains the product much
 better than the decomposition. On HDL x TG, where the two lipid fractions are
 measured in the same individuals, `frac_shared` is 0.94 to 0.95 and
 `rg_from_overlap` (-0.53 to -0.56) agrees with `rg` (-0.52 to -0.55): the

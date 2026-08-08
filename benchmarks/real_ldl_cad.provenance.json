@@ -1,0 +1,44 @@
+{
+  "artifact": "real_ldl_cad.csv",
+  "created_utc": "2026-08-08T15:57:39.721232+00:00",
+  "dependency_sources": {
+    "ldpred3": {
+      "expected_revision": "5d86ac9d97e42c57fa31d84ff093d3bf637dc0e6",
+      "identity": "installed-tree",
+      "location": "/private/tmp/bipred-bench-pdlWFA/ldpred3-src/ldpred3",
+      "revision": null,
+      "source_clean": null,
+      "source_tree_sha256": "76e2c2c2dacf8aa717e9fdad1358a479a9bf844f6651a8563c2fc21e780df260",
+      "version": "0.4.5"
+    }
+  },
+  "inputs_sha256": {
+    "ldref-hm3/ldpred3_ldref_hm3.npz": "06b5bc3a8887d231ef27c741a0c433ccef03b426a6ddbbc3d5de0ba9adb8b309",
+    "sumstats/cad.add.160614.website.txt": "8b677378270772fbd49c140b75acddb0817b1f321d0cdaca48e91c88758b6f4b",
+    "sumstats/jointGwasMc_LDL.txt.gz": "ddf75ed591ffcce8c3e81ae2f4c77f4428cd7dbf4628b24467aa8cf6e85e3dce"
+  },
+  "packages": {
+    "bipred": "0.3.5",
+    "ldpred3": "0.4.5",
+    "numba": "0.66.0",
+    "numpy": "2.4.6"
+  },
+  "platform": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
+  "python": "3.14.6",
+  "python_executable": "/Users/au507860/anaconda3/envs/ldpred3/bin/python",
+  "run_controls": {
+    "cpu_count": 10,
+    "rounds": 4,
+    "thread_environment": {
+      "MKL_NUM_THREADS": "1",
+      "NUMBA_NUM_THREADS": "1",
+      "NUMEXPR_NUM_THREADS": "1",
+      "OMP_NUM_THREADS": "1",
+      "OPENBLAS_NUM_THREADS": "1"
+    },
+    "timing_csv": "real_ldl_cad_timing.csv"
+  },
+  "schema_version": 2,
+  "source_clean": true,
+  "source_revision": "5c06ec721f4e68ae672abe7ad1b864b51c3433a3"
+}
