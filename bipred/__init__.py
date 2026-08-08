@@ -47,7 +47,7 @@ from ldpred3's ``[fast]`` extra.
 
 import importlib
 
-__version__ = "0.3.2"
+__version__ = "0.3.3"
 
 # public name -> submodule it lives in. No module name may equal one of its own
 # exported names: importing a submodule binds it on this package, and the cache
@@ -62,7 +62,8 @@ _EXPORTS = {
                    "BivariateBasicSplitRHat"],
     "ldsc": ["ldsc_rg", "LDSCRgResult", "estimate_sample_overlap"],
     "regional": ["regional_rg", "RegionalRgResult"],
-    "qc": ["dentist", "dentist_statistic"],
+    "qc": ["dentist", "dentist_statistic", "in_long_range_ld",
+           "implied_sample_size", "sd_consistency"],
 }
 
 # name -> module, for the lazy loader

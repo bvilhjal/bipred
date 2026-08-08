@@ -303,8 +303,8 @@ def test_results_real_data_table_matches_its_csv():
     def number(cell):
         return float(cell.replace("**", "").replace(",", "").strip())
 
-    columns = [None, "m", "ldsc_rg", "rg", "h2_ldl", "cancellation_ldl",
-               "max_abs_beta_ldl", "trace_drift_ldl", None]
+    columns = [None, "m", "ldsc_rg", "rg", "h2_ldl", "h2_cad",
+               "cancellation_ldl", "max_abs_beta_ldl", "trace_drift_ldl", None]
     for printed, record in zip(table, rows):
         assert len(printed) == len(columns)
         for cell, column in zip(printed, columns):

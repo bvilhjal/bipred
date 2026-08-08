@@ -1545,19 +1545,19 @@ def _diverged_args(**over):
     """Arguments to ``_warn_if_fit_diverged`` describing a healthy fit.
 
     The defaults are the real post-QC LDL x CAD numbers: sum(beta^2)/h2 of
-    0.31, a largest posterior mean 4.3 slab SDs out, and a flat trace. Each
+    0.65, a largest posterior mean 4.1 slab SDs out, and a flat trace. Each
     test perturbs one of them to the value the *diverged* fit had.
     """
     m = bivariate._DIAGNOSTIC_MIN_VARIANTS
     beta1 = np.zeros(m)
-    beta1[0] = 0.025                              # 4.3 slab SDs at sigma below
-    beta1[1:] = np.sqrt(max(0.027 - 0.025 ** 2, 0.0) / (m - 1))
+    beta1[0] = 0.0239                             # 4.1 slab SDs at sigma below
+    beta1[1:] = np.sqrt(max(0.0573 - 0.0239 ** 2, 0.0) / (m - 1))
     args = dict(beta1=beta1, beta2=np.zeros(m),
-                raw_h2=(0.0861, 0.0405),
-                sigma_diag=(0.025 / 4.3) ** 2,    # placeholder, replaced below
-                genetic_samples=np.tile([0.0988, 0.01, 0.0405], (80, 1)),
+                raw_h2=(0.0882, 0.0706),
+                sigma_diag=(0.0239 / 4.1) ** 2,   # placeholder, replaced below
+                genetic_samples=np.tile([0.0882, 0.01, 0.0706], (80, 1)),
                 m=m)
-    args["sigma_diag"] = ((0.025 / 4.3) ** 2, 1.0)
+    args["sigma_diag"] = ((0.0239 / 4.1) ** 2, 1.0)
     args.update(over)
     return args
 
@@ -1571,31 +1571,31 @@ def test_no_divergence_warning_on_a_healthy_fit():
 def test_divergence_warning_catches_cancelling_effects():
     """The failure this exists for: h2 and p both looked fine.
 
-    The real fit reported h2 0.6395 and a causal fraction of 0.00075 -- inside
+    The real fit reported h2 0.6732 and a causal fraction of 0.00076 -- inside
     every bound, so ``_warn_if_implausible_fit`` stayed silent -- while
-    sum(beta^2) was 157.5, a ratio of 246.
+    sum(beta^2) was 171.8, a ratio of 255.
     """
     m = bivariate._DIAGNOSTIC_MIN_VARIANTS
-    beta1 = np.full(m, np.sqrt(157.5 / m))
+    beta1 = np.full(m, np.sqrt(171.8 / m))
     with pytest.warns(RuntimeWarning, match="cancelling through LD"):
         bivariate._warn_if_fit_diverged(**_diverged_args(
-            beta1=beta1, raw_h2=(0.6395, 0.0405)))
+            beta1=beta1, raw_h2=(0.6732, 0.0706)))
 
 
 def test_divergence_warning_catches_effects_beyond_the_fitted_slab():
-    """A posterior mean 110 slab SDs out contradicts the fit's own prior."""
+    """A posterior mean 103 slab SDs out contradicts the fit's own prior."""
     beta1 = np.zeros(bivariate._DIAGNOSTIC_MIN_VARIANTS)
-    beta1[0] = 3.329
+    beta1[0] = 3.1929
     with pytest.warns(RuntimeWarning, match="times the per-causal effect SD"):
         bivariate._warn_if_fit_diverged(**_diverged_args(
-            beta1=beta1, raw_h2=(1e6, 0.0405),    # keep the ratio arm quiet
-            sigma_diag=((3.329 / 110.0) ** 2, 1.0)))
+            beta1=beta1, raw_h2=(1e6, 0.0706),    # keep the ratio arm quiet
+            sigma_diag=((3.1929 / 103.0) ** 2, 1.0)))
 
 
 def test_divergence_warning_catches_a_trace_that_never_settled():
-    """Post-burn-in drift: the real fit's gvar1 rose 0.486 -> 0.779."""
+    """Post-burn-in drift: the real fit's gvar1 rose by a factor of 1.63."""
     rising = np.column_stack([np.linspace(0.42, 0.82, 80),
-                              np.full(80, 0.01), np.full(80, 0.0405)])
+                              np.full(80, 0.01), np.full(80, 0.0706)])
     with pytest.warns(RuntimeWarning, match="had not settled"):
         bivariate._warn_if_fit_diverged(**_diverged_args(
             genetic_samples=rising))
@@ -1607,6 +1607,6 @@ def test_divergence_warning_is_silent_on_small_panels():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         bivariate._warn_if_fit_diverged(
-            beta1=np.full(m, np.sqrt(157.5 / m)), beta2=np.zeros(m),
-            raw_h2=(0.6395, 0.0405), sigma_diag=(1e-6, 1.0),
+            beta1=np.full(m, np.sqrt(171.8 / m)), beta2=np.zeros(m),
+            raw_h2=(0.6732, 0.0706), sigma_diag=(1e-6, 1.0),
             genetic_samples=None, m=m)

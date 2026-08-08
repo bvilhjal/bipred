@@ -365,12 +365,20 @@ summary statistics that *disagree* with the LD reference, which a simulation
 drawing both from one model cannot produce.
 
 LDL from GLGC 2013 (Willer et al., per-variant N) and CAD from
-CARDIoGRAMplusC4D 2015 (Nikpay et al., GCST003116, effective N 162,973), on the
-bigsnpr HapMap3 European LD reference (362,320 UK Biobank individuals,
-1,054,330 variants, 625 blocks). The consortia are close to disjoint, and the
-cross-trait LDSC intercept of +0.02 confirms that rather than assuming it.
-Reproduce with [`real_ldl_cad.py`](real_ldl_cad.py) (about 9 GB of inputs, 22
-minutes); it is excluded from `run_all.sh` for that reason.
+CARDIoGRAMplusC4D 2015 (Nikpay et al., GCST003116), on the bigsnpr HapMap3
+European LD reference (362,320 UK Biobank individuals, 1,054,330 variants, 625
+blocks). The consortia are close to disjoint, and the cross-trait LDSC
+intercept of +0.02 confirms that rather than assuming it. Reproduce with
+[`real_ldl_cad.py`](real_ldl_cad.py) (about 9 GB of inputs, 22 minutes); it is
+excluded from `run_all.sh` for that reason.
+
+CAD's sample size is calibrated rather than taken as published, which is the
+first thing the benchmark does. `bipred.qc.implied_sample_size` returns 92,966
+against the reported 162,973, a ratio of 0.570; both genomic control on the SE
+column and the pooled `4/(1/n_case + 1/n_ctrl)` formula push in that direction
+and neither is separable from the file. Since `n_eff` scales every standardized
+effect, the reported figure understated CAD's `h2` by that factor. Every number
+below uses the implied value for CAD, for both bipred and LDSC.
 
 Two anchors make this checkable without a simulated truth: cross-trait LDSC on
 the identical data, and the published LDL-CAD genetic correlation of roughly
@@ -378,45 +386,131 @@ the identical data, and the published LDL-CAD genetic correlation of roughly
 
 **Table 13. The same analysis at three levels of cleaning.**
 
-| Stage | Variants | LDSC r_g | Joint r_g | h2 LDL | sum(b^2)/h2 LDL | max abs b | Trace drift | Warned |
-|---|---:|---:|---:|---:|---:|---:|---:|:---:|
-| harmonised only | 924,254 | +0.2238 | +0.0675 | 0.6395 | 258.0 | 3.3286 | 1.60 | yes |
-| + per-variant QC | 887,361 | +0.1973 | +0.1244 | 0.5121 | 263.7 | 3.1087 | 1.79 | yes |
-| + LD-consistency screen | 845,623 | +0.1851 | **+0.2796** | **0.0875** | **0.6** | **0.0265** | **0.92** | no |
+| Stage | Variants | LDSC r_g | Joint r_g | h2 LDL | h2 CAD | sum(b^2)/h2 LDL | max abs b LDL | Trace drift | Warned |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|:---:|
+| harmonised only | 924,254 | +0.2238 | +0.0558 | 0.6732 | 0.1713 | 255.2 | 3.1929 | 1.63 | yes |
+| + per-variant QC | 887,361 | +0.1973 | +0.1390 | 0.5688 | 0.0594 | 271.0 | 3.3215 | 1.78 | yes |
+| + LD-consistency screen | 845,623 | +0.1851 | **+0.2856** | **0.0882** | **0.0706** | **0.7** | **0.0239** | **0.92** | no |
 
 **Harmonisation alone produces a silently diverged fit.** Stage one reports an
-`h2` of 0.64 and a causal fraction of 0.00075, both inside every bound, and
+`h2` of 0.67 and a causal fraction of 0.00076, both inside every bound, and
 under 0.3.0 returned no warning at all. It had diverged: posterior means reach
-3.33 against the 0.030 per-causal effect SD the fit itself inferred, the sum of
-squared effects is 258 times the genetic variance, and that variance is still
+3.19 against the 0.031 per-causal effect SD the fit itself inferred, the sum of
+squared effects is 255 times the genetic variance, and that variance is still
 climbing at the last iteration. The runaway effects sit on variants in
 near-perfect LD and cancel inside the quadratic form, which is precisely why
 `h2` looks ordinary while the fit is worthless.
 
 **Per-variant filters repair one trait and not the other.** MAF, imputation
 quality, a chi-square cap, allele-frequency concordance and MHC exclusion
-remove 4.0% of variants. CAD's cancellation ratio falls from 96.6 to 3.3 --
+remove 4.0% of variants. CAD's cancellation ratio falls from 91.2 to 4.9 --
 its `median_info` column was doing the work, with 27.3% of variants below 0.9 --
-while LDL's goes from 258 to 264, untouched. LDL's problem is not a property of
+while LDL's goes from 255 to 271, untouched. LDL's problem is not a property of
 any single variant, so no filter that judges variants one at a time can see it.
 
 **The LD-consistency screen repairs it.** `bipred.qc.dentist` removes a further
 4.7% (LDL 30,481, CAD 12,541) and every diagnostic resolves at once: the
-cancellation ratio drops from 264 to 0.6, the largest effect falls 117-fold to
-0.0265, the variance trace settles, and the divergence warning stops firing.
-The joint `rg` of +0.2796 sits inside the published range, as does LDSC's
+cancellation ratio drops from 271 to 0.7, the largest effect falls 139-fold to
+0.0239, the variance trace settles, and the divergence warning stops firing.
+The joint `rg` of +0.2856 sits inside the published range, as does LDSC's
 +0.1851 at 3.5 standard errors from zero.
 
 Note that LDSC's own numbers move as the data is cleaned -- its LDL `h2` halves
 from 0.2308 to 0.1155 -- so the target is not fixed. Both estimators end within
-the literature; they disagree by 1.8 standard errors, which is a real question
+the literature; they disagree by 1.9 standard errors, which is a real question
 about the two estimators and not evidence that either has failed.
 
-Two caveats on the CAD side. Its SE column is genomic-control corrected, which
-deflates z-scores and biases its `h2` downward, and a case/control trait
-standardised against an effective N gives an observed-scale `h2` at the study's
-case fraction. The reported 0.0401 is therefore conservative and is not a
-liability-scale heritability.
+The `h2` figures for CAD are observed-scale at the study's case fraction, not
+liability-scale, and the genomic-control correction on the SE column biases them
+downward beyond what the sample-size calibration recovers. The calibration is
+also not a reconciliation between the two estimators: LDSC rescales with `n_eff`
+exactly as bipred does, so correcting it moved LDSC's CAD `h2` from 0.0687 to
+0.1205 at the same time, and bipred's 0.0706 stays at 0.59 of it.
+
+## 10. Which QC steps matter: a 24-arm factorial
+
+Section 9 showed that an LD-consistency screen rescued one real fit. This
+section asks which QC steps are load-bearing in general, by fitting three trait
+pairs under every combination of three factors: strict per-variant thresholds,
+long-range LD exclusion, and the screen. Reproduce with
+[`qc_factorial.py`](qc_factorial.py) (about 75 minutes; not in `run_all.sh`).
+
+The pairs span the sign range so that a step which quietly costs signal has
+somewhere to show: LDL x CAD (positive, disjoint consortia), height x LDL (a
+true null, cross-domain), HDL x TG (strongly negative, complete sample
+overlap). Every arm records bipred and cross-trait LDSC on identical variants
+and identical sample sizes.
+
+**Table 14. Divergence rate by factor, 24 arms.**
+
+| Factor | off | on |
+|---|---:|---:|
+| strict per-variant thresholds | 6 / 12 | 6 / 12 |
+| long-range LD exclusion | 6 / 12 | 6 / 12 |
+| **LD-consistency screen** | **12 / 12 diverged** | **0 / 12 diverged** |
+
+One factor separates the outcome completely and the other two do nothing.
+
+**Table 15. Converged-arm means, bipred against LDSC on the same data.**
+
+| Pair | LDSC r_g | Joint r_g | LDSC h2 (1, 2) | Joint h2 (1, 2) |
+|---|---:|---:|---:|---:|
+| LDL x CAD | +0.189 | **+0.262** | 0.107, 0.112 | 0.079, 0.067 |
+| height x LDL | -0.095 | **-0.040** | 0.264, 0.118 | **0.415**, 0.095 |
+| HDL x TG | -0.692 | **-0.534** | 0.126, 0.119 | 0.100, 0.090 |
+
+Genetic correlation agrees to about one LDSC standard error on the two pairs
+with real signal, and the joint estimate shrinks toward zero on the null --
+which is the behaviour that makes the null test pass and the same behaviour
+that under-reports a weak correlation.
+
+**Heritability disagrees, and not in one direction.** The joint fit is below
+LDSC for LDL and CAD and 57% *above* it for height, where 0.415 sits against a
+published SNP heritability near 0.45 and LDSC's 0.264 looks low. An earlier
+draft of this record claimed a systematic downward bias in the joint estimate;
+height refutes that, and no single mechanism explains both directions.
+
+A trait's h2 also depends on its partner: LDL is 0.079 beside CAD and 0.095
+beside height, on identical summary statistics. LDSC shows the same direction
+more weakly (0.107 against 0.118). Heritability is a property of a trait, so
+this is a property of the joint model rather than of the data.
+
+**Table 16. HDL x TG, where the diverged fit looks better than the correct one.**
+
+| Arm | Variants | Joint r_g | Cancellation | Warned |
+|---|---:|---:|---:|:---:|
+| no screen | 917,879 | -0.5687 | 246 | yes |
+| no screen, -LR | 892,062 | -0.6544 | 256 | yes |
+| no screen, strict | 886,649 | -0.6248 | 238 | yes |
+| no screen, strict -LR | 861,745 | -0.6393 | 254 | yes |
+| **screen** | 840,209 | **-0.5212** | 0.5 | no |
+| **screen, -LR** | 816,796 | **-0.5444** | 0.5 | no |
+| **screen, strict** | 811,011 | **-0.5256** | 0.5 | no |
+| **screen, strict -LR** | 788,382 | **-0.5466** | 0.5 | no |
+
+Cross-trait LDSC on this pair reports -0.64 to -0.73 and the published value is
+-0.5 to -0.6. The four diverged arms land closer to both than the four correct
+ones do. No comparison against an external reference distinguishes them; only
+the cancellation ratio does.
+
+**The failure follows the file.** Both GLGC lipid files diverged in every
+pairing, height and CAD in none. On height x LDL one trait diverged
+(cancellation 150-212) while the other was estimated correctly in the same fit
+(0.3-0.5, h2 0.41 against a literature ~0.45), so a fit-level diagnostic would
+have missed it and the per-trait ratios are what caught it.
+
+**Overlap readouts are least stable where the overlap is weakest.** Across the
+four converged LDL x CAD arms `frac_shared` ranges 0.33 to 0.59 and `rho_beta`
+0.56 to 0.92 while `rg` moves by 0.004 -- the data constrains the product much
+better than the decomposition. On HDL x TG, where the two lipid fractions are
+measured in the same individuals, `frac_shared` is 0.94 to 0.95 and
+`rg_from_overlap` (-0.53 to -0.56) agrees with `rg` (-0.52 to -0.55): the
+decomposition is well identified exactly where the overlap is genuine.
+
+Note also that `mixer_overlap.py` selects causal variants uniformly at random,
+which is the exchangeability the model assumes. Real causal variants are not
+uniformly distributed, so the simulated bias figures for `frac_shared` do not
+transfer to these fits.
 
 ## External runs
 

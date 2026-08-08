@@ -26,6 +26,9 @@ _EXPECTED = {
     "RegionalRgResult",
     "dentist",
     "dentist_statistic",
+    "implied_sample_size",
+    "in_long_range_ld",
+    "sd_consistency",
 }
 
 

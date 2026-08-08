@@ -62,65 +62,110 @@ Use it when `rank ≪ k`.
 
 ## Quality control before fitting real data
 
-**A bivariate fit tolerates far less summary-statistic error than a univariate
-one does on the same panel.** This is the single most important practical
-difference between bipred and ldpred3, it is not intuitive, and it is easy to
-be caught by: data clean enough for LDpred is not automatically clean enough
-for bipred.
+Real summary statistics need a screening step that simulations never do, and
+skipping it does not degrade the answer gracefully — it produces a fit that has
+diverged while still reporting an `h2` and a causal fraction inside every
+bound. This section is the recommended procedure and the evidence for it, from
+a 24-arm factorial over three trait pairs in
+[`benchmarks/qc_factorial.py`](../benchmarks/qc_factorial.py).
 
-The evidence is a real LDL × CAD analysis on a UK Biobank HapMap3 reference,
-924,254 variants. On identical blocks and identical unfiltered summary
-statistics, ldpred3's univariate sampler returned `sum(beta^2)` of 0.22 and a
-largest effect of 0.082 — entirely healthy. The bivariate fit on the same input
-returned `sum(beta^2)` of **157.5** with a largest effect of **3.33**, against a
-per-causal effect SD of 0.030 that the fit had itself inferred. It reported
-`h2` 0.64 and a causal fraction of 0.00075, both inside every bound, and
-completed **without a warning** under 0.3.0.
+### The recommended procedure
 
-Do this before fitting, in order:
-
-1. **Harmonize strictly.** Match on rsID, require the reported allele pair to
-   equal the reference pair as a set, flip the sign of `beta` when the effect
+1. **Harmonize, then verify.** Match on rsID, require the reported allele pair
+   to equal the reference pair as a set, flip the sign of `beta` when the effect
    allele is the reference's other allele, and drop indels and strand-ambiguous
-   A/T and C/G pairs. Then *verify* it: correlate the aligned effect-allele
-   frequency against the reference's own. Near +1 means aligned, near −1 means
-   inverted. The flip *rate* cannot tell those apart — a legitimate
-   effect-allele convention can produce any rate at all.
-2. **Filter per variant.** Imputation quality (`INFO ≥ 0.9`), minor allele
-   frequency (`≥ 0.01`), a chi-square cap (`≤ 80`), and per-variant sample size
-   where a meta-analysis reports one. Exclude the MHC (chr6 25–34 Mb).
-3. **Screen for LD consistency** with [`bipred.qc.dentist`](../bipred/qc.py).
-   This is the step nothing else can substitute for: every filter in step 2
-   judges a variant in isolation, and none can see that a variant's effect
-   disagrees with the variants correlated with it.
-
-On that LDL × CAD analysis, steps 1–2 removed 4.0% of variants and repaired one
-trait while leaving the other untouched — CAD's cancellation ratio fell from
-91.9 to 3.3, LDL's went from 246 to 264. Step 3 removed a further 4.7% and
-repaired the fit outright:
-
-**Table 2. The same fit at three levels of cleaning.**
-
-| | harmonized only | + per-variant filters | + `qc.dentist` |
-|---|---:|---:|---:|
-| `rg` | +0.0675 | +0.1244 | **+0.2822** |
-| `h2` trait 1 | 0.6395 | 0.5121 | **0.0861** |
-| `sum(beta^2) / h2` | 246 | 264 | **0.7** |
-| largest \|effect\| | 3.329 | 3.109 | **0.025** |
-| genetic-variance trace | rising | rising | **settled** |
-| cross-trait LDSC `rg` | +0.2238 | +0.1973 | +0.1864 ± 0.052 |
+   A/T and C/G pairs. Then check it: correlate the aligned effect-allele
+   frequency against the reference's own. Near +1 is aligned, near −1 inverted.
+   The flip *rate* cannot distinguish those — a legitimate effect-allele
+   convention produces any rate at all (one real file flipped 69.7%).
+2. **Calibrate the effective sample size.** `n_eff` scales every standardized
+   effect, so getting it wrong rescales `h2` directly.
+   [`bipred.qc.implied_sample_size`](../bipred/qc.py) recovers the sample size
+   the data behaves as if it had. On four of five real GWAS it matched the
+   reported value within 1%; on CARDIoGRAMplusC4D CAD the ratio was **0.570**,
+   reported 162,973 against 92,966 implied, which understated that trait's `h2`
+   by the same factor (0.0401 to 0.0706). Two causes are indistinguishable from the file alone and
+   both apply there: genomic control inflating the standard errors, and the
+   pooled `4/(1/n_case + 1/n_ctrl)` formula, which overstates a meta-analysis
+   unless every cohort shares the same case/control ratio.
+3. **Filter per variant, at published thresholds.** Minor allele frequency
+   ≥ 0.01, allele-frequency concordance, imputation quality where the file
+   carries it, a chi-square cap, per-variant sample size, and
+   [`bipred.qc.sd_consistency`](../bipred/qc.py). Do not tighten these — see
+   below.
+4. **Screen for LD consistency** with [`bipred.qc.dentist`](../bipred/qc.py).
+   This is the step nothing else substitutes for.
 
 ```python
-from bipred.qc import dentist
+from bipred.qc import dentist, implied_sample_size
+
+sized = implied_sample_size(beta2, se2, ref_af, binary=True, reported_n=n2)
+if not sized["consistent"]:
+    n2 = n2 * sized["ratio"]          # fit what the data behaves like
 
 keep = dentist(blocks, beta_hat1 / se1) & dentist(blocks, beta_hat2 / se2)
 ```
 
-Run it once per trait against the blocks you will fit with, and intersect. Then
-subset the blocks and both traits to `keep`.
+Run the screen once per trait against the blocks you will fit with, on the
+largest variant set available, and intersect the masks. Screening the larger
+set is the better test — a variant's z-score is predicted from its neighbours,
+so more neighbours means a fairer test.
 
-Since 0.3.1 a fit that diverges this way raises a `RuntimeWarning` naming which
-check failed. **Do not interpret `h2` or `rg` from a fit that warns.**
+### What the factorial established
+
+Three trait pairs spanning the sign range — LDL × CAD (+0.26), height × LDL
+(≈ 0, a null), HDL × TG (−0.53) — each fitted under all eight combinations of
+strict per-variant thresholds, long-range LD exclusion, and the screen.
+
+**Table 2. Divergence rate across 24 arms.**
+
+| factor | off | on |
+|---|---:|---:|
+| strict per-variant thresholds | 6/12 | 6/12 |
+| long-range LD exclusion | 6/12 | 6/12 |
+| **LD-consistency screen** | **12/12 diverged** | **0/12 diverged** |
+
+Perfect separation on one factor and none on the other two. With the screen,
+`rg` is stable to ±0.004 across variant counts spanning 15%; without it, `rg`
+ranges over 0.094 on the same pair depending on arbitrary filter choices.
+
+**Tighter thresholds are worse than useless.** Raising the SD check to
+0.8×/+0.03 and the frequency-concordance bound to 0.10 removed a further
+142,282 variants — 22% of the genome across all filters — and moved LDL's
+cancellation ratio from 264.8 to 276.1. Below a 0.10 concordance bound the
+filter stops removing errors and starts removing ordinary panel difference:
+median discordance against a UK Biobank reference is 0.013 to 0.018 by
+construction, so a 0.02 bound would discard a third of the genome.
+
+**The long-range LD exclusion is optional.** Removing the 24 Price et al.
+regions plus APOE changed `rg` by 0.0001 once the screen had run
+([`bipred.qc.in_long_range_ld`](../bipred/qc.py) implements it if you want it).
+Keep them by default: excluding APOE improves nothing measurable and discards
+the strongest lipid locus, which matters if you are also using `beta1_est` for
+prediction. The screen and the exclusion are orthogonal — the screen's drop
+rate inside long-range regions is 4.7%, identical to outside.
+
+### Why the screen is not optional
+
+**A diverged fit can produce a *better-looking* answer than a correct one.** On
+HDL × TG the four diverged arms gave `rg` between −0.57 and −0.65; the four
+converged arms gave −0.52 to −0.55. Cross-trait LDSC said −0.69 and the
+published value is −0.5 to −0.6, so the broken fits sat *closer* to both
+external references. Nothing in the estimate reveals the problem.
+
+Nor is the failure uniform. On LDL × CAD divergence halved `rg`; on height ×
+LDL it shrank it toward zero; on HDL × TG it inflated it. And it can strike one
+trait while sparing the other in the same fit — height × LDL diverged at
+cancellation 150–212 on the LDL side while height was estimated correctly at
+0.3–0.5, with an `h2` of 0.41 against a literature ~0.45.
+
+The failure tracks the *summary-statistic file*, not the trait pairing or
+bivariate fitting in general: both GLGC lipid files diverged in every pairing,
+height and CAD never did.
+
+Since 0.3.1 a fit that diverges raises a `RuntimeWarning` naming which check
+failed. **Do not interpret `h2`, `rg` or the overlap readouts from a fit that
+warns.**
 
 ## Fit one chain
 

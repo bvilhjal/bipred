@@ -1,7 +1,74 @@
 # Changelog
 
 User-visible changes to **bipred** are recorded here. The project is currently
-`0.3.2`.
+`0.3.3`.
+
+## [0.3.3] - 2026-08-08
+
+A 24-arm factorial over three real trait pairs, settling which summary-statistic
+QC steps are load-bearing. The recommended procedure is now evidence-based
+rather than assembled from convention, and two claims made earlier today are
+withdrawn.
+
+### Added
+
+- **`bipred.qc.implied_sample_size`** recovers the effective sample size the
+  summary statistics behave as if they had, by inverting the SD relation. This
+  is not a filter and it was the highest-yield check found: four of five real
+  GWAS matched their reported `n_eff` within 1%, while CARDIoGRAMplusC4D CAD
+  came out at **0.570** -- 162,973 reported against 92,966 implied. Since
+  `n_eff` scales every standardized effect, fitting the reported value
+  understated that trait's h2 by the same factor, 0.0401 to 0.0706. Cross-trait
+  LDSC rescales with it and so does not serve as an independent check. Two causes apply and are
+  indistinguishable from the file: genomic control inflating the standard
+  errors, and the pooled `4/(1/n_case + 1/n_ctrl)` formula, which overstates a
+  meta-analysis of cohorts with differing case/control ratios.
+- **`bipred.qc.sd_consistency`** -- LDpred2's SD check with both trait types put
+  on a common scale. The published form normalises only quantitative traits, on
+  the reasoning that a binary trait's effective N fixes the scale; on
+  GC-corrected statistics that fails, and the unnormalised ratio sat at 0.755
+  against ~1 for a well-specified trait. A threshold calibrated on one then
+  removes 83% of the other.
+- **`bipred.qc.in_long_range_ld`** with the 24 Price et al. 2008 regions and
+  APOE, 136 Mb in total.
+- **`benchmarks/qc_factorial.py`** -- the factorial, recording bipred and
+  cross-trait LDSC on identical variants and sample sizes, plus the overlap
+  readouts and MCMC iterate spreads.
+
+### Changed
+
+- **The recommended QC is lenient per-variant thresholds, long-range regions
+  kept, and the LD-consistency screen.** The screen separates the outcome
+  completely -- 12/12 arms diverged without it, 0/12 with it -- while strict
+  thresholds and long-range exclusion each split 6/12 either way. Tightening
+  removed a further 142,282 variants and moved the cancellation ratio the wrong
+  way; excluding the long-range regions changed `rg` by 0.0001.
+- `docs/guide.md`'s QC section is rewritten around that result.
+
+### Withdrawn
+
+- **"A bivariate fit tolerates less summary-statistic error than a univariate
+  one" was too general.** The failure follows the *file*: both GLGC lipid files
+  diverged in every pairing, height and CAD in none, and on height x LDL one
+  trait diverged while the other was estimated correctly in the same fit.
+- **"bipred's h2 runs systematically below LDSC" is false.** It is below for
+  LDL and CAD and 57% *above* for height, where 0.415 sits against a published
+  ~0.45 and LDSC's 0.264 looks low. The truncated-LD-score mechanism proposed
+  for it cannot produce both directions.
+
+### Measured
+
+Reported and corrected: an earlier note claimed the effective-N fix reconciled
+CAD's h2 with LDSC. It does not -- the correction moves both estimates and the
+ratio stays near 0.58. On matched variants and sample sizes, genetic
+correlation agrees to about one LDSC standard error while heritability does
+not.
+
+The sharpest single result is HDL x TG, where the four diverged arms give `rg`
+-0.57 to -0.65 and the four converged arms -0.52 to -0.55. LDSC says -0.69 and
+the literature -0.5 to -0.6, so the broken fits sit *closer* to both external
+references. No comparison against an outside value distinguishes them; only the
+cancellation ratio does.
 
 ## [0.3.2] - 2026-08-08
 
@@ -104,17 +171,19 @@ The same fit at three levels of cleaning, 924,254 variants before filtering:
 
 | | harmonised | + per-variant QC | + LD-consistency screen |
 |---|---:|---:|---:|
-| `rg` | +0.0675 | +0.1244 | **+0.2822** |
-| `h2` LDL | 0.6395 | 0.5121 | **0.0861** |
-| `sum(beta^2)/h2`, LDL | 246 | 264 | **0.7** |
-| largest \|effect\|, LDL | 3.329 | 3.109 | **0.025** |
+| `rg` | +0.0558 | +0.1390 | **+0.2856** |
+| `h2` LDL | 0.6732 | 0.5688 | **0.0882** |
+| `h2` CAD | 0.1713 | 0.0594 | **0.0706** |
+| `sum(beta^2)/h2`, LDL | 255 | 271 | **0.7** |
+| largest \|effect\|, LDL | 3.193 | 3.322 | **0.024** |
 | genetic-variance trace | rising | rising | **settled** |
-| cross-trait LDSC `rg` | +0.2238 | +0.1973 | +0.1864 ± 0.052 |
+| cross-trait LDSC `rg` | +0.2238 | +0.1973 | +0.1851 ± 0.052 |
 
-Per-variant filters removed 4.0% and repaired CAD alone (cancellation 91.9 to
-3.3) while leaving LDL untouched (246 to 264) — LDL's problem is not a property
+Per-variant filters removed 4.0% and repaired CAD alone (cancellation 91.2 to
+4.9) while leaving LDL untouched (255 to 271) — LDL's problem is not a property
 of any single variant. The LD-consistency screen removed a further 4.7% and
-repaired the fit outright.
+repaired the fit outright. CAD is fitted at its implied effective sample size
+throughout, which is why its `h2` differs from the figures published for 0.3.0.
 
 ## [0.3.0] - 2026-08-07
 

@@ -66,7 +66,7 @@ from ldpred3.ld import load_ld_blocks                                # noqa: E40
 from ldpred3.ld_repr import LowRankLD, dense_ld, lowrank_ld          # noqa: E402
 from ldpred3.ldsc import ld_scores                                   # noqa: E402
 from bipred import ldpred3_auto_bivariate_blocks, ldsc_rg            # noqa: E402
-from bipred.qc import dentist                                        # noqa: E402
+from bipred.qc import dentist, implied_sample_size                   # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WORK = os.path.expanduser("~/REPOS/ldpred3/benchmarks/.work")
@@ -310,6 +310,22 @@ def main(argv=None):
     info = column(cad, 4)
     af = ref_af[shared]
 
+    # Calibrate the effective sample size before anything else, because it
+    # scales every standardized effect and therefore every h2. CAD's published
+    # N_eff comes from the pooled 4/(1/ncase + 1/nctrl) formula, which
+    # overstates a meta-analysis of cohorts with differing case/control ratios,
+    # and its SEs are doubly genomic-control corrected. Both deflate the
+    # sample size the data behaves as if it had: 162,973 reported against
+    # 92,966 implied. Fitting the reported value understated CAD's h2 by that
+    # factor -- the 0.0401 this benchmark recorded before this stage existed.
+    reported = np.full(shared.size, CAD_NEFF)
+    sized = implied_sample_size(b2, s2, af, binary=True, reported_n=reported)
+    cad_n = CAD_NEFF * (1.0 if sized["consistent"] else sized["ratio"])
+    print(f"\nCAD effective N: reported {CAD_NEFF:,.0f}, implied "
+          f"{sized['median']:,.0f} (ratio {sized['ratio']:.3f})"
+          f"{'' if sized['consistent'] else '  <- MISSPECIFIED, fitting the implied value'}",
+          flush=True)
+
     print("\nallele-alignment check against the reference's own af "
           "(near +1 aligned, near -1 inverted -- the flip rate cannot tell):")
     for label, freq in (("LDL", f1), ("CAD", f2)):
@@ -338,8 +354,8 @@ def main(argv=None):
         fit_stage(name, tiled,
                   standardize_betas(b1[mask][sel], s1[mask][sel], n1[mask][sel])[0],
                   standardize_betas(b2[mask][sel], s2[mask][sel],
-                                    np.full(sel.size, CAD_NEFF))[0],
-                  n1[mask][sel], np.full(sel.size, CAD_NEFF), n_ref, rows)
+                                    np.full(sel.size, cad_n))[0],
+                  n1[mask][sel], np.full(sel.size, cad_n), n_ref, rows)
 
     # Stage 3: the LD-consistency screen, on top of stage 2.
     mask = stages["per-variant QC"]
@@ -363,8 +379,8 @@ def main(argv=None):
               standardize_betas(b1[mask][sel][sel2], s1[mask][sel][sel2],
                                 n1[mask][sel][sel2])[0],
               standardize_betas(b2[mask][sel][sel2], s2[mask][sel][sel2],
-                                np.full(sel2.size, CAD_NEFF))[0],
-              n1[mask][sel][sel2], np.full(sel2.size, CAD_NEFF), n_ref, rows)
+                                np.full(sel2.size, cad_n))[0],
+              n1[mask][sel][sel2], np.full(sel2.size, cad_n), n_ref, rows)
 
     with open(args.csv, "w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
