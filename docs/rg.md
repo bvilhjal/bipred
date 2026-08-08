@@ -3,6 +3,15 @@
 This page covers estimator choice, sample overlap, regional exploration, and
 polygenic-overlap interpretation. See [`guide.md`](guide.md) for fitting.
 
+On real data, none of it means anything until the summary statistics have been
+screened for consistency with the LD reference. A joint fit on unscreened
+public GWAS returned `rg` +0.07 where cross-trait LDSC on the same data said
++0.22, because the sampler had diverged while reporting an `h2` and a causal
+fraction that both looked ordinary. See *Quality control before fitting real
+data* in [`guide.md`](guide.md), and run
+[`bipred.qc.dentist`](../bipred/qc.py) first. A bivariate fit tolerates much
+less summary-statistic error than a univariate one on the same panel.
+
 ## Genome-wide estimators
 
 **Table 1. Genetic-correlation estimators.**

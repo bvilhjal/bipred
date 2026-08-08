@@ -94,6 +94,7 @@ alibi.
 | `overlap_estimation.py` | Paired effect of known sample-overlap `cross_corr`; it does not validate LDSC-intercept inversion (→ `overlap_estimation.csv`) | opt |
 | `sample_overlap.py` | Lower-power comparison of free/constrained LDSC and unset/set bivariate overlap corrections (→ `sample_overlap.csv`) | opt |
 | `bivariate_demo.py` | Bivariate prediction gain for a weak trait across two-trait architectures (needs `ld_library.npz` in the cwd, from `make_ld_library.py`) | — |
+| `real_ldl_cad.py` | **Real GWAS**: LDL x CAD on a UK Biobank HapMap3 LD reference, fitted at three cleaning stages; asserts the final r_g lands in the published range and that no fit warns (→ `real_ldl_cad.csv`). Needs ~9 GB of downloads, see its docstring | — |
 | `rg_env_overlap.py` | Individual-genotype stress test under **environmental** correlation on shared samples; records paired MAE and failures after the `|r_g| <= 1.5` diagnostic window (→ `rg_env_overlap.csv`) | opt |
 | `hapnest/run_bivariate.py` | rg / h² / MiXeR-overlap recovery **and** out-of-sample PRS gain (bivariate vs univariate) on **HAPNEST** genotypes+phenotypes — synthetic genomes resampled from a real 1000G+HGDP reference, so real LD/MAF/structure with known truth (→ `hapnest/run_bivariate.csv`). See [`hapnest/README.md`](hapnest/README.md). | — (needs HAPNEST) |
 
@@ -117,6 +118,13 @@ can `import infer_vs_ldsc_sbayes` at runtime.
 | `overlap_estimation` | 6 | — |
 | `sample_overlap` | 3 | — |
 | `rg_env_overlap` | 5 | — |
+
+`real_ldl_cad.py` writes `real_ldl_cad.csv` (3 rows, one per cleaning
+stage) but is excluded from the count below and from `run_all.sh`, because
+its inputs are large external downloads rather than anything this suite can
+simulate. It is the only benchmark here that is not a simulation, and it
+exists because a defect shipped in 0.3.0 that no simulation drawing
+`beta_hat` from the fitted model could have caught.
 
 That is nine CSVs and five PNGs. `bivariate_demo.py` writes no artifact — its
 table is transcribed into [`RESULTS.md`](RESULTS.md) §8 — and needs

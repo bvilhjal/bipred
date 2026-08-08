@@ -24,12 +24,14 @@ _EXPECTED = {
     "estimate_sample_overlap",
     "regional_rg",
     "RegionalRgResult",
+    "dentist",
+    "dentist_statistic",
 }
 
 
 #: The submodules the lazy loader must expose as *modules*, never shadowed by a
 #: function of the same name.
-_SUBMODULES = {"bivariate", "multichain", "ldsc", "regional"}
+_SUBMODULES = {"bivariate", "multichain", "ldsc", "regional", "qc"}
 
 
 def test_public_api_surface_is_exact_and_resolves():

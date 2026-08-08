@@ -60,6 +60,68 @@ blocks and loses on small ones. This benchmark uses a near-full rank (481 of a
 low-rank — at that rank it is both slower than dense and saves nothing over D8.
 Use it when `rank ≪ k`.
 
+## Quality control before fitting real data
+
+**A bivariate fit tolerates far less summary-statistic error than a univariate
+one does on the same panel.** This is the single most important practical
+difference between bipred and ldpred3, it is not intuitive, and it is easy to
+be caught by: data clean enough for LDpred is not automatically clean enough
+for bipred.
+
+The evidence is a real LDL × CAD analysis on a UK Biobank HapMap3 reference,
+924,254 variants. On identical blocks and identical unfiltered summary
+statistics, ldpred3's univariate sampler returned `sum(beta^2)` of 0.22 and a
+largest effect of 0.082 — entirely healthy. The bivariate fit on the same input
+returned `sum(beta^2)` of **157.5** with a largest effect of **3.33**, against a
+per-causal effect SD of 0.030 that the fit had itself inferred. It reported
+`h2` 0.64 and a causal fraction of 0.00075, both inside every bound, and
+completed **without a warning** under 0.3.0.
+
+Do this before fitting, in order:
+
+1. **Harmonize strictly.** Match on rsID, require the reported allele pair to
+   equal the reference pair as a set, flip the sign of `beta` when the effect
+   allele is the reference's other allele, and drop indels and strand-ambiguous
+   A/T and C/G pairs. Then *verify* it: correlate the aligned effect-allele
+   frequency against the reference's own. Near +1 means aligned, near −1 means
+   inverted. The flip *rate* cannot tell those apart — a legitimate
+   effect-allele convention can produce any rate at all.
+2. **Filter per variant.** Imputation quality (`INFO ≥ 0.9`), minor allele
+   frequency (`≥ 0.01`), a chi-square cap (`≤ 80`), and per-variant sample size
+   where a meta-analysis reports one. Exclude the MHC (chr6 25–34 Mb).
+3. **Screen for LD consistency** with [`bipred.qc.dentist`](../bipred/qc.py).
+   This is the step nothing else can substitute for: every filter in step 2
+   judges a variant in isolation, and none can see that a variant's effect
+   disagrees with the variants correlated with it.
+
+On that LDL × CAD analysis, steps 1–2 removed 4.0% of variants and repaired one
+trait while leaving the other untouched — CAD's cancellation ratio fell from
+91.9 to 3.3, LDL's went from 246 to 264. Step 3 removed a further 4.7% and
+repaired the fit outright:
+
+**Table 2. The same fit at three levels of cleaning.**
+
+| | harmonized only | + per-variant filters | + `qc.dentist` |
+|---|---:|---:|---:|
+| `rg` | +0.0675 | +0.1244 | **+0.2822** |
+| `h2` trait 1 | 0.6395 | 0.5121 | **0.0861** |
+| `sum(beta^2) / h2` | 246 | 264 | **0.7** |
+| largest \|effect\| | 3.329 | 3.109 | **0.025** |
+| genetic-variance trace | rising | rising | **settled** |
+| cross-trait LDSC `rg` | +0.2238 | +0.1973 | +0.1864 ± 0.052 |
+
+```python
+from bipred.qc import dentist
+
+keep = dentist(blocks, beta_hat1 / se1) & dentist(blocks, beta_hat2 / se2)
+```
+
+Run it once per trait against the blocks you will fit with, and intersect. Then
+subset the blocks and both traits to `keep`.
+
+Since 0.3.1 a fit that diverges this way raises a `RuntimeWarning` naming which
+check failed. **Do not interpret `h2` or `rg` from a fit that warns.**
+
 ## Fit one chain
 
 For one dense matrix:
@@ -117,7 +179,7 @@ require different trace contracts. The pooled posterior records
 
 ## Read the result
 
-**Table 2. Main `BivariateResult` fields.**
+**Table 3. Main `BivariateResult` fields.**
 
 | Field | Meaning |
 |---|---|
@@ -186,7 +248,7 @@ shrinks local estimates toward the genome-wide correlation.
 
 ## Options
 
-**Table 3. Main fitting options.** Unless the *Scope* column says otherwise, an
+**Table 4. Main fitting options.** Unless the *Scope* column says otherwise, an
 option is accepted by both `ldpred3_auto_bivariate[_blocks]` and
 `ldpred3_auto_bivariate_chains`. Options marked *single* are rejected by the
 chains driver, which reserves them for its own dispersal.
@@ -235,3 +297,12 @@ by multi-chain inference; use dispersed full-length chains for diagnostics.
 - A warning about an *implausible fit* means a large causal fraction or an
   `h2` bound was hit on a sizeable panel. Inspect LD quality, reference size,
   block size, and regularization before interpreting or timing that fit.
+- A warning that the fit *appears to have diverged* is stronger: the effects
+  are cancelling through LD, or exceed the slab the fit itself inferred, or the
+  genetic variance never settled. Do not interpret `h2` or `rg` from it. The
+  usual cause is summary statistics inconsistent with the LD reference, not the
+  reference — screen them with `bipred.qc.dentist` before anything else.
+- `ldpred3.shrink_ld_blocks` keys its shrinkage on `k / n_ref`, which assumes
+  the distortion is finite-panel noise. Against a reference whose correlations
+  were thresholded to zero outside a window, the distortion is structural and
+  does not fall with `n_ref`, so the default intensity under-shrinks.

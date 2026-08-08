@@ -1,11 +1,18 @@
-# Benchmarks for bipred 0.3.0
+# Benchmarks for bipred 0.3.1
 
 Every self-contained script was re-run end to end for this record, against the
 same cached coalescent truths as the 2026-08-03 snapshot (revision `17d6ae2`),
 so accuracy, timing and memory all come from one sweep. Re-run with
 `bash benchmarks/run_all.sh`; the CSVs are the authoritative numbers.
 
-Two things moved materially since the previous record:
+**Section 9 is new and is the most important thing here.** It is the only
+benchmark in this file that does not simulate: real LDL and CAD summary
+statistics against a real UK Biobank LD reference. It exists because 0.3.0
+shipped a defect that the thirty simulated architecture cells of Table 2 could
+not have caught, because every one of them draws `beta_hat` from the model the
+sampler assumes. Read it before trusting a joint fit on real data.
+
+Two things moved materially in the simulated record:
 
 - **Table 11, the environmental-overlap stress test, is no longer a failure.**
   Joint-fit MAE was up to 0.86 there and is now at most 0.0242. The cause was
@@ -32,7 +39,7 @@ segments are tagged per backend and never mix.
 | Component | Value |
 |---|---|
 | Python | 3.14.6 |
-| bipred | 0.3.0 |
+| bipred | 0.3.1 |
 | ldpred3 | 0.4.5 |
 | NumPy / Numba | 2.4.6 / 0.66.0 |
 | msprime / Matplotlib | 1.4.2 / 3.11.1 |
@@ -347,6 +354,69 @@ a third of its gain at r_g 0.9, and the committed generator's library — 59 to
 reading — fits without shrinkage and scores best of the three. The library
 that collapsed at 0.2.1 was a different, more degenerate artifact than the one
 the committed script builds, which is the reason that script now exists.
+
+## 9. Real GWAS: LDL x CAD
+
+Every section above simulates `beta_hat ~ N(R beta, R/N)` from the model the
+sampler assumes, on well-conditioned coalescent LD. This one does not simulate
+anything. It is here because a defect shipped in 0.3.0 that the thirty
+architecture cells of Table 2 were structurally incapable of catching: it needs
+summary statistics that *disagree* with the LD reference, which a simulation
+drawing both from one model cannot produce.
+
+LDL from GLGC 2013 (Willer et al., per-variant N) and CAD from
+CARDIoGRAMplusC4D 2015 (Nikpay et al., GCST003116, effective N 162,973), on the
+bigsnpr HapMap3 European LD reference (362,320 UK Biobank individuals,
+1,054,330 variants, 625 blocks). The consortia are close to disjoint, and the
+cross-trait LDSC intercept of +0.02 confirms that rather than assuming it.
+Reproduce with [`real_ldl_cad.py`](real_ldl_cad.py) (about 9 GB of inputs, 22
+minutes); it is excluded from `run_all.sh` for that reason.
+
+Two anchors make this checkable without a simulated truth: cross-trait LDSC on
+the identical data, and the published LDL-CAD genetic correlation of roughly
+0.2 to 0.4.
+
+**Table 13. The same analysis at three levels of cleaning.**
+
+| Stage | Variants | LDSC r_g | Joint r_g | h2 LDL | sum(b^2)/h2 LDL | max abs b | Trace drift | Warned |
+|---|---:|---:|---:|---:|---:|---:|---:|:---:|
+| harmonised only | 924,254 | +0.2238 | +0.0675 | 0.6395 | 258.0 | 3.3286 | 1.60 | yes |
+| + per-variant QC | 887,361 | +0.1973 | +0.1244 | 0.5121 | 263.7 | 3.1087 | 1.79 | yes |
+| + LD-consistency screen | 845,623 | +0.1851 | **+0.2796** | **0.0875** | **0.6** | **0.0265** | **0.92** | no |
+
+**Harmonisation alone produces a silently diverged fit.** Stage one reports an
+`h2` of 0.64 and a causal fraction of 0.00075, both inside every bound, and
+under 0.3.0 returned no warning at all. It had diverged: posterior means reach
+3.33 against the 0.030 per-causal effect SD the fit itself inferred, the sum of
+squared effects is 258 times the genetic variance, and that variance is still
+climbing at the last iteration. The runaway effects sit on variants in
+near-perfect LD and cancel inside the quadratic form, which is precisely why
+`h2` looks ordinary while the fit is worthless.
+
+**Per-variant filters repair one trait and not the other.** MAF, imputation
+quality, a chi-square cap, allele-frequency concordance and MHC exclusion
+remove 4.0% of variants. CAD's cancellation ratio falls from 96.6 to 3.3 --
+its `median_info` column was doing the work, with 27.3% of variants below 0.9 --
+while LDL's goes from 258 to 264, untouched. LDL's problem is not a property of
+any single variant, so no filter that judges variants one at a time can see it.
+
+**The LD-consistency screen repairs it.** `bipred.qc.dentist` removes a further
+4.7% (LDL 30,481, CAD 12,541) and every diagnostic resolves at once: the
+cancellation ratio drops from 264 to 0.6, the largest effect falls 117-fold to
+0.0265, the variance trace settles, and the divergence warning stops firing.
+The joint `rg` of +0.2796 sits inside the published range, as does LDSC's
++0.1851 at 3.5 standard errors from zero.
+
+Note that LDSC's own numbers move as the data is cleaned -- its LDL `h2` halves
+from 0.2308 to 0.1155 -- so the target is not fixed. Both estimators end within
+the literature; they disagree by 1.8 standard errors, which is a real question
+about the two estimators and not evidence that either has failed.
+
+Two caveats on the CAD side. Its SE column is genomic-control corrected, which
+deflates z-scores and biases its `h2` downward, and a case/control trait
+standardised against an effective N gives an observed-scale `h2` at the study's
+case fraction. The reported 0.0401 is therefore conservative and is not a
+liability-scale heritability.
 
 ## External runs
 

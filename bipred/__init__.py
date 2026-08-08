@@ -27,6 +27,13 @@ a fit into a **regional** genetic correlation. Read its docstring first: it
 documents two biases it does not correct (uncorrected sample overlap inflates
 every region, and regional estimates are shrunk toward the genome-wide value).
 
+Before fitting real summary statistics, screen them with
+:func:`~bipred.qc.dentist`, which drops variants whose z-scores are
+inconsistent with their own LD neighbourhood. A bivariate fit tolerates much
+less of that inconsistency than a univariate one does on the same panel, and no
+per-variant filter (frequency, imputation quality, a chi-square cap) can detect
+it.
+
 For a fast, moment-based genetic-correlation estimate (the cross-check on the
 joint fit), :func:`~bipred.ldsc.ldsc_rg` implements cross-trait LD Score
 regression, with :func:`~bipred.ldsc.estimate_sample_overlap` for shared
@@ -40,7 +47,7 @@ from ldpred3's ``[fast]`` extra.
 
 import importlib
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 # public name -> submodule it lives in. No module name may equal one of its own
 # exported names: importing a submodule binds it on this package, and the cache
@@ -55,6 +62,7 @@ _EXPORTS = {
                    "BivariateBasicSplitRHat"],
     "ldsc": ["ldsc_rg", "LDSCRgResult", "estimate_sample_overlap"],
     "regional": ["regional_rg", "RegionalRgResult"],
+    "qc": ["dentist", "dentist_statistic"],
 }
 
 # name -> module, for the lazy loader

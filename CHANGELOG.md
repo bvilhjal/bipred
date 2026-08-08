@@ -1,7 +1,87 @@
 # Changelog
 
 User-visible changes to **bipred** are recorded here. The project is currently
-`0.3.0`.
+`0.3.1`.
+
+## [0.3.1] - 2026-08-08
+
+First application of bipred to real GWAS, and everything in this release comes
+out of that one experiment. The headline is uncomfortable and worth stating
+plainly: **on real summary statistics bipred produced a silently diverged fit,
+where ldpred3's univariate sampler on the identical LD blocks and the identical
+unfiltered data was entirely well behaved.**
+
+The fit reported `h2` 0.64 and a causal fraction of 0.00075 — both inside every
+bound — and returned without a warning. It had in fact diverged: posterior
+means reached 3.33 against the per-causal effect SD of 0.030 it had itself
+inferred, `sum(beta^2)` was 157.5 against a genetic variance of 0.64, and the
+genetic variance was still climbing at the final iteration. The runaway effects
+sat on variants in near-perfect LD and cancelled inside the quadratic form,
+which is exactly why `h2` looked plausible throughout.
+
+None of the thirty architecture cells in `benchmarks/` could have caught it.
+They all simulate `beta_hat ~ N(R beta, R/N)` from the model the sampler
+assumes, on well-conditioned coalescent LD. The failure needs summary
+statistics that disagree with the LD reference, which a simulation drawing both
+from the same model cannot produce.
+
+### Added
+
+- **`bipred.qc`** — `dentist` and `dentist_statistic`, the LD-consistency
+  screen of Chen et al. 2021. Within a window it splits variants at random,
+  predicts each z-score from the opposite half through the LD, and drops those
+  too far from their neighbourhood's prediction. This is the only check that
+  can see the failure: frequency, imputation-quality and chi-square filters all
+  judge a variant in isolation. It runs against the blocks you will fit with,
+  because an inconsistency only means anything relative to the LD the model
+  actually uses. Low-rank blocks are screened through their factor and never
+  densified.
+- **Divergence detection.** A fit now warns when effects are cancelling through
+  LD (`sum(beta^2)` against the genetic variance), when a posterior mean
+  exceeds the slab the fit itself inferred, or when the retained genetic
+  variance drifts systematically. Thresholds are calibrated on the real fit
+  above and its repaired counterpart, so each separates the two regimes by more
+  than an order of magnitude. This is distinct from the existing
+  implausible-fit warning, which keys on a *large* causal fraction or a bound
+  being touched and was silent here.
+- **`benchmarks/real_ldl_cad.py`** — an end-to-end real-data benchmark on
+  public GWAS (GLGC 2013 LDL, CARDIoGRAMplusC4D 2015 CAD) against a UK Biobank
+  HapMap3 LD reference, fitting all three cleaning stages so the contrast is
+  the result. It asserts the final `rg` lands in the published range and that
+  no stage-three fit warns. Not part of `run_all.sh`: it needs about 9 GB of
+  downloads.
+
+### Changed
+
+- `docs/guide.md` gains a *Quality control before fitting real data* section.
+  A bivariate fit tolerates far less summary-statistic error than a univariate
+  one on the same panel; that asymmetry was undocumented and is not intuitive.
+- The divergence warning reports the largest block size when one is large.
+  Block size alone is deliberately *not* warned about: the same reference, with
+  a 12,169-variant MHC block, fitted cleanly once the summary statistics were
+  screened, so a size warning would fire on healthy fits too.
+- Documented that `ldpred3.shrink_ld_blocks` keys its shrinkage on `k / n_ref`,
+  which assumes finite-panel noise. Against a reference whose correlations were
+  thresholded to zero the distortion is structural and does not fall with
+  `n_ref`, so the default intensity under-shrinks.
+
+### Measured
+
+The same fit at three levels of cleaning, 924,254 variants before filtering:
+
+| | harmonised | + per-variant QC | + LD-consistency screen |
+|---|---:|---:|---:|
+| `rg` | +0.0675 | +0.1244 | **+0.2822** |
+| `h2` LDL | 0.6395 | 0.5121 | **0.0861** |
+| `sum(beta^2)/h2`, LDL | 246 | 264 | **0.7** |
+| largest \|effect\|, LDL | 3.329 | 3.109 | **0.025** |
+| genetic-variance trace | rising | rising | **settled** |
+| cross-trait LDSC `rg` | +0.2238 | +0.1973 | +0.1864 ± 0.052 |
+
+Per-variant filters removed 4.0% and repaired CAD alone (cancellation 91.9 to
+3.3) while leaving LDL untouched (246 to 264) — LDL's problem is not a property
+of any single variant. The LD-consistency screen removed a further 4.7% and
+repaired the fit outright.
 
 ## [0.3.0] - 2026-08-07
 

@@ -36,6 +36,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Optional
+import math
 import warnings
 
 import numpy as np
@@ -79,6 +80,17 @@ _AUTO_INT8_MAX_BLOCK = 1500
 # many variants the heuristic carries no information, so it stays quiet.
 _DIAGNOSTIC_MIN_VARIANTS = 1000
 _DIAGNOSTIC_MAX_CAUSAL_FRACTION = 0.5
+# Thresholds for the divergence diagnostic (see _warn_if_fit_diverged). All
+# three were calibrated on a real LDL x CAD fit that diverged silently and the
+# same fit after DENTIST-style QC repaired it, so each separates the two
+# regimes by more than an order of magnitude rather than by a hair:
+#   sum(beta^2)/raw h2   246 and 92 diverged, 0.31 and 0.17 healthy
+#   max|beta| / slab SD  110 diverged, 4.3 healthy
+#   retained-trace drift 1.60 diverged, ~1.0 healthy
+_DIVERGENCE_MAX_EFFECT_RATIO = 10.0
+_DIVERGENCE_MAX_SLAB_SIGMAS = 25.0
+_DIVERGENCE_MAX_TRACE_DRIFT = 1.25
+_DIVERGENCE_MIN_TRACE = 40
 _DENSE = 0
 _LOWRANK = 1
 
@@ -665,6 +677,102 @@ def _warn_if_implausible_fit(raw_h2, p, h2_bounds, m):
             "then fires for almost every variant. Consider a larger LD "
             "reference panel, smaller blocks, or shrinking the LD blocks "
             "(ldpred3.shrink_ld_blocks).",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+
+
+def _warn_if_fit_diverged(beta1, beta2, raw_h2, sigma_diag, genetic_samples, m,
+                          largest_block=None):
+    """Flag a chain that ran away, which ``h2`` and ``p`` alone cannot show.
+
+    The motivating failure was a real LDL x CAD fit on a public GWAS: it
+    reported ``h2`` 0.64 and a causal fraction of 0.00075, both inside every
+    bound, and completed without a single warning. It had in fact diverged --
+    posterior means reached 3.33 against the slab SD of 0.030 the fit itself
+    inferred, and the genetic variance was still climbing at the final
+    iteration. Nothing in :func:`_warn_if_implausible_fit` could see it: that
+    heuristic keys on a *large* causal fraction or a bound being touched, and a
+    runaway with sparse ``p`` has neither.
+
+    What makes it visible is that the runaway effects sit on variants in near
+    perfect LD and cancel inside the quadratic form. So ``beta' R beta`` stays
+    plausible while the individual effects do not, and three ratios expose the
+    gap. None needs a second pass over the LD:
+
+    * ``sum(beta^2)`` against the raw genetic variance. Equal-ish when effects
+      combine coherently through LD; enormous when they are cancelling.
+    * ``max|beta|`` against ``sqrt(sigma_tt)``, the per-causal effect SD the fit
+      itself sampled. A posterior mean is a shrunk quantity, so tens of slab
+      SDs is the model contradicting its own prior.
+    * the retained ``genetic_samples`` trace, first quarter against last. Any
+      systematic climb *after* burn-in means the chain never settled, so the
+      reported numbers describe wherever it happened to stop.
+
+    Deliberately silent below :data:`_DIAGNOSTIC_MIN_VARIANTS`, like its
+    sibling: on a small panel these ratios are ordinary noise.
+    """
+    if m < _DIAGNOSTIC_MIN_VARIANTS:
+        return
+    reasons = []
+    for label, beta, h2_t, s_tt in (("1", beta1, raw_h2[0], sigma_diag[0]),
+                                    ("2", beta2, raw_h2[1], sigma_diag[1])):
+        total = float(np.sum(np.asarray(beta, dtype=np.float64) ** 2))
+        if h2_t > 0.0:
+            ratio = total / h2_t
+            if ratio > _DIVERGENCE_MAX_EFFECT_RATIO:
+                reasons.append(
+                    "trait %s has sum(beta^2) %.3g against a genetic variance "
+                    "of %.3g (ratio %.0f), so its effects are largely "
+                    "cancelling through LD rather than adding" %
+                    (label, total, h2_t, ratio))
+        if s_tt > 0.0:
+            sigmas = float(np.max(np.abs(beta))) / math.sqrt(s_tt)
+            if sigmas > _DIVERGENCE_MAX_SLAB_SIGMAS:
+                reasons.append(
+                    "trait %s has a posterior-mean effect %.0f times the "
+                    "per-causal effect SD the fit itself inferred" %
+                    (label, sigmas))
+    if genetic_samples is not None:
+        trace = np.asarray(genetic_samples, dtype=np.float64)
+        if trace.ndim == 2 and len(trace) >= _DIVERGENCE_MIN_TRACE:
+            quarter = len(trace) // 4
+            for label, column in (("1", 0), ("2", 2)):
+                first = float(np.mean(trace[:quarter, column]))
+                last = float(np.mean(trace[-quarter:, column]))
+                if first > 0.0 and last / first > _DIVERGENCE_MAX_TRACE_DRIFT:
+                    reasons.append(
+                        "trait %s's genetic variance rose %.2fx across the "
+                        "retained sweeps, so the chain had not settled" %
+                        (label, last / first))
+    if reasons:
+        # Block geometry is reported here rather than warned about on its own.
+        # Size alone does not predict this failure -- the fit that motivated
+        # the check diverged and then converged cleanly on the *same* blocks,
+        # a reference whose largest block holds 12,169 variants, once the
+        # summary statistics were screened. A standalone size warning would
+        # therefore have fired on the healthy fit too. It is useful context
+        # exactly when something else has already gone wrong.
+        geometry = ""
+        if largest_block is not None and largest_block >= 2000:
+            geometry = (" The largest LD block here holds %d variants; "
+                        "pairwise coupling grows with the square of block "
+                        "size, so large blocks make this failure mode easier "
+                        "to reach." % int(largest_block))
+        warnings.warn(
+            "Bivariate fit appears to have diverged: " + "; ".join(reasons)
+            + ". Do not interpret h2 or rg from this fit. The usual cause is "
+            "summary statistics inconsistent with the LD reference rather than "
+            "the reference itself -- a bivariate fit tolerates far less of "
+            "that than a univariate one does on the same panel. Screen the "
+            "sumstats for LD consistency (bipred.qc.dentist), check imputation "
+            "quality and per-variant sample size, and exclude the MHC."
+            + geometry
+            + " Regularising the blocks (ldpred3.shrink_ld_blocks) helps, but "
+            "note its size-aware rule assumes finite-panel noise: against a "
+            "reference whose correlations were thresholded to zero it "
+            "under-shrinks, because that distortion is structural and does "
+            "not fall with reference size.",
             RuntimeWarning,
             stacklevel=3,
         )
@@ -2032,6 +2140,15 @@ def _ldpred3_auto_bivariate_prepared_inner(prepared, options, start):
     _warn_if_implausible_fit((float(g11), float(g22)),
                              float(pi_mean[1] + pi_mean[2] + pi_mean[3]),
                              (lo, hi), m)
+    # Divergence is a separate failure from implausibility and the two do not
+    # overlap: the fit that motivated this check had a *sparse* causal fraction
+    # and touched no bound, so the heuristic above stayed silent on it.
+    _warn_if_fit_diverged(avg1 / count, avg2 / count,
+                          (float(g11), float(g22)),
+                          (float(s1_mean), float(s2_mean)),
+                          genetic_samples[:count], m,
+                          largest_block=max((b[3] for b in prepared.blocks),
+                                            default=None))
     return BivariateResult(beta1_est=avg1 / count, beta2_est=avg2 / count,
                            h2=(float(h2_1), float(h2_2)), rg=rg,
                            p=float(pi_mean[1] + pi_mean[2] + pi_mean[3]),

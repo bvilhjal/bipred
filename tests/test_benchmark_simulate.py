@@ -275,3 +275,50 @@ assert benchmark._segment_cache_path(0).endswith(
 )
 """
     subprocess.run([sys.executable, "-c", code], check=True)
+
+
+def test_results_real_data_table_matches_its_csv():
+    """Table 13 carries 0.3.1's central claim, so transcribe it exactly.
+
+    The claim is a *contrast* across three cleaning stages -- a fit that
+    diverges silently, per-variant filters that repair one trait only, and an
+    LD-consistency screen that repairs it outright. A slip in any single cell
+    inverts the reading of a row, and the `warned` column is what says the
+    package now detects the failure at all.
+    """
+    import csv
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parent.parent / "benchmarks"
+    csv_path = root / "real_ldl_cad.csv"
+    if not csv_path.exists():             # inputs are ~9 GB and not committed
+        import pytest
+        pytest.skip("real_ldl_cad.csv not generated on this host")
+    rows = list(csv.DictReader(csv_path.open()))
+    table = _markdown_table_after(
+        (root / "RESULTS.md").read_text(encoding="utf-8"),
+        "**Table 13. The same analysis at three levels of cleaning.**")
+    assert len(table) == len(rows) == 3
+
+    def number(cell):
+        return float(cell.replace("**", "").replace(",", "").strip())
+
+    columns = [None, "m", "ldsc_rg", "rg", "h2_ldl", "cancellation_ldl",
+               "max_abs_beta_ldl", "trace_drift_ldl", None]
+    for printed, record in zip(table, rows):
+        assert len(printed) == len(columns)
+        for cell, column in zip(printed, columns):
+            if column is None:
+                continue
+            digits = len(cell.replace("**", "").partition(".")[2])
+            half_ulp = 0.5 * 10.0 ** -digits * (1.0 + 1e-9)
+            assert abs(number(cell) - float(record[column])) <= half_ulp, (
+                f"{column}: table {cell!r}, CSV {record[column]!r}")
+        # The warned column is prose in the table and 0/1 in the CSV.
+        assert printed[-1].strip() == ("yes" if record["warned"] == "1" else "no")
+
+    # The claim itself: only the fully cleaned stage is trustworthy.
+    assert rows[-1]["warned"] == "0", "the final stage must not warn"
+    assert all(r["warned"] == "1" for r in rows[:-1]), "earlier stages must warn"
+    assert float(rows[-1]["cancellation_ldl"]) < 10.0
+    assert 0.15 <= float(rows[-1]["rg"]) <= 0.45

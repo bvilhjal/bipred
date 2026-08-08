@@ -52,7 +52,22 @@ matrix, and prints the main estimates. Its complete source is
 [`examples/minimal.py`](examples/minimal.py).
 
 For real data, start with the input contract and blockwise call in the user
-guide. Summary statistics must already be ancestry-matched and harmonized.
+guide. Summary statistics must already be ancestry-matched and harmonized —
+and, on real GWAS, screened for consistency with the LD reference:
+
+```python
+from bipred.qc import dentist
+
+keep = dentist(blocks, beta_hat1 / se1) & dentist(blocks, beta_hat2 / se2)
+```
+
+This is not optional boilerplate. **A bivariate fit tolerates far less
+summary-statistic error than a univariate one on the same panel**, and the
+failure is silent: on public LDL and CAD statistics the joint fit reported an
+`h2` and a causal fraction that both looked ordinary while having diverged,
+giving `rg` +0.07 against cross-trait LDSC's +0.22. Screening moved it to
++0.28. See *Quality control before fitting real data* in
+[`docs/guide.md`](docs/guide.md).
 
 ## Documentation
 
