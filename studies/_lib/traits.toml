@@ -1,0 +1,217 @@
+# Trait registry for studies/.
+#
+# One entry per dataset, so adding a trait is a data edit rather than a code
+# edit. Study configs reference traits by key; nothing here is study-specific.
+#
+# Column layouts are named vintages rather than six inline keyword arguments,
+# because public releases use at least three conventions and the difference is
+# a property of the file, not of the analysis.
+#
+# `quirks` records defects that must be corrected before use. Each one below
+# was found the hard way; see datasets.md for how.
+
+[columns.gwas_catalog_hm]
+# GWAS Catalog harmonised, PMID-prefixed filenames.
+rsid = "hm_rsid"
+effect_allele = "hm_effect_allele"
+other_allele = "hm_other_allele"
+effect = "hm_beta"
+se = "standard_error"
+frequency = "hm_effect_allele_frequency"
+
+[columns.gwas_catalog_v2]
+# GWAS Catalog harmonised, accession-named filenames.
+rsid = "rsid"
+effect_allele = "effect_allele"
+other_allele = "other_allele"
+effect = "beta"
+se = "standard_error"
+frequency = "effect_allele_frequency"
+
+[columns.glgc_2013]
+rsid = "rsid"
+effect_allele = "A1"
+other_allele = "A2"
+effect = "beta"
+se = "se"
+n = "N"
+frequency = "Freq.A1.1000G.EUR"
+
+
+# ---------------------------------------------------------------- exposures
+
+[traits.LDL]
+file = "jointGwasMc_LDL.txt.gz"
+columns = "glgc_2013"
+source = "GLGC 2013 (Willer et al.)"
+ancestry = "EUR"
+binary = false
+gzipped = true
+
+[traits.urate]
+file = "GCST90319906.h.tsv.gz"
+columns = "gwas_catalog_v2"
+accession = "GCST90319906"
+source = "Cho 2024"
+ancestry = "EUR"
+n = 677373
+binary = false
+gzipped = true
+notes = "Publishes real allele frequencies; AF-concordance check applies."
+
+[traits.lipoprotein_a]
+file = "GCST90019513.h.tsv.gz"
+columns = "gwas_catalog_v2"
+accession = "GCST90019513"
+source = "Sinnott-Armstrong 2021"
+ancestry = "EUR_96"          # 4-cohort meta, 272,573 of 284,044 European
+n = 284044
+binary = false
+gzipped = true
+quirks = ["no_allele_frequency"]
+notes = """Preferred over the European-only Barton 2021 (GCST90025993), which \
+is exome-based and matched only 16.2% of the HapMap3 reference."""
+
+[traits.bilirubin_total]
+file = "34017140-GCST90013872-EFO_0004570.h.tsv.gz"
+columns = "gwas_catalog_hm"
+accession = "GCST90013872"
+source = "Mbatchou 2021"
+ancestry = "EUR"
+n = 388303
+binary = false
+gzipped = true
+quirks = ["no_allele_frequency"]
+notes = "SD offset 1.270 -- likely not rank-inverse-normalised at source."
+
+[traits.bilirubin_direct]
+file = "GCST90019505.h.tsv.gz"
+columns = "gwas_catalog_v2"
+accession = "GCST90019505"
+source = "Sinnott-Armstrong 2021"
+ancestry = "EUR"
+n = 291512
+binary = false
+gzipped = true
+quirks = ["no_allele_frequency"]
+
+[traits.ALP]
+file = "GCST90019494.h.tsv.gz"
+columns = "gwas_catalog_v2"
+accession = "GCST90019494"
+source = "Sinnott-Armstrong 2021"
+ancestry = "EUR"
+n = 342535
+binary = false
+gzipped = true
+quirks = ["no_allele_frequency"]
+
+[traits.GGT]
+file = "GCST90019507.h.tsv.gz"
+columns = "gwas_catalog_v2"
+accession = "GCST90019507"
+source = "Sinnott-Armstrong 2021"
+ancestry = "EUR_96"
+n = 355690
+binary = false
+gzipped = true
+quirks = ["no_allele_frequency"]
+
+[traits.cystatin_C]
+file = "GCST90019504.h.tsv.gz"
+columns = "gwas_catalog_v2"
+accession = "GCST90019504"
+source = "Sinnott-Armstrong 2021"
+ancestry = "EUR"
+n = 342399
+binary = false
+gzipped = true
+quirks = ["no_allele_frequency"]
+
+[traits.CRP]
+file = "GCST90019499.h.tsv.gz"
+columns = "gwas_catalog_v2"
+accession = "GCST90019499"
+source = "Sinnott-Armstrong 2021"
+ancestry = "EUR"
+n = 341805
+binary = false
+gzipped = true
+quirks = ["no_allele_frequency"]
+
+[traits.SHBG]
+file = "GCST90019518.h.tsv.gz"
+columns = "gwas_catalog_v2"
+accession = "GCST90019518"
+source = "Sinnott-Armstrong 2021"
+ancestry = "EUR"
+n = 310323
+binary = false
+gzipped = true
+quirks = ["no_allele_frequency"]
+
+
+# ------------------------------------------------------- disease endpoints
+
+[traits.CAD]
+file = "cad.add.160614.website.txt"
+columns = "gwas_catalog_v2"   # overridden below; legacy column names
+accession = "GCST003116"
+source = "Nikpay 2015, CARDIoGRAMplusC4D"
+ancestry = "EUR"
+binary = true
+n_case = 60801
+n_control = 123504
+gzipped = false
+rsid_col = "markername"
+effect_allele_col = "effect_allele"
+other_allele_col = "noneffect_allele"
+effect_col = "beta"
+se_col = "se_dgc"
+frequency_col = "effect_allele_freq"
+info_col = "median_info"
+notes = """SE column is genomic-control corrected, so h2 is observed-scale and \
+conservative. Implied N is 0.570 of reported -- the fit uses the implied value."""
+
+[traits.gout]
+file = "GCST90428600.h.tsv.gz"
+columns = "gwas_catalog_v2"
+accession = "GCST90428600"
+source = "Major 2024"
+ancestry = "EUR"
+binary = true
+n_case = 27194
+n_control = 614881
+gzipped = true
+notes = "Screen drops 6.2% -- higher than the clean biomarkers, worth watching."
+
+[traits.VTE]
+file = "GCST90451757.h.tsv.gz"
+columns = "gwas_catalog_v2"
+accession = "GCST90451757"
+source = "Gagnon 2024"
+ancestry = "EUR"
+binary = true
+n_case = 44223
+n_control = 847152
+gzipped = true
+
+
+# ------------------------------------------------------------ not usable
+# Kept deliberately: a rejected dataset is a finding. See datasets.md.
+
+[traits.gallstones]
+file = "GCST90128518.h.tsv.gz"
+columns = "gwas_catalog_v2"
+accession = "GCST90128518"
+source = "Fairfield 2021"
+ancestry = "EUR"
+binary = true
+n_case = 43639
+n_control = 506798
+gzipped = true
+usable = false
+quirks = ["effect_is_odds_ratio", "frequency_is_maf"]
+notes = """REJECTED against a European HapMap3 reference: publishes MAF under \
+an effect_allele_frequency header, 19.8% screen rejection, and the joint fit \
+diverges (cancellation 14.3). See datasets.md."""

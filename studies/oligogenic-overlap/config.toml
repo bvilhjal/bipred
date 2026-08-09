@@ -1,0 +1,65 @@
+# Does polygenic-overlap inference recover signal that genome-wide rg destroys
+# when one trait is oligogenic?
+
+arm = "001"          # lenient per-variant QC, long-range LD retained, screen on
+screen_rounds = 4
+screen_ncores = 4
+ld_reference = "ldref-hm3"
+
+# Calibration anchors. Overlap statistics are uninterpretable without a scale,
+# and these fix its top end from two directions: two measurements of the same
+# biology, and two distinct traits with an undisputed causal link. A run that
+# omits them cannot produce a report.
+[[anchors]]
+pair = ["bilirubin_direct", "bilirubin_total"]
+kind = "same-biology"
+rationale = "different studies and definitions; rho_beta should approach 1"
+
+[[anchors]]
+pair = ["urate", "gout"]
+kind = "causal"
+rationale = "urate crystals are the disease mechanism; allopurinol treats gout by lowering the exposure"
+
+# Null controls. These establish the band against which a positive rho_beta is
+# judged; without them +0.36 is a number with no scale.
+[[controls]]
+pair = ["GGT", "bilirubin_total"]
+rationale = "both routine liver tests, but different biology"
+
+[[controls]]
+pair = ["SHBG", "ALP"]
+rationale = "no expected shared mechanism"
+
+[[controls]]
+pair = ["CRP", "lipoprotein_a"]
+rationale = "both cardiovascular markers, unrelated architectures"
+
+# Test pairs: the questions the study is actually asking.
+[[pairs]]
+pair = ["lipoprotein_a", "CAD"]
+rationale = "validated causal exposure; rg is expected to understate it"
+
+[[pairs]]
+pair = ["lipoprotein_a", "VTE"]
+rationale = "contested antifibrinolytic effect"
+
+[[pairs]]
+pair = ["ALP", "GGT"]
+rationale = "liver enzymes, shared biology"
+
+[[pairs]]
+pair = ["cystatin_C", "CRP"]
+rationale = "filtration vs inflammation"
+
+[[pairs]]
+pair = ["urate", "cystatin_C"]
+rationale = "renal handling"
+
+[[pairs]]
+pair = ["gout", "CRP"]
+rationale = "mechanism vs downstream correlate"
+
+# Attempted and rejected on data grounds, kept so the rejection is visible.
+[[rejected]]
+pair = ["bilirubin_total", "gallstones"]
+reason = "GCST90128518 unusable; see _lib/datasets.md"
