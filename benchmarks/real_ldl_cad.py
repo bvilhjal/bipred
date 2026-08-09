@@ -355,12 +355,13 @@ def main(argv=None):
         "--timing-csv",
         help="long-form step timings (default: <csv stem>_timing.csv)")
     parser.add_argument(
-        "--chi2-cap", choices=("both", "ldsc", "none"), default="both",
+        "--chi2-cap", choices=("both", "regression", "none"), default="both",
         help="where the chi2 <= 80 filter applies. 'both' (default) is the "
              "historical behaviour: one per-variant mask feeds LD Score "
-             "regression and the joint fit alike. 'ldsc' keeps the cap on the "
-             "regression, which needs it -- an uncapped large-effect variant "
-             "holds near-full leverage on the slope -- while the fit sees "
+             "regression and the joint fit alike. 'regression' keeps the cap "
+             "on the LD Score regression, which needs it -- an uncapped "
+             "large-effect variant holds near-full leverage on the slope -- "
+             "while the fit sees "
              "every variant, which is what its slab component is for. 'none' "
              "removes it everywhere. On lipoprotein(a) the cap removes 73%% of "
              "the LPA locus and half the trait's summed chi-square, so this "
@@ -466,7 +467,7 @@ def main(argv=None):
     # to the regression rows inside fit_stage; under 'none' it is gone.
     capped = (((b1 / s1) ** 2 <= CHI2_MAX) & ((b2 / s2) ** 2 <= CHI2_MAX)
               if args.chi2_cap == "both" else np.ones(shared.size, bool))
-    ldsc_cap = CHI2_MAX if args.chi2_cap == "ldsc" else None
+    ldsc_cap = CHI2_MAX if args.chi2_cap == "regression" else None
     stages["per-variant QC"] = (
         (maf >= MAF_MIN) & ~(info < INFO_MIN) & capped
         & (np.abs(f1 - af) <= AF_DIFF) & (np.abs(f2 - af) <= AF_DIFF)
@@ -561,6 +562,8 @@ def main(argv=None):
         args.csv, source_revision=source_revision, input_hashes=input_hashes,
         dependency_sources=dependency_sources,
         run_controls={
+            "chi2_cap": args.chi2_cap,
+            "chi2_max": CHI2_MAX,
             "cpu_count": os.cpu_count(),
             "rounds": args.rounds,
             "thread_environment": {name: os.environ.get(name)

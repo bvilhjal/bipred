@@ -32,8 +32,8 @@ and to the bivariate fit.
 ### Fixed
 
 - **`benchmarks/real_ldl_cad.py` and `benchmarks/qc_factorial.py` take
-  `--chi2-cap {both,ldsc,none}`.** `both` is the default and reproduces every
-  committed number; `ldsc` holds high-chi-square rows out of the regression
+  `--chi2-cap {both,regression,none}`.** `both` is the default and reproduces every
+  committed number; `regression` holds high-chi-square rows out of the regression
   while the fit keeps every variant. In the factorial the distinction reaches
   further than the fit: `per_variant()` runs upstream of the LD-consistency
   screen, so under `both` the screen never evaluates the variants the cap

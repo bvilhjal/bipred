@@ -39,7 +39,7 @@ range, which is why this study was a poor place to notice the filter at all.
 The cap also did not repair the divergence: cancellation for LDL is $255$
 before it and $271$ after. Whatever it does at stage 2, it is not what makes
 the fit admissible --- that is the screen. \texttt{results/estimates.csv}
-carries a third run with \texttt{--chi2-cap ldsc} that measures the difference
+carries a third run with \texttt{--chi2-cap regression} that measures the difference
 directly; see \emph{What the chi-square cap does here} above.
 
 The generating script is \texttt{benchmarks/real\_ldl\_cad.py}, which stays in

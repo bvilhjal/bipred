@@ -129,12 +129,13 @@ def parse_args(argv=None):
              "artifact, so an exploratory run must name its own file rather "
              "than overwrite the recorded one.")
     parser.add_argument(
-        "--chi2-cap", choices=("both", "ldsc", "none"), default="both",
+        "--chi2-cap", choices=("both", "regression", "none"), default="both",
         help="where the chi2 <= 80 filter applies. 'both' (default) is the "
              "historical behaviour: one per-variant mask feeds LD Score "
-             "regression and the joint fit alike. 'ldsc' keeps the cap on the "
-             "regression, which needs it -- an uncapped large-effect variant "
-             "holds near-full leverage on the slope -- while the fit sees "
+             "regression and the joint fit alike. 'regression' keeps the cap "
+             "on the LD Score regression, which needs it -- an uncapped "
+             "large-effect variant holds near-full leverage on the slope -- "
+             "while the fit sees "
              "every variant, which is what its slab component is for. 'none' "
              "removes it. Under 'both' the cap also runs upstream of the "
              "LD-consistency screen, so the screen never evaluates the "
@@ -299,7 +300,16 @@ def main(args=None):
                        lineterminator="\n").writeheader()
     sidecar = write_provenance_sidecar(
         args.out, source_revision=source_revision, input_hashes=input_hashes,
-        dependency_sources=dependency_sources)
+        dependency_sources=dependency_sources,
+        run_controls={
+            # Without this the artifact does not say which QC produced it, and
+            # --chi2-cap changes every estimate in the file.
+            "chi2_cap": args.chi2_cap,
+            "chi2_max": CHI2_MAX,
+            "screen_rounds": args.rounds,
+            "arms": len(ARMS),
+            "cpu_count": os.cpu_count(),
+        })
     print(f"provenance: {sidecar}", flush=True)
 
     print(f"\n=== {len(PAIRS) * len(ARMS)} arms ===", flush=True)
@@ -326,11 +336,11 @@ def main(args=None):
             bh1 = standardize_betas(d1["beta"][s1], d1["se"][s1], d1["n_fit"][s1])[0]
             bh2 = standardize_betas(d2["beta"][s2], d2["se"][s2], d2["n_fit"][s2])[0]
             n1, n2 = d1["n_fit"][s1], d2["n_fit"][s2]
-            # Under --chi2-cap ldsc the high-chi-square rows are held out of
+            # Under --chi2-cap regression the high-chi-square rows are held out
             # the regression only; m_snps still counts every variant, as the
             # reference implementation does, so the estimand is unchanged.
             ell = ld_scores(tiled, n_ref=n_ref)
-            if args.chi2_cap == "ldsc":
+            if args.chi2_cap == "regression":
                 z1 = bh1 * np.sqrt(n1) / np.sqrt(np.maximum(1 - bh1 ** 2, 1e-12))
                 z2 = bh2 * np.sqrt(n2) / np.sqrt(np.maximum(1 - bh2 ** 2, 1e-12))
                 sel = (z1 ** 2 <= CHI2_MAX) & (z2 ** 2 <= CHI2_MAX)
