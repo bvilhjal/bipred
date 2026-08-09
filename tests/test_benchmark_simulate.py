@@ -497,11 +497,25 @@ def test_run_all_refuses_an_untracked_source_file(tmp_path):
         # A bare ``bash`` resolves to Windows' WSL launcher on hosted runners;
         # no distribution is installed, so the script never starts. Git Bash
         # is installed alongside the git.exe already used by this fixture.
+        #
+        # Which git.exe is found depends on PATH order: <Git>/cmd/git.exe on a
+        # default install, but <Git>/mingw64/bin/git.exe when the tests run
+        # from a Git Bash shell, whose PATH puts mingw64 first. So walk up from
+        # git.exe looking for a bash that actually exists rather than assuming
+        # a fixed depth -- assuming ``parent.parent`` finds only the first.
         git_executable = shutil.which("git")
-        assert git_executable is not None
-        git = pathlib.Path(git_executable)
-        bash = git.parent.parent / "bin" / "bash.exe"
-    assert bash is not None and pathlib.Path(bash).is_file()
+        assert git_executable is not None, "git.exe not on PATH"
+        bash = None
+        for root in pathlib.Path(git_executable).parents:
+            for candidate in (root / "bin" / "bash.exe",
+                              root / "usr" / "bin" / "bash.exe"):
+                if candidate.is_file():
+                    bash = candidate
+                    break
+            if bash is not None:
+                break
+    assert bash is not None and pathlib.Path(bash).is_file(), (
+        f"no usable bash found (git at {shutil.which('git')!r})")
     proc = subprocess.run(
         [str(bash), "benchmarks/run_all.sh"], cwd=repo,
         capture_output=True, text=True)

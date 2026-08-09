@@ -169,7 +169,18 @@ def test_pooled_screen_matches_the_serial_one(monkeypatch):
     The pool is forced on here: whether it would be taken for real depends on
     the BLAS the tests happen to run against, and this is asserting that the
     pooled path computes the same thing, not that it is chosen.
+
+    Forcing it means the gate's other precondition has to be met by hand. The
+    pool is only ever entered with BLAS pinned to one thread, and nesting it
+    over a multi-threaded BLAS is the thing the gate exists to prevent -- under
+    numpy's bundled OpenBLAS at its default thread count that does not fail, it
+    segfaults, taking the rest of the session with it. So pin BLAS for the
+    duration rather than testing a configuration the library refuses to enter.
     """
+    threadpoolctl = pytest.importorskip(
+        "threadpoolctl",
+        reason="without it the reentrancy gate cannot confirm the BLAS, so "
+               "the low-rank pooled path is unreachable in the first place")
     import bipred.qc as qc
 
     blocks, z = _clean_panel(k=120, blocks=4, rho=0.9, seed=13)
@@ -180,10 +191,11 @@ def test_pooled_screen_matches_the_serial_one(monkeypatch):
     assert not serial[[30, 200, 415]].any(), "planted errors must be caught"
 
     monkeypatch.setattr(qc, "_pool_is_worthwhile", lambda ncores, n: True)
-    for ncores in (2, 3, 5):
-        pooled = ld_consistency_screen(blocks, z, rounds=3, seed=2,
-                                       ncores=ncores)
-        np.testing.assert_array_equal(pooled, serial)
+    with threadpoolctl.threadpool_limits(limits=1, user_api="blas"):
+        for ncores in (2, 3, 5):
+            pooled = ld_consistency_screen(blocks, z, rounds=3, seed=2,
+                                           ncores=ncores)
+            np.testing.assert_array_equal(pooled, serial)
 
 
 def test_pool_is_refused_without_a_confirmed_reentrant_blas(monkeypatch):
