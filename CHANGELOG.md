@@ -1,7 +1,82 @@
 # Changelog
 
 User-visible changes to **bipred** are recorded here. The project is currently
-`0.3.6`.
+`0.3.7`.
+
+## [0.3.7] - 2026-08-09
+
+A documentation defect with real consequences: `ldsc_rg` told callers to cap
+extreme chi-square before calling it, and did not say that the cap belongs to
+the regression alone. Both real-data drivers read it the other way, built one
+per-variant mask, and handed the same capped variant set to LD Score regression
+and to the bivariate fit.
+
+### Changed
+
+- **`ldsc_rg` now says which variants the chi-square cap is for.** The advice
+  exists because this is a one-step unfiltered LDSC whose weights come from the
+  fitted means, so a variant far above the line keeps near-full leverage on the
+  slope. It is about a linear regression and applies to nothing else. Applying
+  it to the fit as well deletes large effects from a mixture model whose slab
+  component exists to hold them.
+
+  How much that costs depends entirely on the trait's architecture. Over the
+  HapMap3 reference, `chi2 > 80` discards 0.4% of CAD's summed chi-square and
+  7.6% of LDL's, but 47% of urate's, 51% of lipoprotein(a)'s and 73% of total
+  bilirubin's -- from under 3,000 variants in a million. `studies/_lib/
+  chi2_cap_audit.py` measures it for a registered trait.
+
+  No estimator behaviour changed. Fits that did not apply a cap are unaffected,
+  and passing the same arguments as before gives the same answer.
+
+### Fixed
+
+- **`benchmarks/real_ldl_cad.py` and `benchmarks/qc_factorial.py` take
+  `--chi2-cap {both,ldsc,none}`.** `both` is the default and reproduces every
+  committed number; `ldsc` holds high-chi-square rows out of the regression
+  while the fit keeps every variant. In the factorial the distinction reaches
+  further than the fit: `per_variant()` runs upstream of the LD-consistency
+  screen, so under `both` the screen never evaluates the variants the cap
+  removed.
+
+  On LDL x CAD the change is immaterial, which is consistent with those two
+  traits being near the bottom of the loss table: after screening, `rg` moves
+  +0.2658 to +0.2589, less than the fit's own iterate spread of 0.0148 there.
+  The two fit sets differ by 426 variants before the screen and by one after
+  it, so the screen was already removing what the cap would have.
+
+- **`qc_factorial.py` has a CLI.** It had none, so every knob was a module
+  global a caller had to monkeypatch, and any run overwrote the committed
+  `qc_factorial.csv`. It now takes `--out`, `--chi2-cap` and `--rounds`, and
+  `main()` accepts a parsed namespace.
+
+- **`qc_factorial.py` no longer raises `KeyError: 'LDL'` on a narrowed trait
+  set.** Its checksum set was built from hardcoded trait names; it now derives
+  from the traits in `PAIRS`.
+
+- **`real_ldl_cad.py` honours `BIPRED_WORK`,** as `qc_factorial.py` already
+  did. Pointing it at a checkout outside `~/REPOS` previously meant setting
+  `BIPRED_LDREF`, `BIPRED_LDL` and `BIPRED_CAD` individually.
+
+- **Two tests failed for environment reasons, one of them by segfault.**
+  `test_pooled_screen_matches_the_serial_one` forces the block pool on to check
+  that `ncores` cannot change the mask, but forcing it skipped the gate's other
+  precondition: the pool is only ever entered with BLAS pinned to one thread.
+  Against numpy's bundled OpenBLAS at its default thread count, nesting over it
+  segfaulted rather than failing, so the process died mid-suite and the tests
+  ordered after it never ran. It now pins BLAS for the duration.
+  `test_run_all_refuses_an_untracked_source_file` derived Git Bash from
+  `git.exe` at a fixed depth that only holds when `git` resolves to
+  `<Git>/cmd/git.exe`.
+
+### Added
+
+- **`real_ldl_cad.py` records `rg_iterate_sd`, `h2_ldl_iterate_sd`,
+  `h2_cad_iterate_sd` and `retained_iterations`,** matching what
+  `qc_factorial.py` already wrote and carrying the same caveat: this is
+  approximate MCMC, so these are the spread of autocorrelated iterates from one
+  chain rather than posterior standard deviations. `ldpred3_auto_bivariate_
+  chains` and its split-Rhat remain the way to get a defensible interval.
 
 ## [0.3.6] - 2026-08-08
 

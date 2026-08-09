@@ -161,6 +161,19 @@ def ldsc_rg(beta_hat1, beta_hat2, ld_scores, n_eff1, n_eff2, *, m_snps=None,
     regions (MHC, APOE) and cap extreme chi-square yourself before calling this
     when a screen needs to be robust to individual loci.
 
+    **Cap the rows you pass here, not the variants you fit.** This advice is
+    about a linear regression's leverage and applies to nothing else. A caller
+    that builds one per-variant mask and hands the same variant set to this
+    function and to ``ldpred3_auto_bivariate_blocks`` deletes large effects
+    from a mixture model whose slab component exists to hold them. That costs
+    little for a polygenic trait and removes the trait for a concentrated one:
+    over a HapMap3 reference, ``chi2 > 80`` discards 0.4% of CAD's summed
+    chi-square but 51% of lipoprotein(a)'s and 73% of total bilirubin's, from
+    under 3,000 variants in a million. Subset the arguments to this call and
+    leave the fit its full variant set; keep ``m_snps`` at the full count
+    either way, since the cap drops regression rows rather than changing the
+    estimand.
+
     All per-variant inputs must be aligned to the same variants in genomic
     order. This function receives no genomic coordinates, so it cannot verify
     or restore that order. A common row permutation leaves the point estimates
