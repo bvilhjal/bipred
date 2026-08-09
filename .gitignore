@@ -29,6 +29,12 @@ benchmarks/.ld_cache/
 # Bivariate rg benchmark population-LD cache (regenerated on demand)
 benchmarks/.rg_cache/
 
+# LaTeX build artifacts from studies/*/REPORT.tex (the PDF itself is committed)
+studies/*/*.aux
+studies/*/*.log
+studies/*/*.out
+studies/*/*.toc
+
 # Local benchmark-run scaffolding and logs (not deliverables)
 benchmarks/_*.log
 benchmarks/_*.stdout

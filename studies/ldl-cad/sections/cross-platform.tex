@@ -1,0 +1,20 @@
+\section*{A caution this study exists to make}
+
+\texttt{results/estimates.csv} carries two runs of the same three stages:
+macOS/arm64 under bipred 0.3.5, and Windows/x86-64 under 0.3.6, against an
+independently rebuilt LD reference.
+
+Stages 1 and 2 agree to every recorded digit --- across a different operating
+system, architecture and BLAS. Stage 3 does not: \texttt{rg} moved from
+$+0.2856$ to $+0.2658$, and $m$ from 845{,}623 to 845{,}423.
+
+The cause is benign. Version 0.3.6 deliberately gave up reproducing 0.3.5's
+screening masks for a given seed, so about 200 of 845{,}000 variants differ.
+But the shape of it is the reason \texttt{studies/} is a separate directory
+from \texttt{benchmarks/}: \textbf{a biological estimate moved because of an
+implementation refactor}, and under a regenerate-every-release contract nothing
+would have flagged it.
+
+That is also the honest scale for the third-stage number. A $0.02$ shift from
+reseeded masks is the resolution this pair supports; $+0.27$ is the result,
+not $+0.2658$.

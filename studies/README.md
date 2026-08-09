@@ -16,10 +16,14 @@ studies/
   _lib/
     traits.toml      files, column layouts, N, ancestry, known defects
     datasets.md      sources tried and what is wrong with them
+    methods.tex      the Methods section both reports share
   <study>/
     README.md        question, traits, result, caveats
-    report.py        renders REPORT.md from results/ alone
-    REPORT.md
+    REPORT.tex       hand-written; \input's sections/ and ../_lib/methods.tex
+    REPORT.pdf
+    sections/*.tex
+    figures.py       redraws figures/ from results/estimates.csv
+    figures/*.pdf
     results/
       estimates.csv  overwritten on re-run; version and platform are columns
       provenance.json
@@ -28,8 +32,16 @@ studies/
 Results are overwritten; git keeps the history. Every row carries the bipred
 version and platform that produced it.
 
-`report.py` reads only `results/`, never the summary statistics -- so the
-report is readable by someone who does not have 9 GB of GWAS files.
+The report is a document, edited directly. Only the figures are generated, and
+`figures.py` reads only `results/estimates.csv` -- never the summary
+statistics -- so both rebuild for someone who does not have 9 GB of GWAS files:
+
+```bash
+cd studies/<study> && python figures.py && pdflatex REPORT.tex
+```
+
+`_lib/methods.tex` is shared because the estimator does not differ between
+studies. Each report supplies its own "This analysis" subsection after it.
 
 ## Studies
 

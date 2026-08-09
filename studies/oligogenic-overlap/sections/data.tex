@@ -1,0 +1,29 @@
+\section*{Full results}
+
+The figures above are a reading of one table, not a substitute for it.
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\texttt{results/estimates.csv} & one row per pair: \texttt{m}, LDSC and bipred
+  \texttt{rg}, \texttt{h2}, \\
+  & the overlap parameters, cancellation ratios, divergence flag \\
+\texttt{results/provenance.json} & package versions, platform, clean source
+  revisions \\
+\texttt{../\_lib/traits.toml} & every trait: file, column layout, $N$,
+  ancestry, known quirks \\
+\texttt{../\_lib/datasets.md} & sources tried and rejected, with symptoms \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Thirteen rows are recorded: the eleven fitted pairs above, and two fits of
+bilirubin $\times$ gallstones that were rejected on data grounds rather than on
+their results. The gallstones release carries minor allele frequency under an
+effect-allele-frequency header, and the refit diverged (cancellation $14.29$).
+Both rows are kept in the CSV so the rejection is auditable;
+\texttt{../\_lib/datasets.md} records how it was diagnosed.
+
+Summary statistics are not committed --- roughly 9\,GB across the thirteen
+traits. Nothing in this report requires them: \texttt{figures.py} reads only
+\texttt{results/estimates.csv}.

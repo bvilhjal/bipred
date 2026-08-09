@@ -1,0 +1,27 @@
+\section*{The question}
+
+The simulation benchmarks draw $\hat\beta \sim N(R\beta, R/N)$ from the model
+the sampler assumes. That is the right way to measure an estimator against a
+known truth, and it is structurally incapable of catching a failure that appears
+only when the summary statistics disagree with the LD reference --- which is
+exactly what shipped in 0.3.0, where the first real GWAS bipred was pointed at
+produced a silently diverged fit that thirty architecture cells had no way to
+detect.
+
+This study asks what three levels of cleaning do to one real bivariate fit:
+harmonisation alone, per-variant filters, and those filters followed by the
+LD-consistency screen.
+
+\subsection*{Traits}
+
+\textbf{LDL} --- GLGC 2013 (Willer et al.), continuous, per-variant $N$.
+
+\textbf{CAD} --- CARDIoGRAMplusC4D 2015 (Nikpay et al.), GWAS Catalog
+GCST003116. Case/control, so fitted at an effective $N$. Its standard-error
+column is genomic-control corrected, which deflates $z$-scores, so the CAD
+heritability reported here is observed-scale at the study's case fraction
+\emph{and} conservative. It is not a liability-scale heritability.
+
+The two consortia are believed close to disjoint. Their cross-trait LDSC
+intercept ($\sim{+}0.02$) is consistent with small correlated sampling error,
+but an intercept cannot identify cohort overlap by itself.

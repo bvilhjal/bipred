@@ -27,7 +27,8 @@ intercept cannot identify cohort overlap by itself.
 
 ## Result
 
-See [`REPORT.md`](REPORT.md).
+See [`REPORT.pdf`](REPORT.pdf) (source: [`REPORT.tex`](REPORT.tex) and
+[`sections/`](sections/)).
 
 The screen is the load-bearing step. Cancellation falls from 271 to 0.65 and
 the divergence warning clears; only at that point is the joint fit admissible

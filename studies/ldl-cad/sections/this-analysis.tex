@@ -1,0 +1,26 @@
+\subsection*{This analysis}
+
+Three cleaning stages are fitted, and their contrast is the result:
+
+\begin{enumerate}\setlength{\itemsep}{0.3em}
+\item \textbf{harmonised} --- rsID match to the LD reference with allele
+  matching and sign flipping only. 924{,}254 variants.
+\item \textbf{per-variant QC} --- adds MAF $\geq 0.01$, imputation
+  INFO $\geq 0.9$, $\chi^2 \leq 80$, and allele-frequency discordance against
+  the reference $\leq 0.20$. 887{,}361 variants.
+\item \textbf{+ LD-consistency screen} --- adds the screen of the previous
+  section at four rounds. 845{,}623 variants (845{,}423 on the second run).
+\end{enumerate}
+
+Each stage is a full joint fit at 200 burn-in and 300 retained sweeps, with
+\texttt{cross\_corr} taken from that stage's own cross-trait LDSC intercept.
+Long-range LD regions and the MHC are retained throughout.
+
+The generating script is \texttt{benchmarks/real\_ldl\_cad.py}, which stays in
+\texttt{benchmarks/} because its other role --- does a real-shaped GWAS still
+produce an admissible fit? --- is a regression canary that should be regenerated
+freely. What belongs here is the estimate and its reading. The two roles want
+opposite handling, which is why they live in different places.
+
+Inputs are not committed; \texttt{benchmarks/README.md} Table 4 records how to
+acquire them, and \texttt{../\_lib/traits.toml} registers their column layouts.

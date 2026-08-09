@@ -1,0 +1,40 @@
+% Hand-written. Only the figures are generated -- rebuild them with
+%     python figures.py
+% then compile from this directory:
+%     pdflatex REPORT.tex
+% The Methods section is shared with the other studies; see ../_lib/methods.tex.
+
+\documentclass[11pt,a4paper]{article}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=25mm]{geometry}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{booktabs}
+\usepackage[hidelinks]{hyperref}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.7em}
+% Paths inside \texttt do not hyphenate, so a long one at a line end would
+% otherwise overflow the margin.
+\emergencystretch=3em
+
+\begin{document}
+
+{\LARGE\bfseries LDL $\times$ CAD across three levels of QC\par}
+\medskip
+{\small One trait pair, three cleaning stages, two platforms.\\
+bipred 0.3.5 (macOS/arm64) and 0.3.6 (Windows/x86-64), ldpred3 0.4.5.\\
+Estimates in \texttt{results/estimates.csv}.\par}
+\bigskip
+
+\input{sections/question}
+\input{sections/result}
+\input{sections/cross-platform}
+
+\section*{Methods}
+\input{../_lib/methods}
+\input{sections/this-analysis}
+
+\end{document}

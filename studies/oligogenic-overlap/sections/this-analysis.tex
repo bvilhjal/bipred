@@ -1,0 +1,24 @@
+\subsection*{This analysis}
+
+Every pair was fitted under a single QC arm, \textbf{001}: lenient per-variant
+filters (MAF $\geq 0.01$, imputation INFO $\geq 0.9$, $\chi^2 \leq 80$,
+allele-frequency discordance against the reference $\leq 0.20$), long-range LD
+regions and the MHC \emph{retained}, and the LD-consistency screen \emph{on},
+four rounds. That arm was chosen because the companion \texttt{ldl-cad} study
+found the screen to be the load-bearing switch of the three; fixing the other
+two isolates it.
+
+The screen is run once per trait on the lenient variant set, and the resulting
+masks are intersected across the pair --- not re-run per pair. Re-screening per
+pair would let the screen see a different variant set each time, which entangles
+what the per-variant filters did with what the screen was given.
+
+Traits, source files, sample sizes, ancestries and known dataset defects are
+registered in \texttt{../\_lib/traits.toml}. Sources that were tried and
+rejected are recorded with their symptoms in \texttt{../\_lib/datasets.md}; read
+that before adding a dataset, because two of the three defects recorded there
+are invisible until a fit has already started.
+
+This is one QC arm on one LD reference. It measures how the two summaries
+behave across these pairs; it is not a comparison of QC strategies, and the
+factorial that would support one is in \texttt{benchmarks/qc\_factorial.py}.

@@ -1,0 +1,105 @@
+% Shared by both studies' REPORT.tex. The estimator does not differ between
+% them, so its description should not either -- only the pipeline around it
+% does, and each report writes its own "This analysis" subsection after this.
+%
+% Supplies \subsection* only; the including document owns \section*{Methods}.
+
+\subsection*{The model}
+
+bipred is bivariate LDpred: one joint fit of two traits that share a single LD
+reference. Each variant is assigned to one of four latent states --- causal for
+neither trait, for trait 1 only, for trait 2 only, or for \emph{both} --- with
+probabilities $(\pi_{00}, \pi_{10}, \pi_{01}, \pi_{11})$. A trait-1-only effect
+is drawn from $N(0, s_1)$, a trait-2-only effect from $N(0, s_2)$, and a
+both-causal pair from $N(0, \Sigma)$ with
+$\Sigma = \left[\begin{smallmatrix} s_1 & s_{12} \\ s_{12} & s_2
+\end{smallmatrix}\right]$. The off-diagonal $s_{12}$ is the effect covariance
+inside the shared component, and is the only place the two traits couple.
+
+The indicator is \emph{per trait}, not a single shared one. Whether the two
+traits' causal variants co-occur is therefore learned as $\pi_{11}$ rather than
+assumed: correlated traits borrow strength through the both-causal component,
+and disjoint traits can drive $\pi_{11}$ toward zero so the two fits decouple.
+That is what makes the polygenic-overlap summary an estimate rather than a
+restatement of the prior.
+
+Fitting is Gibbs sampling over the LD blocks. Each sweep evaluates the four
+bivariate-Gaussian likelihoods of the residual marginal estimate at a variant,
+samples that variant's state, then draws its effects; the mixture weights $\pi$
+and the variance components $(s_1, s_2, s_{12})$ are re-estimated every sweep
+under a damping factor of $0.2$. Reported quantities are posterior means over
+the retained iterations: per-trait SNP heritability \texttt{h2}, the genetic
+correlation \texttt{rg}, posterior-mean effects, and a MiXeR-style overlap
+summary --- \texttt{n\_causal} per trait, \texttt{n\_shared},
+\texttt{frac\_shared}, and the correlation \texttt{rho\_beta} of effects within
+the shared component.
+
+\subsection*{What rho\_beta is, and is not}
+
+\texttt{rg} is a genome-wide average: genetic covariance divided by the
+geometric mean of the two heritabilities, over every variant in the fit.
+\texttt{rho\_beta} is the effect correlation \emph{conditional on a variant
+being causal for both traits}. The two answer different questions, and they come
+apart exactly when one trait's heritability sits in very few loci. Neither is a
+causal estimate.
+
+\texttt{frac\_shared} is $\pi_{11}$ divided by the smaller of the two marginal
+causal fractions, so it asks what proportion of the less polygenic trait's
+causal set is also causal for the other.
+
+\subsection*{Sample overlap}
+
+Overlapping samples correlate the two traits' sampling errors. The fit accepts
+that correlation as \texttt{cross\_corr}, set per pair from the cross-trait LD
+Score regression intercept, used as-is and never clipped into range. An
+intercept can also reflect correlated confounding rather than shared samples, so
+this absorbs overlap without identifying it.
+
+\subsection*{The LD-consistency screen}
+
+Per-variant filters --- minor allele frequency, imputation quality, a
+chi-square cap, sample size --- judge each variant in isolation, so none of them
+can see a variant disagreeing with the variants it is correlated with. The
+screen tests exactly that. Within a window the variants are split at random in
+half and each $z$-score in one half is predicted from the other through the LD,
+\[
+  \hat{z}_a = R_{aB}\,R_{BB}^{+}\,z_B,
+  \qquad
+  T_a = \frac{(z_a - \hat{z}_a)^2}{1 - R_{aB}\,R_{BB}^{+}\,R_{Ba}}
+  \;\sim\; \chi^2_1
+\]
+under consistency. Variants far from what their neighbours predict are dropped,
+and the split is repeated so each variant is tested from several directions.
+
+It runs against the same numeric LD representation the fit will use, so the
+screen and the sampler see the same matrix. It is DENTIST-inspired, not DENTIST:
+window construction, partition schedule, eigenvalue regularisation and removal
+policy all differ from the published pipeline (Chen et al.\ 2021,
+\emph{Nature Communications} 12:7117), so that pipeline's calibration does not
+transfer.
+
+\subsection*{Divergence diagnostics}
+
+A bivariate fit can diverge silently. Given summary statistics that disagree
+with the LD reference, the sampler places large opposing effects on variants in
+near-perfect LD, and these cancel to a plausible-looking \texttt{h2}. Three
+diagnostics are recorded, and any one of them raises the warning:
+$\sum \beta^2 / h^2$ above $10$ (the cancellation ratio, reported in both
+studies), $\max|\beta|$ above $25$ slab standard deviations, and retained-trace
+drift above $1.25$. All three were calibrated on one real LDL $\times$ CAD fit
+that diverged and the same fit after screening repaired it, so each separates
+the two regimes by more than an order of magnitude rather than by a hair.
+
+\textbf{An estimate carrying the divergence warning is not an estimate of
+anything}, and is reported only to show the contrast.
+
+\subsection*{LD reference and harmonisation}
+
+All fits use the European UK Biobank HapMap3 LD reference, built with ldpred3's
+bigsnpr converter at the pinned revision \texttt{5d86ac9d}. Summary statistics
+are harmonised to it by rsID with allele matching, flipping the effect sign
+where the effect and reference alleles are swapped; strand-ambiguous and
+unmatched variants are dropped. Odds-ratio releases are taken to logs before
+harmonisation, which preserves the sign across a flip. Case/control traits are
+fitted at an effective $N$ of $4/(1/n_{\text{case}} + 1/n_{\text{ctrl}})$. BLAS
+is pinned to one thread throughout.

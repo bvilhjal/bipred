@@ -30,8 +30,8 @@ Lp(a) x CAD is a number with no scale.
 
 ## Result
 
-See [`REPORT.md`](REPORT.md) / [`REPORT.tex`](REPORT.tex), generated from
-`results/`.
+See [`REPORT.pdf`](REPORT.pdf) (source: [`REPORT.tex`](REPORT.tex) and
+[`sections/`](sections/)).
 
 `rho_beta` orders monotonically by biological closeness -- +0.99 for
 same-biology and causal pairs, down to a -0.11 to -0.05 null band. Lp(a) x CAD
