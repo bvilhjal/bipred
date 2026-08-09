@@ -1,12 +1,18 @@
 \subsection*{This analysis}
 
-Every pair was fitted under a single QC arm, \textbf{001}: lenient per-variant
-filters (MAF $\geq 0.01$, imputation INFO $\geq 0.9$, $\chi^2 \leq 80$,
-allele-frequency discordance against the reference $\leq 0.20$), long-range LD
-regions and the MHC \emph{retained}, and the LD-consistency screen \emph{on},
-four rounds. That arm was chosen because the companion \texttt{ldl-cad} study
-found the screen to be the load-bearing switch of the three; fixing the other
-two isolates it.
+Every pair was fitted under a single QC arm, \textbf{001}. Its per-variant
+filters, in the order \texttt{benchmarks/qc\_factorial.py} applies them, are
+reference MAF $\geq 0.01$; allele-frequency discordance against the reference
+$\leq 0.20$; imputation INFO $\geq 0.9$; $\chi^2 \leq 80$; per-variant $N \geq
+0.67 \times \mathrm{median}(N)$; and an implied-standard-deviation consistency
+check at the lenient bounds $(0.5, 0.1)$. Long-range LD regions and the MHC are
+\emph{retained}, and the LD-consistency screen is \emph{on} at four rounds.
+That arm was chosen because the companion \texttt{ldl-cad} study found the
+screen to be the load-bearing switch of the three; fixing the other two
+isolates it.
+
+The $\chi^2 \leq 80$ term in that list is not the innocuous filter it looks
+like, and it has its own section below.
 
 The screen is run once per trait on the lenient variant set, and the resulting
 masks are intersected across the pair --- not re-run per pair. Re-screening per

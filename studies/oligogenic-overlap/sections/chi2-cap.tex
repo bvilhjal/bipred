@@ -1,0 +1,130 @@
+\section*{The chi-square cap}
+
+The per-variant QC in arm 001 caps chi-square at 80. That single filter turns
+out to matter more for this study than any other, and it was found by noticing
+that Lp(a)'s \texttt{h2} of $0.007$ is too small even for a tagging problem.
+
+Measured on the published Lp(a) release (9{,}183{,}329 variants with finite
+$\beta$ and standard error):
+
+\begin{center}
+\begin{tabular}{@{}lr@{}}
+\toprule
+variants above $\chi^2 = 80$ & 3{,}819 \quad (0.042\%) \\
+share of the trait's summed $\chi^2$ they carry & 42.5\% \\
+variants in the \emph{LPA} window, chr6:160.0--161.1\,Mb & 3{,}970 \\
+\quad of those, removed by the cap & 2{,}894 \quad (72.9\%) \\
+largest, rs10455872 & $\chi^2 = 90{,}550$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Four ten-thousandths of the variants carry 42\% of the signal, and the cap
+deletes them. rs10455872 exceeds the threshold by a factor of 1{,}132.
+
+\subsection*{Why the cap is there}
+
+It is inherited from LD Score regression, and \texttt{bipred.ldsc.ldsc\_rg}
+says so directly: it is a one-step unfiltered LDSC whose regression weights are
+built from the fitted means, so a variant whose observed chi-square far exceeds
+the LDSC line keeps near-full leverage on the slope. The docstring instructs
+the caller to cap extreme chi-square before calling it, and the reference
+implementation excludes $\chi^2 > \max(0.001N, 80)$ for the same reason.
+
+The cause is statistical, not numerical. At $N = 284{,}044$ a $\chi^2$ of
+$90{,}550$ is a standardised $\hat\beta$ of about $0.56$, well inside the
+$|\hat\beta| < 1$ the standardisation requires and nowhere near a precision
+limit.
+
+\subsection*{Why it should not apply to the joint fit}
+
+Both drivers build \emph{one} per-variant mask and pass the same variant set to
+LD Score regression and to the bivariate fit. So a filter that exists to
+protect a linear regression also removes those variants from a Bayesian mixture
+model whose slab component exists precisely to hold large effects. bipred does
+not need the cap and pays its cost anyway.
+
+\subsection*{It is not confined to Lp(a)}
+
+The obvious guess is that this is an oligogenic-trait problem and that
+polygenic traits pay almost nothing. That guess is wrong.
+\texttt{../\_lib/chi2\_cap\_audit.py} recomputes the loss for every registered
+trait, counting only variants present in the LD reference --- the only ones a
+fit could have seen:
+
+\begin{center}
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+trait & over cap & \% of $\sum\chi^2$ removed & largest $\chi^2$ \\
+\midrule
+bilirubin, total  & 2{,}262 & 73.0 & 107{,}799 \\
+bilirubin, direct &   788 & 69.5 &  76{,}937 \\
+lipoprotein(a)    &   529 & 50.5 &  12{,}694 \\
+urate             & 1{,}645 & 46.7 &  14{,}649 \\
+cystatin C        & 2{,}039 & 27.0 &  21{,}274 \\
+ALP               & 2{,}960 & 25.5 &  10{,}369 \\
+SHBG              & 1{,}957 & 22.9 &   8{,}332 \\
+CRP               & 1{,}268 & 17.7 &   5{,}461 \\
+GGT               & 1{,}838 & 16.0 &   7{,}772 \\
+LDL               &   420 &  7.6 &   2{,}013 \\
+gout              &   395 &  6.5 &   1{,}907 \\
+VTE               &   153 &  2.2 &     758 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Nine of the twelve lose more than 15\% of their signal; four lose more than
+45\%. Total bilirubin loses 73\%, driven by rs887829 at \emph{UGT1A1} at
+$\chi^2 = 107{,}799$. Under 3{,}000 variants out of a million carry that much
+of the signal in these traits, and the filter is built to delete exactly them.
+
+This has an awkward consequence for the calibration in the first figure.
+dbilirubin $\times$ bilirubin is one of the two pairs used to fix what a large
+\texttt{rho\_beta} looks like, at $+0.9926$ --- and both of its traits are the
+worst affected in the table. The anchor is not damaged in a way that obviously
+biases it, since both traits lose the same locus and the surviving effects
+still agree, but it is not the clean reference it was presented as.
+
+\subsection*{What it does and does not change}
+
+It does not overturn the ordering in the first figure: \texttt{rho\_beta} still
+separates related from unrelated pairs, and it still places Lp(a) $\times$ CAD
+with the related ones while \texttt{rg} cannot resolve it. Every pair was
+capped identically, so the comparison between pairs is unaffected.
+
+What it does change is the mechanism. The report cannot claim that averaging
+one very large locus over a million variants is what defeats \texttt{rg} here,
+because that locus was removed before fitting. The defensible claim is
+narrower and still worth making: with the dominant locus gone, Lp(a)'s residual
+architecture is around 100 causal variants, \texttt{rg} averages that to noise,
+and \texttt{rho\_beta} does not. What the uncapped fit would give is unknown,
+and is the first thing to run.
+
+\subsection*{A prediction the cap makes about polygenicity}
+
+There is a second consequence, and it points at numbers already in this report.
+Truncating the top of the effect-size distribution does not reduce the
+heritability the sampler has to account for --- it removes the large effects
+that would have accounted for it. The mixture then has to explain the same
+signal with small effects, and the only way to do that is to use more of them.
+The cap should therefore \emph{inflate} \texttt{n\_causal}.
+
+The estimates are high enough to invite that reading: cystatinC at 21{,}000
+causal variants, CRP at 17{,}117--18{,}414, GGT at 13{,}741--14{,}388, out of
+roughly $10^6$ fitted.
+
+\textbf{The cross-trait comparison does not support it.} Putting the loss
+column beside \texttt{n\_causal}, the three traits that lose most --- bilirubin
+at 73\%, Lp(a) at 51\%, urate at 47\% --- come in at roughly 13{,}000, 130 and
+3{,}700 causal variants, which is the full range of the table. The two highest
+polygenicity estimates, CRP and cystatinC, lose 18\% and 27\%, less than the
+median. If the cap were inflating \texttt{n\_causal}, this is where it would
+show, and it does not.
+
+That is not a refutation either, because the comparison is confounded: the
+traits differ in true polygenicity, sample size and how concentrated their
+architecture is, and those differences are larger than the effect being looked
+for. The test that would settle it is within-trait --- refit the same trait
+with the cap raised and see whether \texttt{n\_causal} moves. Until that is
+run, the mechanism is plausible, the cross-trait evidence is against it, and
+neither is worth much.

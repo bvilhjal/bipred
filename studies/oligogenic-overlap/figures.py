@@ -16,6 +16,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir))
+#: The 2x2x2 factorial's arm 001 -- lenient filters, long-range LD kept, screen
+#: on -- which is the arm every pair in this study was fitted under.
+BENCH = os.path.join(REPO, "benchmarks", "qc_factorial.csv")
+ARM_001 = {"strict": "0", "drop_long_range": "0", "ld_screen": "1"}
 FOCAL = "Lp(a) x CAD"
 
 INK, MUTED, HILITE = "#22303f", "#93a3b3", "#d1495b"
@@ -38,6 +43,46 @@ LABEL = {
     "CRP x Lp(a)": (0, -16, "center"),
 }
 
+#: Same, for the h2-agreement panel. Anchored on each trait's largest point.
+LABEL_H2 = {
+    "Lp(a)": (10, -3, "left"),
+    "CAD": (10, -3, "left"),
+    "urate": (10, -3, "left"),
+    "VTE": (-2, 9, "center"),
+    "dbilirubin": (0, -13, "center"),
+    "bilirubin": (10, -3, "left"),
+    "gout": (-9, 2, "right"),
+    "CRP": (2, -13, "center"),
+    "ALP": (-9, -7, "right"),
+    "GGT": (-9, 2, "right"),
+    "SHBG": (9, -3, "left"),
+    "cystatinC": (9, 0, "left"),
+    # from the QC factorial
+    "height": (9, -3, "left"),
+    "LDL": (10, 4, "left"),
+    "HDL": (10, -4, "left"),
+    "TG": (0, -14, "center"),
+}
+
+#: Same, for the rg-agreement panel, whose points fall differently.
+LABEL_RG = {
+    "urate x gout": (0, -15, "center"),
+    "dbilirubin x bilirubin": (0, 10, "center"),
+    "urate x cystatinC": (8, -3, "left"),
+    "gout x CRP": (8, -3, "left"),
+    "cystatinC x CRP": (9, 3, "left"),
+    "ALP x GGT": (0, -15, "center"),
+    "Lp(a) x CAD": (0, 11, "center"),
+    "Lp(a) x VTE": (0, -15, "center"),
+    "GGT x bilirubin": (0, 9, "center"),
+    "SHBG x ALP": (0, -15, "center"),
+    "CRP x Lp(a)": (8, 3, "left"),
+    # from the QC factorial
+    "LDL x CAD": (0, 10, "center"),
+    "height x LDL": (-9, 4, "right"),
+    "HDL x TG": (0, 10, "center"),
+}
+
 
 def style():
     plt.rcParams.update({
@@ -53,6 +98,23 @@ def style():
 
 def pretty(pair):
     return pair.replace(" x ", " × ")
+
+
+def load_bench():
+    """Arm-001 rows of the QC factorial: the same arm, three more pairs.
+
+    Unlike results/estimates.csv these carry `*_iterate_sd` -- the spread of
+    the quantity across retained Gibbs iterates. That is Monte-Carlo
+    variability of the fit, not a confidence interval: it says nothing about
+    the sampling error of the GWAS behind it, which is why it comes out around
+    1% of h2. Drawn as bars only to show where any bipred spread is recorded
+    at all.
+    """
+    if not os.path.exists(BENCH):
+        return []
+    with open(BENCH, newline="") as fh:
+        return [r for r in csv.DictReader(fh)
+                if all(r[k] == v for k, v in ARM_001.items())]
 
 
 def save(fig, stem):
@@ -137,6 +199,112 @@ def fig_frac_shared(live):
     return fig
 
 
+def fig_h2_agreement(live, bench):
+    """Per-trait h2: the joint fit against LD Score regression.
+
+    One point per trait per pairing. A trait in several pairs is estimated
+    several times over slightly different variant sets, so the spread along a
+    trait's line is empirical variability -- the only kind available for the
+    study pairs, neither estimator recording a standard error for h2.
+    """
+    per_trait = {}
+    for r in live:
+        t1, t2 = r["pair"].split(" x ")
+        per_trait.setdefault(t1, []).append(
+            (float(r["ldsc_h2_1"]), float(r["h2_1"]), 0.0, "study"))
+        per_trait.setdefault(t2, []).append(
+            (float(r["ldsc_h2_2"]), float(r["h2_2"]), 0.0, "study"))
+    for r in bench:
+        t1, t2 = r["pair"].split(" x ")
+        per_trait.setdefault(t1, []).append(
+            (float(r["ldsc_h2_1"]), float(r["h2_1"]),
+             float(r["h2_1_iterate_sd"]), "bench"))
+        per_trait.setdefault(t2, []).append(
+            (float(r["ldsc_h2_2"]), float(r["h2_2"]),
+             float(r["h2_2_iterate_sd"]), "bench"))
+
+    fig, ax = plt.subplots(figsize=(7.0, 6.0))
+    ax.plot([0.004, 0.52], [0.004, 0.52], ls="--", lw=0.9, color=MUTED,
+            zorder=1)
+    ax.text(0.0125, 0.0104, "equal", fontsize=7.5, color=MUTED, ha="left")
+
+    for trait, points in per_trait.items():
+        hit = trait == "Lp(a)"
+        colour = HILITE if hit else INK
+        xs = [p[0] for p in points]
+        ys = [p[1] for p in points]
+        if len(points) > 1:
+            ax.plot(xs, ys, "-", lw=1.0, color=HILITE if hit else PALE,
+                    zorder=2)
+        for x, y, sd, source in points:
+            ax.errorbar(x, y, yerr=1.96 * sd if sd else None,
+                        fmt="^" if source == "bench" else "o", ms=5.5,
+                        color=colour, ecolor=colour, elinewidth=1.1,
+                        capsize=2, alpha=0.9, zorder=3)
+        dx, dy, ha = LABEL_H2.get(trait, (9, -3, "left"))
+        ax.annotate(trait, (max(xs), max(ys)), textcoords="offset points",
+                    xytext=(dx, dy), ha=ha, fontsize=7, color=colour,
+                    fontweight="bold" if hit else "normal")
+
+    ax.plot([], [], "o", ms=5.5, color=INK, label="this study (11 pairs)")
+    ax.plot([], [], "^", ms=5.5, color=INK,
+            label="QC factorial, arm 001 (3 pairs; bars = 95% iterate SD)")
+    ax.legend(loc="upper left")
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlim(0.0032, 0.62)
+    ax.set_ylim(0.0032, 0.62)
+    ax.set_aspect("equal")
+    ax.set_xlabel("LDSC h2   (log scale)")
+    ax.set_ylabel("bipred h2   (log scale)")
+    ax.grid(zorder=0)
+    ax.set_axisbelow(True)
+    return fig
+
+
+def fig_rg_agreement(live, bench):
+    """rg: the joint fit against LD Score regression.
+
+    Horizontal bars are LDSC's 95% block-jackknife interval, available for
+    every pair. Vertical bars are the 95% iterate SD and exist only for the
+    three factorial pairs -- the study CSV records no bipred spread at all.
+    """
+    fig, ax = plt.subplots(figsize=(7.0, 5.2))
+    ax.plot([-0.75, 0.90], [-0.75, 0.90], ls="--", lw=0.9, color=MUTED,
+            zorder=1)
+    ax.text(0.885, 0.855, "equal", fontsize=7.5, color=MUTED, ha="right")
+    ax.axhline(0, color=MUTED, lw=0.6, zorder=1)
+    ax.axvline(0, color=MUTED, lw=0.6, zorder=1)
+
+    rows = ([(r, "study") for r in live] + [(r, "bench") for r in bench])
+    for row, source in rows:
+        hit = row["pair"] == FOCAL
+        colour = HILITE if hit else INK
+        xi, yi = float(row["ldsc_rg"]), float(row["rg"])
+        yerr = (1.96 * float(row["rg_iterate_sd"])
+                if source == "bench" else None)
+        ax.errorbar(xi, yi, xerr=1.96 * float(row["ldsc_rg_se"]), yerr=yerr,
+                    fmt="^" if source == "bench" else "o", ms=5.5,
+                    color=colour, ecolor=HILITE if hit else PALE,
+                    elinewidth=1.3, capsize=2.5, zorder=3 if hit else 2)
+        dx, dy, ha = LABEL_RG.get(row["pair"], (0, 9, "center"))
+        ax.annotate(pretty(row["pair"]), (xi, yi), textcoords="offset points",
+                    xytext=(dx, dy), ha=ha, fontsize=7,
+                    color=colour, fontweight="bold" if hit else "normal")
+
+    ax.plot([], [], "o", ms=5.5, color=INK, label="this study (11 pairs)")
+    ax.plot([], [], "^", ms=5.5, color=INK,
+            label="QC factorial, arm 001 (3 pairs)")
+    ax.legend(loc="upper left")
+    ax.set_xlim(-0.82, 1.24)
+    ax.set_ylim(-0.68, 0.95)
+    ax.set_xlabel("LDSC rg   (horizontal bars: 95% block-jackknife interval)")
+    ax.set_ylabel("bipred rg")
+    ax.grid(zorder=0)
+    ax.set_axisbelow(True)
+    return fig
+
+
 def fig_polygenicity(live):
     """Lp(a) is two orders of magnitude less polygenic than everything else."""
     per_trait = {}
@@ -181,7 +349,11 @@ def main():
     save(fig_ordering(live), "rho-beta-vs-rg")
     save(fig_frac_shared(live), "frac-shared")
     save(fig_polygenicity(live), "polygenicity")
-    print(f"wrote 3 figures from {len(live)} fitted pairs")
+    bench = load_bench()
+    save(fig_h2_agreement(live, bench), "h2-agreement")
+    save(fig_rg_agreement(live, bench), "rg-agreement")
+    print(f"wrote 5 figures from {len(live)} fitted pairs "
+          f"+ {len(bench)} factorial pairs at the same arm")
 
 
 if __name__ == "__main__":

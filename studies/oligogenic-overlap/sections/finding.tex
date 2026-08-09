@@ -47,7 +47,9 @@ number with nothing to compare it to.
 \caption{Estimated polygenicity per trait, one point per pairing the trait
 appears in. Lp(a) is estimated at 106, 131 and 172 causal variants across three
 independent pairings; every other trait here is in the thousands to tens of
-thousands. This is the arithmetic behind the finding --- averaging one very
-large locus over $\sim$$10^6$ variants destroys the signal, and the architecture
-summary does not average it away.}
+thousands. Averaging $\sim$100 causal variants over $\sim$$10^6$ destroys the
+signal in \texttt{rg}; the architecture summary does not average it away. Note
+what these counts are measured on: the per-variant QC caps chi-square at 80,
+which removes 73\% of the \emph{LPA} locus before anything is fitted. See
+\emph{The chi-square cap} below.}
 \end{figure}

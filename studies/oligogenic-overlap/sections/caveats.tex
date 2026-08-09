@@ -4,7 +4,10 @@
 
 \item \textbf{The overlap statistics carry no interval.} The null band is
 descriptive, not a test, so ``$+0.3644$ is outside it'' is an observation about
-eleven fits and not an inference. This is the largest gap in the analysis.
+eleven fits and not an inference. This is the largest gap in the analysis, and
+it is a recording gap: \texttt{BivariateResult.genetic\_samples} retains the
+per-sweep quadratics the intervals would come from, but the drivers summarise
+only their means into \texttt{results/estimates.csv}.
 
 \item \textbf{\texttt{rg} $= +0.0481$ for Lp(a) $\times$ CAD is not a null
 result}, and will be read as one if it is quoted without the architecture that
@@ -15,10 +18,11 @@ reproduces across three pairings (106, 131, 172), which is reassuring about the
 estimate but says nothing about whether the effect generalises to other
 oligogenic traits.
 
-\item \textbf{Lp(a)'s \texttt{h2} of $0.007$ is a reference limitation.}
-HapMap3 tags the \emph{LPA} KIV-2 repeat poorly. It is not an estimate of Lp(a)
-heritability, and the shared-component correlation is measured on what the
-reference can see.
+\item \textbf{Lp(a)'s \texttt{h2} of $0.007$ is mostly a QC artifact.} The
+chi-square cap of 80 removes 73\% of the \emph{LPA} locus, including
+rs10455872 at $\chi^2 = 90{,}550$, before either estimator sees the data. Poor
+HapMap3 tagging of the KIV-2 repeat is a second, smaller cause. It is not an
+estimate of Lp(a) heritability. See \emph{The chi-square cap}.
 
 \item \textbf{Lp(a) is a four-cohort meta-analysis at 95.9\% European} fitted
 against a European LD reference. The European-only alternative covered 16\% of

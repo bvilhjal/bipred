@@ -14,7 +14,28 @@ Three cleaning stages are fitted, and their contrast is the result:
 
 Each stage is a full joint fit at 200 burn-in and 300 retained sweeps, with
 \texttt{cross\_corr} taken from that stage's own cross-trait LDSC intercept.
-Long-range LD regions and the MHC are retained throughout.
+Long-range LD regions are retained; the MHC is removed with the stage-2
+filters.
+
+\subsection*{The chi-square cap applies here too}
+
+The $\chi^2 \leq 80$ term enters at stage 2 and carries into stage 3, so two of
+the three rows are fitted on a capped variant set. The cap is inherited from LD
+Score regression, whose linear model gives an uncapped large-effect variant
+near-full leverage on the slope; the bivariate fit does not need it and gets it
+anyway, because both estimators are handed one variant set.
+
+For LDL and CAD the cost should be small --- both are polygenic, and no single
+locus carries a large share of either. It is not zero: the cap is what removes
+the \emph{LPA} region from any lipid trait, and for CAD it removes the strongest
+signals at 9p21. The companion \texttt{oligogenic-overlap} study documents the
+filter in detail, where for lipoprotein(a) it removes 73\% of the causal locus
+and 42.5\% of the trait's summed chi-square.
+
+What can be said from the numbers here is narrower: the cap did not repair the
+divergence. Cancellation for LDL is $255$ before it and $271$ after. Whatever
+the cap is doing at stage 2, it is not what makes the fit admissible --- that
+is the screen.
 
 The generating script is \texttt{benchmarks/real\_ldl\_cad.py}, which stays in
 \texttt{benchmarks/} because its other role --- does a real-shaped GWAS still
