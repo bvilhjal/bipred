@@ -33,10 +33,15 @@ $\sim$100 causal variants.
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=\linewidth]{figures/h2-agreement.pdf}
-\caption{Per-trait \texttt{h2}, both estimators, log scale. Points are one
-trait in one pairing, joined where a trait appears more than once; the joins
-are therefore an empirical stability check, and most are short. bipred runs
+% Narrower than \linewidth on purpose: the axes are aspect-equal so the y=x
+% line reads at 45 degrees, and at full width the panel is taller than the
+% text block.
+\includegraphics[width=0.68\linewidth]{figures/h2-agreement.pdf}
+\caption{Per-trait \texttt{h2}, both estimators. Points are one trait in one
+pairing, joined where a trait appears more than once; the joins are therefore
+an empirical stability check, and most are short. Vertical bars on the
+triangles are the 95\% iterate SD, which exists only for the factorial pairs.
+bipred runs
 above LDSC nearly everywhere, by roughly a third through the middle of the
 range. Two traits sit off that line in opposite directions: CAD, where bipred
 is half of LDSC ($0.131 \rightarrow 0.069$), and Lp(a), where it is ten times

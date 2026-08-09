@@ -47,21 +47,21 @@ LABEL = {
 LABEL_H2 = {
     "Lp(a)": (10, -3, "left"),
     "CAD": (10, -3, "left"),
-    "urate": (10, -3, "left"),
-    "VTE": (-2, 9, "center"),
-    "dbilirubin": (0, -13, "center"),
-    "bilirubin": (10, -3, "left"),
-    "gout": (-9, 2, "right"),
-    "CRP": (2, -13, "center"),
-    "ALP": (-9, -7, "right"),
-    "GGT": (-9, 2, "right"),
-    "SHBG": (9, -3, "left"),
-    "cystatinC": (9, 0, "left"),
+    "urate": (-10, -3, "right"),
+    "VTE": (-10, 0, "right"),
+    "dbilirubin": (-10, -2, "right"),
+    "bilirubin": (-10, -2, "right"),
+    "gout": (-2, 9, "center"),
+    "ALP": (-10, 3, "right"),
+    "CRP": (-10, -6, "right"),
+    "SHBG": (10, 1, "left"),
+    "GGT": (0, -13, "center"),
+    "cystatinC": (10, -2, "left"),
     # from the QC factorial
-    "height": (9, -3, "left"),
-    "LDL": (10, 4, "left"),
-    "HDL": (10, -4, "left"),
-    "TG": (0, -14, "center"),
+    "height": (-10, -2, "right"),
+    "LDL": (0, 9, "center"),
+    "HDL": (9, -3, "left"),
+    "TG": (-9, -3, "right"),
 }
 
 #: Same, for the rg-agreement panel, whose points fall differently.
@@ -73,13 +73,13 @@ LABEL_RG = {
     "cystatinC x CRP": (9, 3, "left"),
     "ALP x GGT": (0, -15, "center"),
     "Lp(a) x CAD": (0, 11, "center"),
-    "Lp(a) x VTE": (0, -15, "center"),
+    "Lp(a) x VTE": (9, -13, "left"),
     "GGT x bilirubin": (0, 9, "center"),
-    "SHBG x ALP": (0, -15, "center"),
-    "CRP x Lp(a)": (8, 3, "left"),
+    "SHBG x ALP": (-9, -12, "right"),
+    "CRP x Lp(a)": (9, 4, "left"),
     # from the QC factorial
     "LDL x CAD": (0, 10, "center"),
-    "height x LDL": (-9, 4, "right"),
+    "height x LDL": (-9, 5, "right"),
     "HDL x TG": (0, 10, "center"),
 }
 
@@ -226,10 +226,14 @@ def fig_h2_agreement(live, bench):
             (float(r["ldsc_h2_2"]), float(r["h2_2"]),
              float(r["h2_2_iterate_sd"]), "bench"))
 
-    fig, ax = plt.subplots(figsize=(7.0, 6.0))
-    ax.plot([0.004, 0.52], [0.004, 0.52], ls="--", lw=0.9, color=MUTED,
-            zorder=1)
-    ax.text(0.0125, 0.0104, "equal", fontsize=7.5, color=MUTED, ha="left")
+    # Linear, not log. Every trait but Lp(a) sits between 0.05 and 0.25, and a
+    # log axis spends most of its length on empty decades while compressing
+    # exactly that band -- which put six traits in an unlabellable clump. On
+    # linear axes the same band is about a fifth of the frame.
+    fig, ax = plt.subplots(figsize=(6.6, 5.6))
+    lim = 0.30, 0.48
+    ax.plot([0, lim[0]], [0, lim[0]], ls="--", lw=0.9, color=MUTED, zorder=1)
+    ax.text(0.283, 0.293, "equal", fontsize=7.5, color=MUTED, ha="right")
 
     for trait, points in per_trait.items():
         hit = trait == "Lp(a)"
@@ -249,17 +253,16 @@ def fig_h2_agreement(live, bench):
                     xytext=(dx, dy), ha=ha, fontsize=7, color=colour,
                     fontweight="bold" if hit else "normal")
 
-    ax.plot([], [], "o", ms=5.5, color=INK, label="this study (11 pairs)")
-    ax.plot([], [], "^", ms=5.5, color=INK,
-            label="QC factorial, arm 001 (3 pairs; bars = 95% iterate SD)")
+    ax.plot([], [], "o", ms=5.5, color=INK, label="this study")
+    ax.plot([], [], "^", ms=5.5, color=INK, label="QC factorial, arm 001")
+    # Upper left is the empty corner: this panel is taller than it is wide, and
+    # nothing reaches h2 above 0.25 except height, which sits far to the right.
     ax.legend(loc="upper left")
-    ax.set_xscale("log")
-    ax.set_yscale("log")
-    ax.set_xlim(0.0032, 0.62)
-    ax.set_ylim(0.0032, 0.62)
+    ax.set_xlim(0, lim[0])
+    ax.set_ylim(0, lim[1])
     ax.set_aspect("equal")
-    ax.set_xlabel("LDSC h2   (log scale)")
-    ax.set_ylabel("bipred h2   (log scale)")
+    ax.set_xlabel("LDSC h2")
+    ax.set_ylabel("bipred h2")
     ax.grid(zorder=0)
     ax.set_axisbelow(True)
     return fig
@@ -275,7 +278,7 @@ def fig_rg_agreement(live, bench):
     fig, ax = plt.subplots(figsize=(7.0, 5.2))
     ax.plot([-0.75, 0.90], [-0.75, 0.90], ls="--", lw=0.9, color=MUTED,
             zorder=1)
-    ax.text(0.885, 0.855, "equal", fontsize=7.5, color=MUTED, ha="right")
+    ax.text(0.60, 0.565, "equal", fontsize=7.5, color=MUTED, ha="right")
     ax.axhline(0, color=MUTED, lw=0.6, zorder=1)
     ax.axvline(0, color=MUTED, lw=0.6, zorder=1)
 
@@ -295,9 +298,8 @@ def fig_rg_agreement(live, bench):
                     xytext=(dx, dy), ha=ha, fontsize=7,
                     color=colour, fontweight="bold" if hit else "normal")
 
-    ax.plot([], [], "o", ms=5.5, color=INK, label="this study (11 pairs)")
-    ax.plot([], [], "^", ms=5.5, color=INK,
-            label="QC factorial, arm 001 (3 pairs)")
+    ax.plot([], [], "o", ms=5.5, color=INK, label="this study")
+    ax.plot([], [], "^", ms=5.5, color=INK, label="QC factorial, arm 001")
     ax.legend(loc="upper left")
     ax.set_xlim(-0.82, 1.24)
     ax.set_ylim(-0.68, 0.95)
