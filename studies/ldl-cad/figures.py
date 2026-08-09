@@ -41,18 +41,23 @@ def save(fig, stem):
 
 
 def by_run(rows):
-    """(platform, bipred, chi2_cap) -> {stage: row}, in first-seen order."""
+    """(platform, bipred, fit_chi2_cap) -> {stage: row}, in first-seen order."""
     runs = {}
     for r in rows:
-        key = (r["platform"], r["bipred"], r.get("chi2_cap", "both"))
+        key = (r["platform"], r["bipred"], r.get("fit_chi2_cap", "capped"))
         runs.setdefault(key, {})[r["stage"]] = r
     return runs
 
 
 def label(run):
+    """Name runs by whether the *fit* was capped.
+
+    LD Score regression is capped in every run here, so naming the mode after
+    LDSC labels the constant and invites reading these as LDSC's estimates.
+    They are bipred's; the only thing that varies is what the fit saw.
+    """
     platform, version, cap = run
-    suffix = "" if cap == "both" else ", cap on the regression only"
-    return f"{platform}, bipred {version}{suffix}"
+    return f"bipred {version} {cap} ({platform})"
 
 
 def fig_cancellation(rows):

@@ -48,9 +48,11 @@ $2 \times 2 \times 2$ factorial that would support one is in
 \subsection*{What the chi-square cap does here: almost nothing}
 
 The third run in \texttt{results/estimates.csv} repeats all three stages with
-\texttt{--chi2-cap regression}, which holds high-chi-square rows out of the LD Score
-regression --- which needs them held out --- while the joint fit keeps every
-variant. The dashed line in the figure above is that run.
+the cap taken off the fit. LD Score regression keeps it throughout, because its
+linear model is what needs it: an uncapped large-effect variant holds near-full
+leverage on the slope. So the runs differ in one thing only, and are named for
+it --- \texttt{fit\_chi2\_cap} is \emph{capped} or \emph{uncapped}, and every
+estimate in both is bipred's. The dashed line above is the uncapped fit.
 
 At the stage that counts it changes nothing. \texttt{rg} moves from $+0.2658$
 to $+0.2589$, a shift of $0.0069$. That is smaller than the fit's own iterate
