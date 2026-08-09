@@ -192,7 +192,10 @@ def fig_frac_shared(live):
                     fontweight="bold" if hit else "normal")
     ax.set_xlabel("frac_shared   (share of the smaller causal set that is shared)")
     ax.set_ylabel("rho_beta")
-    ax.set_xlim(0.30, 1.16)
+    # Wide enough for the least-shared pair: uncapped, CRP x Lp(a) and
+    # Lp(a) x VTE sit near 0.24, and an axis starting at 0.30 dropped them
+    # from the figure without saying so.
+    ax.set_xlim(0.16, 1.16)
     ax.set_ylim(-0.28, 1.18)
     ax.grid(zorder=0)
     ax.set_axisbelow(True)
@@ -305,30 +308,54 @@ def fig_rg_agreement(live, bench):
     return fig
 
 
-def fig_polygenicity(live):
-    """Lp(a) is two orders of magnitude less polygenic than everything else."""
-    per_trait = {}
-    for r in live:
+def _per_trait_n_causal(rows):
+    per = {}
+    for r in rows:
         t1, t2 = r["pair"].split(" x ")
-        per_trait.setdefault(t1, []).append(int(r["n_causal_1"]))
-        per_trait.setdefault(t2, []).append(int(r["n_causal_2"]))
+        per.setdefault(t1, []).append(int(r["n_causal_1"]))
+        per.setdefault(t2, []).append(int(r["n_causal_2"]))
+    return per
+
+
+def fig_polygenicity(live, capped):
+    """Two things at once: Lp(a)'s architecture, and what the cap did to it.
+
+    The chi-square cap removes a trait's largest effects, and the mixture then
+    has to explain the same heritability with more small ones. Every trait's
+    polygenicity falls when the cap comes off the fit -- by 9% for Lp(a), which
+    was already at the floor, and by 93% for dbilirubin.
+    """
+    per_trait = _per_trait_n_causal(live)
+    was = _per_trait_n_causal(capped)
     order = sorted(per_trait, key=lambda t: sum(per_trait[t]) / len(per_trait[t]))
 
-    fig, ax = plt.subplots(figsize=(6.9, 3.4))
+    fig, ax = plt.subplots(figsize=(6.9, 3.8))
     for i, trait in enumerate(order):
         hit = trait == "Lp(a)"
         vals = per_trait[trait]
-        if len(vals) > 1:
-            ax.hlines(i, min(vals), max(vals), color=HILITE if hit else PALE,
-                      lw=1.4, zorder=1)
-        ax.plot(vals, [i] * len(vals), "o", ms=6, alpha=0.85, zorder=2,
+        old = was.get(trait, [])
+        if old:
+            a = sum(old) / len(old)
+            b = sum(vals) / len(vals)
+            ax.annotate("", xy=(b, i), xytext=(a, i),
+                        arrowprops=dict(arrowstyle="->", color="#c9d3dc",
+                                        lw=1.1, shrinkA=3, shrinkB=3))
+            ax.plot(old, [i] * len(old), "o", ms=5, mfc="white", zorder=2,
+                    mec=MUTED, mew=1.1)
+        ax.plot(vals, [i] * len(vals), "o", ms=6, alpha=0.9, zorder=3,
                 color=HILITE if hit else INK)
         if trait in ("Lp(a)", "CAD"):
             text = (f"{min(vals):,}" if min(vals) == max(vals)
                     else f"{min(vals):,}–{max(vals):,}")
+            # Above the row: the capped markers sit to the right of the filled
+            # ones and the axis label to their left, so both sides are taken.
             ax.annotate(text, (max(vals), i), textcoords="offset points",
-                        xytext=(9, -3), fontsize=7.5,
+                        xytext=(0, 10), ha="center", fontsize=7.5,
                         color=HILITE if hit else INK)
+    ax.plot([], [], "o", ms=5, mfc="white", mec=MUTED, mew=1.1,
+            label="bipred with cap")
+    ax.plot([], [], "o", ms=6, color=INK, label="bipred without cap")
+    ax.legend(loc="upper left")
     ax.set_xscale("log")
     ax.set_yticks(range(len(order)))
     ax.set_yticklabels(order)
@@ -344,16 +371,23 @@ def fig_polygenicity(live):
 
 def main():
     with open(os.path.join(HERE, "results", "estimates.csv"), newline="") as fh:
-        live = [r for r in csv.DictReader(fh) if r["status"] == "ok"]
+        rows = list(csv.DictReader(fh))
+    # The uncapped fits are the study's estimates; the capped ones are the
+    # sensitivity comparison they replaced. A diverged fit is in neither.
+    live = [r for r in rows
+            if r["status"] == "ok" and r["fit_chi2_cap"] == "uncapped"]
+    capped = [r for r in rows
+              if r["status"] == "ok" and r["fit_chi2_cap"] == "capped"]
     style()
     save(fig_ordering(live), "rho-beta-vs-rg")
     save(fig_frac_shared(live), "frac-shared")
-    save(fig_polygenicity(live), "polygenicity")
+    save(fig_polygenicity(live, capped), "polygenicity")
     bench = load_bench()
     save(fig_h2_agreement(live, bench), "h2-agreement")
     save(fig_rg_agreement(live, bench), "rg-agreement")
-    print(f"wrote 5 figures from {len(live)} fitted pairs "
-          f"+ {len(bench)} factorial pairs at the same arm")
+    print(f"wrote 5 figures from {len(live)} uncapped pairs "
+          f"({len(capped)} capped for comparison) "
+          f"+ {len(bench)} factorial pairs")
 
 
 if __name__ == "__main__":

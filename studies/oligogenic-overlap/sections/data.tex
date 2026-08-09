@@ -17,12 +17,32 @@ The figures above are a reading of one table, not a substitute for it.
 \end{tabular}
 \end{center}
 
-Thirteen rows are recorded: the eleven fitted pairs above, and two fits of
-bilirubin $\times$ gallstones that were rejected on data grounds rather than on
-their results. The gallstones release carries minor allele frequency under an
-effect-allele-frequency header, and the refit diverged (cancellation $14.29$).
-Both rows are kept in the CSV so the rejection is auditable;
-\texttt{../\_lib/datasets.md} records how it was diagnosed.
+Twenty-four rows are recorded, under two values of \texttt{fit\_chi2\_cap}:
+
+\begin{center}
+\begin{tabular}{@{}llr@{}}
+\toprule
+\texttt{fit\_chi2\_cap} & \texttt{status} & rows \\
+\midrule
+\texttt{uncapped} & \texttt{ok} --- the study's estimates & 10 \\
+\texttt{uncapped} & \texttt{diverged} --- GGT $\times$ bilirubin & 1 \\
+\texttt{capped}   & \texttt{ok} --- the superseded comparison & 11 \\
+\texttt{capped}   & \texttt{superseded}, \texttt{rejected} & 2 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\texttt{uncapped} means the chi-square cap was applied to the LD Score
+regression, which needs it, and not to the joint fit. Those are the rows every
+figure and number in this report is drawn from. The \texttt{capped} rows are
+kept because the difference between them is a result in its own right.
+
+The two \texttt{capped} rows that are neither \texttt{ok} nor superseded are
+fits of bilirubin $\times$ gallstones, rejected on data grounds rather than on
+their results: the gallstones release carries minor allele frequency under an
+effect-allele-frequency header, and the refit diverged. They are kept so the
+rejection is auditable; \texttt{../\_lib/datasets.md} records how it was
+diagnosed.
 
 Summary statistics are not committed --- roughly 9\,GB across the thirteen
 traits. Nothing in this report requires them: \texttt{figures.py} reads only

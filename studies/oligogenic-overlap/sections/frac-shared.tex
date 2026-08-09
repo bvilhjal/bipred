@@ -4,17 +4,17 @@ A second result fell out of the pairs included only to fix the null: sharing
 causal \emph{variants} is nearly free, and carries little information on its
 own.
 
-GGT $\times$ bilirubin and SHBG $\times$ ALP were chosen as unrelated pairs of
-polygenic traits. They share 63\% and 71\% of the smaller causal set --- and
-their shared effects correlate at $-0.05$ and $-0.06$. Sitting at nearly the
-same \texttt{frac\_shared}, gout $\times$ CRP and cystatinC $\times$ CRP
-correlate at $+0.37$ and $+0.34$. For traits that are each causal at tens of
-thousands of variants, substantial overlap of the causal \emph{sets} is close to
-the default, and it is the \emph{direction} of the shared effects that
+SHBG $\times$ ALP was chosen as an unrelated pair of polygenic traits. It shares
+61\% of the smaller causal set, and its shared effects correlate at $-0.033$.
+Sitting just above it on the same axis, cystatinC $\times$ CRP shares 69\%, gout
+$\times$ CRP 71\% and ALP $\times$ GGT 75\% --- and those three correlate at
+$+0.316$, $+0.308$ and $+0.283$. For traits that are each causal at thousands to
+tens of thousands of variants, substantial overlap of the causal \emph{sets} is
+close to the default, and it is the \emph{direction} of the shared effects that
 discriminates.
 
 The qualification matters: over the whole range \texttt{frac\_shared} is not
-uninformative --- it runs from $0.39$ at the bottom of the scale to $1.00$ at
+uninformative --- it runs from $0.23$ at the bottom of the scale to $0.99$ at
 the top. What it cannot do is separate pairs in the middle, which is where most
 real pairs fall.
 
@@ -23,15 +23,22 @@ real pairs fall.
 \includegraphics[width=\linewidth]{figures/frac-shared.pdf}
 \caption{\texttt{frac\_shared} against \texttt{rho\_beta}. Across the full
 range the two are plainly associated --- it is the middle that cannot be
-resolved. Inside the shaded column, five pairs share 63--80\% of their causal
-set while their \texttt{rho\_beta} spans $-0.06$ to $+0.37$. Lp(a) $\times$ CAD
-sits low on the horizontal axis because Lp(a) has few causal variants at all,
-which is the point: a small shared set with a consistent direction. The
-horizontal band marks where the four below-zero pairs fall; it is descriptive,
-not a test.}
+resolved. Inside the shaded column, four pairs share 61--75\% of their causal
+sets while their \texttt{rho\_beta} spans $-0.03$ to $+0.32$. Lp(a) $\times$
+CAD sits low on the horizontal axis because Lp(a) has
+few causal variants at all, which is the point: a small shared set with a
+consistent direction. The horizontal band marks where the three below-zero
+pairs fall; it is descriptive, not a test.}
 \end{figure}
 
-This matters for how the overlap summary should be read. \texttt{n\_shared} and
+Lp(a) $\times$ CAD makes the same argument from the other side. It shares 55 of
+Lp(a)'s 96 causal variants --- a \texttt{frac\_shared} of $0.570$, lower than
+either unrelated polygenic pair --- while its shared effects correlate at
+$+0.5170$, higher than any pair that is not the same biology measured twice.
+Counting shared variants ranks it below SHBG $\times$ ALP; reading their
+direction ranks it fourth of ten.
+
+This is how the overlap summary should be read. \texttt{n\_shared} and
 \texttt{frac\_shared} describe how much of the architecture is common;
 \texttt{rho\_beta} describes whether the common part agrees. Only the second
 distinguishes the pairs here.
