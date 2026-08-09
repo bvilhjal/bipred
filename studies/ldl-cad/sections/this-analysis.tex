@@ -25,12 +25,16 @@ Score regression, whose linear model gives an uncapped large-effect variant
 near-full leverage on the slope; the bivariate fit does not need it and gets it
 anyway, because both estimators are handed one variant set.
 
-For LDL and CAD the cost should be small --- both are polygenic, and no single
-locus carries a large share of either. It is not zero: the cap is what removes
-the \emph{LPA} region from any lipid trait, and for CAD it removes the strongest
-signals at 9p21. The companion \texttt{oligogenic-overlap} study documents the
-filter in detail, where for lipoprotein(a) it removes 73\% of the causal locus
-and 42.5\% of the trait's summed chi-square.
+For this pair the cost is genuinely small, and measured rather than assumed.
+Over the LD-reference variants, the cap removes 7.6\% of LDL's summed
+chi-square (420 variants, largest $\chi^2 = 2{,}013$ at rs445925) and 0.43\% of
+CAD's (29 variants, largest $\chi^2 = 443$ at rs2891168, the 9p21 signal). Both
+traits are polygenic enough that no single locus carries much of the total.
+
+That is not general. The companion \texttt{oligogenic-overlap} study runs the
+same audit across fourteen traits, where the losses reach 73\% for total
+bilirubin and 51\% for lipoprotein(a). LDL and CAD are near the bottom of that
+range, which is why this study was a poor place to notice the filter at all.
 
 What can be said from the numbers here is narrower: the cap did not repair the
 divergence. Cancellation for LDL is $255$ before it and $271$ after. Whatever

@@ -53,30 +53,37 @@ trait, counting only variants present in the LD reference --- the only ones a
 fit could have seen:
 
 \begin{center}
-\begin{tabular}{@{}lrrr@{}}
+\begin{tabular}{@{}lrrrl@{}}
 \toprule
-trait & over cap & \% of $\sum\chi^2$ removed & largest $\chi^2$ \\
+trait & over cap & \% of $\sum\chi^2$ removed & largest $\chi^2$ & at \\
 \midrule
-bilirubin, total  & 2{,}262 & 73.0 & 107{,}799 \\
-bilirubin, direct &   788 & 69.5 &  76{,}937 \\
-lipoprotein(a)    &   529 & 50.5 &  12{,}694 \\
-urate             & 1{,}645 & 46.7 &  14{,}649 \\
-cystatin C        & 2{,}039 & 27.0 &  21{,}274 \\
-ALP               & 2{,}960 & 25.5 &  10{,}369 \\
-SHBG              & 1{,}957 & 22.9 &   8{,}332 \\
-CRP               & 1{,}268 & 17.7 &   5{,}461 \\
-GGT               & 1{,}838 & 16.0 &   7{,}772 \\
-LDL               &   420 &  7.6 &   2{,}013 \\
-gout              &   395 &  6.5 &   1{,}907 \\
-VTE               &   153 &  2.2 &     758 \\
+bilirubin, total  & 2{,}262 & 73.0 & 107{,}799 & rs887829 \\
+bilirubin, direct &   788 & 69.5 &  76{,}937 & rs887829 \\
+lipoprotein(a)    &   529 & 50.5 &  12{,}694 & rs3103347 \\
+urate             & 1{,}645 & 46.7 &  14{,}649 & rs7675964 \\
+cystatin C        & 2{,}039 & 27.0 &  21{,}274 & rs35610040 \\
+ALP               & 2{,}960 & 25.5 &  10{,}369 & rs651007 \\
+SHBG              & 1{,}957 & 22.9 &   8{,}332 & rs727428 \\
+CRP               & 1{,}268 & 17.7 &   5{,}461 & rs4420638 \\
+GGT               & 1{,}838 & 16.0 &   7{,}772 & rs5760492 \\
+LDL               &   420 &  7.6 &   2{,}013 & rs445925 \\
+gout              &   395 &  6.5 &   1{,}907 & rs2231142 \\
+VTE               &   153 &  2.2 &     758 & rs651007 \\
+gallstones        &   133 &  1.9 &   1{,}402 & rs4953023 \\
+CAD               &    29 &  0.4 &     443 & rs2891168 \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-Nine of the twelve lose more than 15\% of their signal; four lose more than
+Nine of the fourteen lose more than 15\% of their signal; four lose more than
 45\%. Total bilirubin loses 73\%, driven by rs887829 at \emph{UGT1A1} at
 $\chi^2 = 107{,}799$. Under 3{,}000 variants out of a million carry that much
 of the signal in these traits, and the filter is built to delete exactly them.
+
+The bottom of the table is as informative as the top. CAD loses 0.4\% and LDL
+7.6\%, which is why the \texttt{ldl-cad} study --- the one place this pipeline
+had been examined closely --- could not have surfaced this. Those two traits
+are nearly the least affected of the fourteen.
 
 This has an awkward consequence for the calibration in the first figure.
 dbilirubin $\times$ bilirubin is one of the two pairs used to fix what a large
