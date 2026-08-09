@@ -35,9 +35,12 @@ studies/*/*.log
 studies/*/*.out
 studies/*/*.toc
 
-# Local benchmark-run scaffolding and logs (not deliverables)
+# Local benchmark-run scaffolding and logs (not deliverables). The CSV and
+# sidecar patterns are broad on purpose: the real-data benchmarks refuse to run
+# on a dirty tree, so an exploratory run that left an untracked
+# benchmarks/_whatever.csv behind would block the next one.
 benchmarks/_*.log
 benchmarks/_*.stdout
 benchmarks/_run_all.sh
-benchmarks/_calib_*.csv
-benchmarks/_smoke_*.csv
+benchmarks/_*.csv
+benchmarks/_*.provenance.json
