@@ -44,3 +44,28 @@ This is one trait pair. It is why the screen exists and why arm 001 fixes it
 on; it does not establish a universal QC rule, and the
 $2 \times 2 \times 2$ factorial that would support one is in
 \texttt{benchmarks/qc\_factorial.py}.
+
+\subsection*{What the chi-square cap does here: almost nothing}
+
+The third run in \texttt{results/estimates.csv} repeats all three stages with
+\texttt{--chi2-cap ldsc}, which holds high-chi-square rows out of the LD Score
+regression --- which needs them held out --- while the joint fit keeps every
+variant. The dashed line in the figure above is that run.
+
+At the stage that counts it changes nothing. \texttt{rg} moves from $+0.2658$
+to $+0.2589$, a shift of $0.0069$. That is smaller than the fit's own iterate
+spread at that stage ($0.0148$) and about a third of the $0.0198$ that bipred
+0.3.6's mask reseed already moved it. Heritability moves in the fourth decimal,
+cancellation stays at $0.7$ and $0.5$, and no diagnostic changes state.
+
+At stage 2 it changes a great deal --- $+0.139$ against $+0.0546$ --- and that
+contrast is the informative part. Both of those fits are diverged, so neither
+is an estimate of anything. What the pair of numbers shows is that
+\textbf{the cap and the screen remove largely the same variants}: the two fit
+sets differ by 426 variants before screening and by one afterwards. On this
+pair the screen was already doing the cap's work, which is why taking the cap
+off changes nothing that survives to the end.
+
+That is a statement about LDL and CAD, not about the filter. They lose 7.6\%
+and 0.4\% of their summed chi-square to it. The traits where it removes half
+the signal are in the companion study, and this run says nothing about them.

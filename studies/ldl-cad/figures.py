@@ -41,11 +41,18 @@ def save(fig, stem):
 
 
 def by_run(rows):
-    """(platform, bipred) -> {stage: row}, in first-seen order."""
+    """(platform, bipred, chi2_cap) -> {stage: row}, in first-seen order."""
     runs = {}
     for r in rows:
-        runs.setdefault((r["platform"], r["bipred"]), {})[r["stage"]] = r
+        key = (r["platform"], r["bipred"], r.get("chi2_cap", "both"))
+        runs.setdefault(key, {})[r["stage"]] = r
     return runs
+
+
+def label(run):
+    platform, version, cap = run
+    suffix = "" if cap == "both" else f", cap on LDSC only"
+    return f"{platform}, bipred {version}{suffix}"
 
 
 def fig_cancellation(rows):
@@ -105,14 +112,15 @@ def fig_rg(rows):
         ax.annotate(f"{value:+.4f}", (i, value), textcoords="offset points",
                     xytext=(0, 10), ha="center", fontsize=7.5, color=MUTED)
 
-    for colour, marker, (run, stages) in zip((INK, ACCENT), ("o", "s"),
-                                             runs.items()):
+    styles = ((INK, "o", "-"), (ACCENT, "s", "-"), (HILITE, "^", "--"))
+    offsets = (5, -3, -13)
+    for (colour, marker, dash), dy, (run, stages) in zip(styles, offsets,
+                                                         runs.items()):
         y = [float(stages[s]["rg"]) for s in STAGES]
-        ax.plot(x, y, color=colour, lw=1.4, marker=marker, ms=5, zorder=3,
-                label=f"{run[0]}, bipred {run[1]}")
+        ax.plot(x, y, dash, color=colour, lw=1.4, marker=marker, ms=5,
+                zorder=3, label=label(run))
         ax.annotate(f"{y[-1]:+.4f}", (x[-1], y[-1]), fontsize=7.5,
-                    color=colour, textcoords="offset points",
-                    xytext=(8, -3 if colour == ACCENT else 5))
+                    color=colour, textcoords="offset points", xytext=(8, dy))
     ax.set_xticks(list(x))
     ax.set_xticklabels(STAGES)
     ax.set_xlim(-0.5, 2.55)

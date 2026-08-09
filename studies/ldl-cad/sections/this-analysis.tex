@@ -36,10 +36,11 @@ same audit across fourteen traits, where the losses reach 73\% for total
 bilirubin and 51\% for lipoprotein(a). LDL and CAD are near the bottom of that
 range, which is why this study was a poor place to notice the filter at all.
 
-What can be said from the numbers here is narrower: the cap did not repair the
-divergence. Cancellation for LDL is $255$ before it and $271$ after. Whatever
-the cap is doing at stage 2, it is not what makes the fit admissible --- that
-is the screen.
+The cap also did not repair the divergence: cancellation for LDL is $255$
+before it and $271$ after. Whatever it does at stage 2, it is not what makes
+the fit admissible --- that is the screen. \texttt{results/estimates.csv}
+carries a third run with \texttt{--chi2-cap ldsc} that measures the difference
+directly; see \emph{What the chi-square cap does here} above.
 
 The generating script is \texttt{benchmarks/real\_ldl\_cad.py}, which stays in
 \texttt{benchmarks/} because its other role --- does a real-shaped GWAS still
