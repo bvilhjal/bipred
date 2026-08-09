@@ -51,7 +51,7 @@ def by_run(rows):
 
 def label(run):
     platform, version, cap = run
-    suffix = "" if cap == "both" else f", cap on LDSC only"
+    suffix = "" if cap == "both" else ", cap on LDSC only"
     return f"{platform}, bipred {version}{suffix}"
 
 
