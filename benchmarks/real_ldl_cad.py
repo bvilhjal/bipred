@@ -76,6 +76,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ldpred3 import standardize_betas                                # noqa: E402
+from bipred.bivariate import _rg_from_quadratics_array               # noqa: E402
 from ldpred3.ld import load_ld_blocks                                # noqa: E402
 from ldpred3.ld_repr import LowRankLD, dense_ld, lowrank_ld          # noqa: E402
 from ldpred3.ldsc import ld_scores                                   # noqa: E402
@@ -248,8 +249,15 @@ def quadratic(blocks, beta):
     return total
 
 
-def fit_stage(name, blocks, bh1, bh2, n1, n2, n_ref, rows, timings):
-    """LDSC estimate plus joint fit for one cleaning stage."""
+def fit_stage(name, blocks, bh1, bh2, n1, n2, n_ref, rows, timings,
+              ldsc_chi2_max=None):
+    """LDSC estimate plus joint fit for one cleaning stage.
+
+    ``ldsc_chi2_max`` drops high-chi-square rows from the LD Score *regression*
+    only, leaving the joint fit the full variant set. ``m_snps`` still counts
+    every variant, as the reference implementation does: the cap excludes rows
+    from the regression, it does not change the estimand.
+    """
     m = bh1.size
     print(f"\n=== {name}: {len(blocks)} blocks, {m:,} variants ===", flush=True)
     started = time.perf_counter()
@@ -258,7 +266,17 @@ def fit_stage(name, blocks, bh1, bh2, n1, n2, n_ref, rows, timings):
         "fit", name, "ld_scores", time.perf_counter() - started,
         m=m, n_blocks=len(blocks))
     started = time.perf_counter()
-    screen = ldsc_rg(bh1, bh2, scores, n1, n2, m_snps=m)
+    if ldsc_chi2_max is None:
+        sel = slice(None)
+    else:
+        z1 = bh1 * np.sqrt(n1) / np.sqrt(np.maximum(1.0 - bh1 ** 2, 1e-12))
+        z2 = bh2 * np.sqrt(n2) / np.sqrt(np.maximum(1.0 - bh2 ** 2, 1e-12))
+        sel = (z1 ** 2 <= ldsc_chi2_max) & (z2 ** 2 <= ldsc_chi2_max)
+        print(f"  LDSC cap: {m - int(sel.sum()):,} of {m:,} rows held out of "
+              f"the regression (chi2 > {ldsc_chi2_max:g}); the fit keeps all "
+              f"{m:,}", flush=True)
+    screen = ldsc_rg(bh1[sel], bh2[sel], scores[sel], n1[sel], n2[sel],
+                     m_snps=m)
     ldsc_seconds = timings.add(
         "fit", name, "ldsc_regression", time.perf_counter() - started,
         m=m, n_blocks=len(blocks))
@@ -281,12 +299,26 @@ def fit_stage(name, blocks, bh1, bh2, n1, n2, n_ref, rows, timings):
     print(f"  bipred: rg {res.rg:+.4f}  p {res.p:.5f}  "
           f"({fit_seconds:.3f}s)")
     started = time.perf_counter()
+    # Spread across retained iterates, named as in qc_factorial.py and carrying
+    # the same warning: this is *approximate* MCMC -- sigma moves by a damped
+    # moment step rather than a draw from its conditional -- so these are not
+    # posterior standard deviations. They are the empirical spread of
+    # autocorrelated iterates from a single chain, which understates
+    # uncertainty, and they say nothing about error in the LD reference. For a
+    # defensible interval use ldpred3_auto_bivariate_chains and its split-Rhat.
+    trace = np.asarray(res.genetic_samples, dtype=np.float64)
+    rg_trace = _rg_from_quadratics_array(trace[:, 1], trace[:, 0], trace[:, 2])
     row = dict(stage=name, m=m, ldsc_rg=round(float(screen.rg), 4),
                ldsc_rg_se=round(float(screen.rg_se), 4),
                ldsc_h2_ldl=round(float(screen.h2[0]), 4),
                ldsc_h2_cad=round(float(screen.h2[1]), 4),
                ldsc_intercept=round(float(screen.gcov_intercept), 4),
-               rg=round(float(res.rg), 4), p=round(float(res.p), 6),
+               rg=round(float(res.rg), 4),
+               rg_iterate_sd=round(float(np.nanstd(rg_trace)), 4),
+               h2_ldl_iterate_sd=round(float(np.nanstd(trace[:, 0])), 5),
+               h2_cad_iterate_sd=round(float(np.nanstd(trace[:, 2])), 5),
+               retained_iterations=int(res.retained_iterations or 0),
+               p=round(float(res.p), 6),
                divergence_warned=int(bool(diverged)))
     for label, beta, h2 in (("ldl", res.beta1_est, res.h2[0]),
                             ("cad", res.beta2_est, res.h2[1])):
@@ -318,6 +350,17 @@ def main(argv=None):
     parser.add_argument(
         "--timing-csv",
         help="long-form step timings (default: <csv stem>_timing.csv)")
+    parser.add_argument(
+        "--chi2-cap", choices=("both", "ldsc", "none"), default="both",
+        help="where the chi2 <= 80 filter applies. 'both' (default) is the "
+             "historical behaviour: one per-variant mask feeds LD Score "
+             "regression and the joint fit alike. 'ldsc' keeps the cap on the "
+             "regression, which needs it -- an uncapped large-effect variant "
+             "holds near-full leverage on the slope -- while the fit sees "
+             "every variant, which is what its slab component is for. 'none' "
+             "removes it everywhere. On lipoprotein(a) the cap removes 73%% of "
+             "the LPA locus and half the trait's summed chi-square, so this "
+             "is not a minor switch for concentrated architectures.")
     parser.add_argument("--rounds", type=int, default=4,
                         help="LD-consistency screening passes per trait")
     args = parser.parse_args(argv)
@@ -415,9 +458,13 @@ def main(argv=None):
     stages["harmonised"] = np.ones(shared.size, bool)
     # Stage 2: per-variant filters.
     maf = np.minimum(af, 1 - af)
+    # The cap is in this mask only under --chi2-cap both. Under 'ldsc' it moves
+    # to the regression rows inside fit_stage; under 'none' it is gone.
+    capped = (((b1 / s1) ** 2 <= CHI2_MAX) & ((b2 / s2) ** 2 <= CHI2_MAX)
+              if args.chi2_cap == "both" else np.ones(shared.size, bool))
+    ldsc_cap = CHI2_MAX if args.chi2_cap == "ldsc" else None
     stages["per-variant QC"] = (
-        (maf >= MAF_MIN) & ~(info < INFO_MIN)
-        & ((b1 / s1) ** 2 <= CHI2_MAX) & ((b2 / s2) ** 2 <= CHI2_MAX)
+        (maf >= MAF_MIN) & ~(info < INFO_MIN) & capped
         & (np.abs(f1 - af) <= AF_DIFF) & (np.abs(f2 - af) <= AF_DIFF)
         & ~((chrom[shared] == MHC_CHROM) & (pos[shared] >= MHC_START)
             & (pos[shared] <= MHC_END)))
@@ -445,7 +492,7 @@ def main(argv=None):
                     time.perf_counter() - started, m=kept.size,
                     n_blocks=len(tiled))
         fit_stage(name, tiled, bh1, bh2, n1_stage, n2_stage, n_ref,
-                  rows, timings)
+                  rows, timings, ldsc_chi2_max=ldsc_cap)
 
     # Stage 3: the LD-consistency screen, on top of stage 2.
     mask = stages["per-variant QC"]
@@ -494,7 +541,7 @@ def main(argv=None):
                 time.perf_counter() - started, m=kept2.size,
                 n_blocks=len(tiled2))
     fit_stage(screen_name, tiled2, bh1, bh2, n1_stage, n2_stage, n_ref,
-              rows, timings)
+              rows, timings, ldsc_chi2_max=ldsc_cap)
 
     started = time.perf_counter()
     with open(args.csv, "w", newline="") as handle:
