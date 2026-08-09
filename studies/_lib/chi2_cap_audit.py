@@ -39,6 +39,26 @@ def opener(path, gzipped):
     return gzip.open(path, "rt") if gzipped else open(path)
 
 
+def resolve_columns(vintage, trait):
+    """Named vintage, with the trait's own ``*_col`` overrides applied.
+
+    Several releases follow a vintage except for a column or two -- CAD names
+    its rsID ``markername`` and its standard error ``se_dgc`` -- and an
+    odds-ratio release has no ``beta`` column at all.
+    """
+    cols = dict(vintage)
+    for key, override in (("rsid", "rsid_col"), ("effect", "effect_col"),
+                          ("se", "se_col"), ("frequency", "frequency_col"),
+                          ("effect_allele", "effect_allele_col"),
+                          ("other_allele", "other_allele_col")):
+        if override in trait:
+            cols[key] = trait[override]
+    if "effect_is_odds_ratio" in trait.get("quirks", []) \
+            and "effect_col" not in trait:
+        cols["effect"] = "odds_ratio"
+    return cols
+
+
 def audit(path, cols, gzipped, keep_ids, odds_ratio):
     """Return counts and summed chi-square, overall and above the cap."""
     with opener(path, gzipped) as fh:
@@ -104,8 +124,8 @@ def main():
         if not os.path.exists(path):
             print(f"  {name}: file not found, skipped")
             continue
-        res = audit(path, reg["columns"][t["columns"]], t.get("gzipped", False),
-                    keep_ids,
+        res = audit(path, resolve_columns(reg["columns"][t["columns"]], t),
+                    t.get("gzipped", False), keep_ids,
                     "effect_is_odds_ratio" in t.get("quirks", []))
         if "error" in res:
             print(f"  {name}: {res['error']}")

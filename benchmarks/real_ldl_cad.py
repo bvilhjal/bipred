@@ -89,7 +89,11 @@ from benchmarks.real_data_inputs import (                            # noqa: E40
 )
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-WORK = os.path.expanduser("~/REPOS/ldpred3/benchmarks/.work")
+#: Honours BIPRED_WORK like qc_factorial.py does. Without it, pointing this
+#: script at a checkout that is not under ~/REPOS meant overriding all three
+#: paths below individually.
+WORK = os.environ.get(
+    "BIPRED_WORK", os.path.expanduser("~/REPOS/ldpred3/benchmarks/.work"))
 REF = os.environ.get("BIPRED_LDREF",
                      os.path.join(WORK, "ldref-hm3", "ldpred3_ldref_hm3.npz"))
 LDL = os.environ.get("BIPRED_LDL",

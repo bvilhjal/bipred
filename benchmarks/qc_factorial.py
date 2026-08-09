@@ -43,6 +43,7 @@ aborts the run; it is never clipped into a superficially valid correction.
 
 from __future__ import annotations
 
+import argparse
 import csv
 import os
 import sys
@@ -117,6 +118,31 @@ LENIENT = dict(lower=0.5, upper=0.1)
 STRICT = dict(lower=0.8, upper=0.03)
 AF_LENIENT, AF_STRICT = 0.20, 0.10
 SCREEN_ROUNDS = 4
+CHI2_MAX = 80.0
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--out", default=OUT,
+        help="where to write the factorial CSV. Defaults to the committed "
+             "artifact, so an exploratory run must name its own file rather "
+             "than overwrite the recorded one.")
+    parser.add_argument(
+        "--chi2-cap", choices=("both", "ldsc", "none"), default="both",
+        help="where the chi2 <= 80 filter applies. 'both' (default) is the "
+             "historical behaviour: one per-variant mask feeds LD Score "
+             "regression and the joint fit alike. 'ldsc' keeps the cap on the "
+             "regression, which needs it -- an uncapped large-effect variant "
+             "holds near-full leverage on the slope -- while the fit sees "
+             "every variant, which is what its slab component is for. 'none' "
+             "removes it. Under 'both' the cap also runs upstream of the "
+             "LD-consistency screen, so the screen never evaluates the "
+             "variants it removed.")
+    parser.add_argument(
+        "--rounds", type=int, default=SCREEN_ROUNDS,
+        help="LD-consistency screening passes per trait (default 4)")
+    return parser.parse_args(argv)
 
 
 def _sample_size_plan(n, sized, *, binary):
@@ -151,17 +177,18 @@ def _frac_shared_trace(pi_samples):
         return np.where(smaller > 0, pi[:, 3] / smaller, np.nan)
 
 
-def main():
+def main(args=None):
+    args = args or parse_args()
     source_revision = require_clean_source()
     dependency_sources = {"ldpred3": require_ldpred3_source()}
-    input_hashes = validate_inputs({
-        "ldref-hm3/ldpred3_ldref_hm3.npz": REF,
-        "sumstats/jointGwasMc_LDL.txt.gz": TRAITS["LDL"][0]["path"],
-        "sumstats/cad.add.160614.website.txt": TRAITS["CAD"][0]["path"],
-        "sumstats/jointGwasMc_HDL.txt.gz": TRAITS["HDL"][0]["path"],
-        "sumstats/jointGwasMc_TG.txt.gz": TRAITS["TG"][0]["path"],
-        "sumstats/GIANT_HEIGHT_2014.txt.gz": TRAITS["height"][0]["path"],
-    })
+    # Derived from the traits actually in play, not a hardcoded list. The
+    # literal version raised KeyError: 'LDL' the moment a caller narrowed
+    # TRAITS, which is exactly what an exploratory run does.
+    inputs = {"ldref-hm3/ldpred3_ldref_hm3.npz": REF}
+    for name in {t for pair in PAIRS for t in pair[:2]}:
+        path = TRAITS[name][0]["path"]
+        inputs[f"sumstats/{os.path.basename(path)}"] = path
+    input_hashes = validate_inputs(inputs)
     blocks, ids, meta = load_ld_blocks(REF, return_metadata=True)
     index = {str(r): i for i, r in enumerate(ids)}
     a1 = np.asarray(meta["counted_allele"]).astype(str)
@@ -208,10 +235,17 @@ def main():
         sd_kw = STRICT if strict else LENIENT
         keep, _ = sd_consistency(d["beta"], d["se"], d["n_fit"], d["af"],
                                  binary=d["binary"], **sd_kw)
+        # The cap is in this mask only under --chi2-cap both. Under 'ldsc' it
+        # moves to the regression rows below; under 'none' it is gone. Leaving
+        # it here also puts it upstream of the screen, which is why the two
+        # cannot be separated by a later filter.
+        capped = (((d["beta"] / d["se"]) ** 2 <= CHI2_MAX)
+                  if args.chi2_cap == "both"
+                  else np.ones(d["beta"].shape, bool))
         mask = ((np.minimum(d["af"], 1 - d["af"]) >= 0.01)
                 & (np.abs(d["freq"] - d["af"]) <= af_max)
                 & ~(d["info"] < 0.9)
-                & ((d["beta"] / d["se"]) ** 2 <= 80)
+                & capped
                 & (d["n"] >= 0.67 * np.median(d["n"]))
                 & keep)
         if drop_lr:
@@ -243,7 +277,7 @@ def main():
         started = time.perf_counter()
         keep = ld_consistency_screen(
             tiled, d["beta"][mask][sel] / d["se"][mask][sel],
-            rounds=SCREEN_ROUNDS)
+            rounds=args.rounds)
         screens[name] = set(kept[keep].tolist())
         print(f"    screen {name}: {kept.size:,} -> {keep.sum():,} "
               f"({100*(1-keep.mean()):.1f}% dropped, "
@@ -260,11 +294,11 @@ def main():
               "rg_from_overlap", "n_causal_1", "n_causal_2", "n_shared",
               "cancel_1", "cancel_2", "max_abs_beta", "drift",
               "divergence_warned"]
-    with open(OUT, "w", newline="") as handle:
+    with open(args.out, "w", newline="") as handle:
         csv.DictWriter(handle, fieldnames=fields,
                        lineterminator="\n").writeheader()
     sidecar = write_provenance_sidecar(
-        OUT, source_revision=source_revision, input_hashes=input_hashes,
+        args.out, source_revision=source_revision, input_hashes=input_hashes,
         dependency_sources=dependency_sources)
     print(f"provenance: {sidecar}", flush=True)
 
@@ -292,7 +326,17 @@ def main():
             bh1 = standardize_betas(d1["beta"][s1], d1["se"][s1], d1["n_fit"][s1])[0]
             bh2 = standardize_betas(d2["beta"][s2], d2["se"][s2], d2["n_fit"][s2])[0]
             n1, n2 = d1["n_fit"][s1], d2["n_fit"][s2]
-            screen = ldsc_rg(bh1, bh2, ld_scores(tiled, n_ref=n_ref), n1, n2,
+            # Under --chi2-cap ldsc the high-chi-square rows are held out of
+            # the regression only; m_snps still counts every variant, as the
+            # reference implementation does, so the estimand is unchanged.
+            ell = ld_scores(tiled, n_ref=n_ref)
+            if args.chi2_cap == "ldsc":
+                z1 = bh1 * np.sqrt(n1) / np.sqrt(np.maximum(1 - bh1 ** 2, 1e-12))
+                z2 = bh2 * np.sqrt(n2) / np.sqrt(np.maximum(1 - bh2 ** 2, 1e-12))
+                sel = (z1 ** 2 <= CHI2_MAX) & (z2 ** 2 <= CHI2_MAX)
+            else:
+                sel = slice(None)
+            screen = ldsc_rg(bh1[sel], bh2[sel], ell[sel], n1[sel], n2[sel],
                              m_snps=m)
             # Refit the sensitivity value after each filtering choice. Use the
             # raw intercept or reject it: clipping would silently change it.
@@ -363,7 +407,7 @@ def main():
                     float(trace[-q:, 0].mean() / max(trace[:q, 0].mean(), 1e-12)),
                     float(trace[-q:, 2].mean() / max(trace[:q, 2].mean(), 1e-12))), 3),
                 divergence_warned=int(divergence_warned))
-            with open(OUT, "a", newline="") as handle:
+            with open(args.out, "a", newline="") as handle:
                 csv.DictWriter(handle, fieldnames=fields,
                                lineterminator="\n").writerow(row)
             print(f"  {t1:>6} x {t2:<6} strict={int(strict)} lr={int(drop_lr)} "
@@ -372,7 +416,7 @@ def main():
                   f"{'DIV-WARN' if divergence_warned else 'ok':>8} | "
                   f"{time.perf_counter()-started:.0f}s",
                   flush=True)
-    print(f"\nwrote {OUT}")
+    print(f"\nwrote {args.out}")
 
 
 if __name__ == "__main__":
