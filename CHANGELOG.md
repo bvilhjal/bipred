@@ -3,6 +3,24 @@
 User-visible changes to **bipred** are recorded here. The project is currently
 `0.3.7`.
 
+## [Unreleased]
+
+### Fixed
+
+- The user guide no longer lists a chi-square cap among the per-variant
+  filters for the joint-fit panel. The cap is an LDSC-row filter; applying
+  the same mask to `ldpred3_auto_bivariate_blocks` is the 0.3.7 failure
+  mode. `docs/rg.md` and the `qc` module intro now say the same thing.
+- Table 3 documents `h2_cap` as a ceiling on implied per-trait heritability
+  (`s_t ≤ h2_cap_t / n_causal,t`), matching the sampler, not as a raw slab
+  variance.
+
+### Added
+
+- `ldsc_chi2_mask` returns the reference LDSC chi-square row filter
+  (`chi2 > max(0.001 N, 80)`). It is for subsetting `ldsc_rg` arguments
+  only.
+
 ## [0.3.7] - 2026-08-09
 
 A documentation defect with real consequences: `ldsc_rg` told callers to cap

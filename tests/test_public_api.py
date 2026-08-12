@@ -22,6 +22,7 @@ _EXPECTED = {
     "ldsc_rg",
     "LDSCRgResult",
     "estimate_sample_overlap",
+    "ldsc_chi2_mask",
     "regional_rg",
     "RegionalRgResult",
     "ld_consistency_screen",

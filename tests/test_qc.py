@@ -39,8 +39,8 @@ def test_a_sign_flipped_variant_is_caught():
     """The error harmonisation cannot see: an allele flip inside strong LD.
 
     Its own z stays a plausible size, so no per-variant filter (frequency,
-    imputation quality, a chi-square cap) can flag it. Only its disagreement
-    with the correlated variants around it gives it away.
+    imputation quality, an LDSC chi-square row cap) can flag it. Only its
+    disagreement with the correlated variants around it gives it away.
     """
     blocks, z = _clean_panel(rho=0.9, seed=1)
     victim = 150

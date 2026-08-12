@@ -4,10 +4,12 @@ bipred does not harmonize summary statistics or build LD, and this module does
 not change that. What it adds is an LD-dependent check: whether a variant's
 reported effect is *consistent with the variants
 correlated with it*. Every filter a user can apply beforehand -- minor allele
-frequency, imputation quality, a chi-square cap, per-variant sample size --
+frequency, imputation quality, per-variant sample size --
 judges a variant in isolation and therefore cannot see disagreement with its
-neighbourhood. Such disagreement can make a bivariate Gibbs sampler place large
-opposing effects on variants in near-perfect LD.
+neighbourhood. A chi-square cap is not in that list: it is an LDSC-row
+filter (:func:`bipred.ldsc.ldsc_chi2_mask`), not a joint-fit mask. Neighbourhood
+disagreement can make a bivariate Gibbs sampler place large opposing effects
+on variants in near-perfect LD.
 
 The LD-consistency screen is inspired by DENTIST (Chen et al. 2021,
 *Nature Communications* 12:7117). It uses DENTIST's central split-half

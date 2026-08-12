@@ -12,7 +12,8 @@ import warnings
 import numpy as np
 import pytest
 
-from bipred import ldsc_rg, LDSCRgResult, estimate_sample_overlap
+from bipred import (ldsc_rg, LDSCRgResult, estimate_sample_overlap,
+                    ldsc_chi2_mask)
 from bipred.ldsc import _z_from_standardized
 from ldpred3 import ld_scores, standardize_betas
 
@@ -43,6 +44,46 @@ def _simple_inputs():
     chisq = 1.0 + 0.2 * x
     beta = np.sqrt(chisq / (n + chisq))
     return beta, ell, n
+
+
+def test_ldsc_rg_keeps_a_huge_chi2_row():
+    """0.3.7 contract: ldsc_rg is unfiltered; cap the rows you pass, not it."""
+    import inspect
+
+    from bipred import ldpred3_auto_bivariate_blocks
+
+    beta, ell, n = _simple_inputs()
+    huge_z = 40.0
+    huge_b = huge_z / np.sqrt(n + huge_z ** 2)
+    beta_h = np.append(beta, huge_b)
+    ell_h = np.append(ell, ell[-1])
+
+    full = ldsc_rg(beta_h, beta_h, ell_h, n, n, n_blocks=2)
+    dropped = ldsc_rg(beta, beta, ell, n, n, n_blocks=2)
+    assert full.h2[0] > dropped.h2[0]
+    assert full.gcov != dropped.gcov
+
+    keep = ldsc_chi2_mask(beta_h, n)
+    assert keep.dtype == bool and keep.shape == (beta_h.size,)
+    assert keep[:-1].all() and not keep[-1]
+    masked = ldsc_rg(beta_h[keep], beta_h[keep], ell_h[keep], n, n, n_blocks=2)
+    assert masked.h2[0] == pytest.approx(dropped.h2[0])
+
+    assert "chi2" not in inspect.signature(ldsc_rg).parameters
+    assert "chi2" not in inspect.signature(ldpred3_auto_bivariate_blocks).parameters
+
+
+def test_ldsc_chi2_mask_matches_reference_threshold():
+    n = 10000.0
+    cap = 80.0
+    z_drop = np.sqrt(cap) + 0.1
+    z_keep = np.sqrt(cap) - 0.1
+    b_drop = z_drop / np.sqrt(n + z_drop ** 2)
+    b_keep = z_keep / np.sqrt(n + z_keep ** 2)
+    mask = ldsc_chi2_mask([b_keep, b_drop], n, cap=cap, n_scale=0.0)
+    assert mask.tolist() == [True, False]
+    with pytest.raises(ValueError, match="cap"):
+        ldsc_chi2_mask([b_keep], n, cap=0.0)
 
 
 def test_ldsc_rg_recovers_genetic_correlation():

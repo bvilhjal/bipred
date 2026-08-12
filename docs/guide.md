@@ -63,10 +63,12 @@ interpreting a real-data fit, and always heed the fit's own warnings.
    itself to the reported value.
 3. **Filter per variant using study-appropriate thresholds.** Minor allele frequency
    ≥ 0.01, allele-frequency concordance, imputation quality where the file
-   carries it, a chi-square cap, per-variant sample size, and
-   [`bipred.qc.sd_consistency`](../bipred/qc.py) are useful inputs. Thresholds
-   must reflect the study and reference; the committed factorial does not
-   establish a universal optimum.
+   carries it, per-variant sample size, and
+   [`bipred.qc.sd_consistency`](../bipred/qc.py) are useful inputs **for the
+   joint-fit panel**. A chi-square cap is not one of those: it is an LDSC-row
+   filter (see below and [`ldsc_rg`](rg.md)). Thresholds must reflect the
+   study and reference; the committed factorial does not establish a universal
+   optimum.
 4. **Compare an LD-consistency screen** with
    [`bipred.qc.ld_consistency_screen`](../bipred/qc.py). This lightweight,
    block-based routine is inspired by the DENTIST statistic but does not
@@ -98,6 +100,13 @@ both. The screen cannot replay the private D8 copy made by legacy in-fit
 quantisation, so pre-quantise when exact alignment matters. `dentist` remains a
 compatibility alias for this routine; it does not turn the approximation into
 the full DENTIST method.
+
+A chi-square cap is a leverage filter for [`ldsc_rg`](rg.md), not a joint-fit
+mask. The reference exclusion is `chi2 > max(0.001 N, 80)`.
+`bipred.ldsc.ldsc_chi2_mask` returns that row filter. Subset the arguments to
+`ldsc_rg` and leave the joint fit its full variant set; keep `m_snps` at the
+full count. The same mask on `ldpred3_auto_bivariate_blocks` deletes the slab's
+large effects — that is the 0.3.7 failure mode.
 
 Blocks are independent, so `ncores` settles several at once — 2.49× on four
 cores at 16 × k=2,000, with the mask identical at every core count. The pool
@@ -315,7 +324,7 @@ chains driver, which reserves them for its own dispersal.
 | `noise_inflation`, `ni_damp` | `False`, `0.1` | both | learn and damp residual-noise inflation |
 | `pi_prior` | `1` | both | symmetric Dirichlet mixture concentration |
 | `h2_bounds` | `(1e-4, 1)` | both | clamp on the **reported** `h2` only. `rg` is a ratio of the raw quadratics, so it is invariant to this |
-| `h2_cap` | `None` | both | optional expert ceiling on the per-trait slab variance, enforced *inside* the sampler. Unlike `h2_bounds` it changes the fitted effects, so it moves `rg` and `h2` alike whenever it binds |
+| `h2_cap` | `None` | both | optional expert ceiling on implied per-trait heritability, enforced *inside* the sampler as `s_t ≤ h2_cap_t / n_causal,t`. Unlike `h2_bounds` it changes the fitted effects, so it moves `rg` and `h2` alike whenever it binds |
 | `iw_df` | `10` | both | covariance shrinkage strength |
 | `sample_every` | `5` | both | thinning for the effect states the decorrelated `rg` uses; no effect otherwise |
 | `ld_int8` | `False` | both | dense storage policy. Contiguous D8/D32 are reused; non-contiguous blocks are copied and other float types normalized to D32. `True`/`None` quantize float blocks inside the fit and build a second payload |
@@ -336,6 +345,8 @@ by multi-chain inference; use dispersed full-length chains for diagnostics.
 
 - Match ancestry and harmonize variant order, alleles, and effect scale before
   fitting.
+- A chi-square cap is for `ldsc_rg` rows only. Applying it to the joint-fit
+  panel deletes the large effects the slab is there to hold.
 - Supply a defensible `cross_corr` when cross-trait sampling errors are
   correlated. Sample overlap is one cause; an LDSC intercept can also contain
   confounding and does not identify overlap by itself.

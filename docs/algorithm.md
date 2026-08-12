@@ -147,8 +147,9 @@ pooling and adaptive stopping.
 `h2_bounds`. Because sampled rather than Rao–Blackwellized effects are used, it
 can be mildly upward-biased at low power. The clamp applies to the reported
 heritability only: `r_g` is the ratio of the unclamped quadratics in Equation 6,
-so tightening `h2_bounds` does not rescale it. (`h2_cap` is different — it acts
-inside the sampler, so it moves both.) A clamp that binds is reported through
+so tightening `h2_bounds` does not rescale it. (`h2_cap` is different — it is
+an in-sampler ceiling on implied per-trait heritability,
+`s_t ≤ h2_cap_t / n_causal,t`, so it moves both.) A clamp that binds is reported through
 the *implausible fit* warning on panels of at least 1,000 variants; below that
 the warning is suppressed, and `res.h2` landing exactly on a bound, or the raw
 `(gvar_1, gcov, gvar_2)` in `res.genetic_samples`, is the only signal.

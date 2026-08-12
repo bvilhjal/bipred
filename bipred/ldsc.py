@@ -34,7 +34,8 @@ from ._ldpred3_compat import (
     _wls,
 )
 
-__all__ = ["ldsc_rg", "LDSCRgResult", "estimate_sample_overlap"]
+__all__ = ["ldsc_rg", "LDSCRgResult", "estimate_sample_overlap",
+           "ldsc_chi2_mask"]
 
 
 def _require_slope_information(x, constrain):
@@ -136,6 +137,26 @@ class LDSCRgResult:
     def __repr__(self):
         return (f"LDSCRgResult(rg={self.rg:+.3f} ± {self.rg_se:.3f}, "
                 f"gcov={self.gcov:+.4f}, h2=({self.h2[0]:.3f}, {self.h2[1]:.3f}))")
+
+
+def ldsc_chi2_mask(beta_hat, n_eff, *, cap=80.0, n_scale=0.001):
+    """Rows that pass the reference LDSC chi-square threshold.
+
+    A row is dropped when ``z^2 > max(cap, n_scale * N)``, matching the
+    reference exclusion ``chi2 > max(0.001 N, 80)``.
+
+    Use the mask to subset arguments of :func:`ldsc_rg` only. Do not apply it
+    to the joint-fit panel: the slab exists to hold large effects. Keep
+    ``m_snps`` at the full variant-map count either way.
+    """
+    b = _as_finite_vector(beta_hat, "beta_hat")
+    n = _as_sample_size(n_eff, "n_eff", b.size)
+    cap = _as_finite_scalar(cap, "cap", positive=True)
+    n_scale = _as_finite_scalar(n_scale, "n_scale")
+    if n_scale < 0.0:
+        raise ValueError("n_scale must be finite and >= 0")
+    z = _z_from_standardized(b, n, "beta_hat")
+    return (z * z) <= np.maximum(cap, n_scale * n)
 
 
 def ldsc_rg(beta_hat1, beta_hat2, ld_scores, n_eff1, n_eff2, *, m_snps=None,

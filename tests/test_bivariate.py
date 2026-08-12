@@ -653,6 +653,32 @@ def test_h2_cap_skips_prepass_and_validations():
                                       h2_cap=(0.5, 0.5))
 
 
+def test_h2_cap_binds_implied_heritability_not_raw_slab_variance():
+    """h2_cap is s ≤ h2_cap / n_causal, not a raw slab-variance ceiling.
+
+    A 0.02 ceiling must shrink both slab variances. If the cap were ignored,
+    or applied as ``s ≤ 0.02`` (typical s is a few 1e-3 here), Sigma would
+    not move.
+    """
+    k, nb = 200, 8
+    blocks, chols, idxs = _blocks(nb, k, seed=9)
+    m = nb * k
+    rng = np.random.default_rng(0)
+    b1, b2 = _sim(blocks, chols, idxs, m, p=0.05, h2=(0.5, 0.5), rg=0.6, rng=rng)
+    bh1 = _sumstats(blocks, chols, idxs, b1, 40000, k, rng)
+    bh2 = _sumstats(blocks, chols, idxs, b2, 40000, k, rng)
+    kw = dict(burn_in=80, num_iter=120, seed=1)
+    uncapped = ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, 40000, 40000, **kw)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        capped = ldpred3_auto_bivariate_blocks(
+            blocks, bh1, bh2, 40000, 40000, h2_cap=(0.02, 0.02), **kw)
+    assert min(uncapped.h2) > 0.2
+    assert capped.sigma[0, 0] < uncapped.sigma[0, 0]
+    assert capped.sigma[1, 1] < uncapped.sigma[1, 1]
+    assert max(capped.h2) < min(uncapped.h2)
+
+
 def test_borrows_strength_for_low_power_trait():
     """With high rg, a low-N trait should predict better jointly than alone."""
     k, nb = 200, 12

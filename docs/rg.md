@@ -47,8 +47,11 @@ full-map `m_snps` inflates both slopes.
 
 `ldsc_rg` is one-step and applies no chi-square filter, so a few large-effect
 variants keep near-full leverage on both the covariance and the marginal
-heritabilities. Drop long-range-LD regions (MHC, APOE) before using it as a
-screen where individual loci could dominate.
+heritabilities. Cap the **rows you pass to `ldsc_rg`**, not the variants you
+fit: `bipred.ldsc.ldsc_chi2_mask` is that row filter. The same mask on
+`ldpred3_auto_bivariate_blocks` deletes the slab's large effects. Drop
+long-range-LD regions (MHC, APOE) before using LDSC as a screen where
+individual loci could dominate. Keep `m_snps` at the full map count either way.
 
 For `rg_se`, order rows by chromosome and position. The block jackknife deletes
 contiguous ranges of the supplied row order; arbitrary order does not preserve
