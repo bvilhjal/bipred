@@ -31,12 +31,15 @@ _EXPECTED = {
     "implied_sample_size",
     "in_long_range_ld",
     "sd_consistency",
+    "prepare_bivariate_sumstats",
+    "PreparedBivariate",
+    "subset_blocks",
 }
 
 
 #: The submodules the lazy loader must expose as *modules*, never shadowed by a
 #: function of the same name.
-_SUBMODULES = {"bivariate", "multichain", "ldsc", "regional", "qc"}
+_SUBMODULES = {"bivariate", "multichain", "ldsc", "regional", "qc", "prepare"}
 
 
 def test_public_api_surface_is_exact_and_resolves():

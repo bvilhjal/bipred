@@ -455,6 +455,33 @@ def _bivariate_options_from_kwargs(kwargs, *, caller):
     return _validate_bivariate_options(**values)
 
 
+def _warn_if_unstandardized(beta, n_eff, name):
+    """Catch the two common scale mistakes before a plausible wrong fit.
+
+    ``standardize_betas`` returns values strictly inside (-1, 1) whose
+    ``|beta| * sqrt(n_eff)`` is a GWAS z-score. Passing z-scores or tiny
+    raw per-allele effects still converges.
+    """
+    import warnings
+
+    z = np.abs(beta) * np.sqrt(n_eff)
+    max_abs = float(np.max(np.abs(beta)))
+    if max_abs >= 1.0:
+        warnings.warn(
+            f"{name} has |beta_hat| >= 1 (max {max_abs:.3g}); effects from "
+            "ldpred3.standardize_betas lie in (-1, 1). If these are GWAS "
+            "z-scores or raw betas, call standardize_betas(beta, se, n_eff)[0] "
+            "before the fit.",
+            stacklevel=4)
+        return
+    if beta.size >= 1000 and float(np.median(z)) < 0.05 and float(np.max(z)) < 0.5:
+        warnings.warn(
+            f"{name} has median |beta_hat|*sqrt(n_eff) = {float(np.median(z)):.3g}, "
+            "far below a GWAS z-score. These look like unstandardized "
+            "per-allele effects. Pass ldpred3.standardize_betas(beta, se, n_eff)[0].",
+            stacklevel=4)
+
+
 def _readonly_view(value):
     """Return a non-writeable view without changing the caller's array flags."""
     view = np.asarray(value).view()
@@ -478,6 +505,8 @@ def _prepare_bivariate_inputs(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2,
         raise ValueError("beta_hat1 and beta_hat2 must have the same length")
     n1 = np.ascontiguousarray(_as_n_vector(n_eff1, m), dtype=np.float64)
     n2 = np.ascontiguousarray(_as_n_vector(n_eff2, m), dtype=np.float64)
+    _warn_if_unstandardized(bh1, n1, "beta_hat1")
+    _warn_if_unstandardized(bh2, n2, "beta_hat2")
     n_const = bool(n1.min() == n1.max() and n2.min() == n2.max())
 
     validated_blocks = _validate_blocks(blocks, m, contiguous=True)
@@ -1469,6 +1498,41 @@ class BivariateResult:
     noise_scale_samples: Optional[np.ndarray] = None  # (n_kept, 2); ones if inflation off
     retained_iterations: Optional[int] = None     # post-burn-in sweeps actually kept
     stopped_early: bool = False                   # True when adaptive stopping fired
+
+    def write_weights(self, path, *, trait, id, chrom, pos, effect_allele,
+                      other_allele, af=None, sd=None):
+        """Write one trait's posterior means as an ldpred3 weight file.
+
+        ``trait`` is ``1`` or ``2``. Provenance arrays must match
+        ``beta*_est`` in length and order (the arrays on
+        :class:`~bipred.prepare.PreparedBivariate` after a cache on-ramp).
+
+        When ``af`` is given and ``sd`` is omitted, ``SD_REF`` is the HWE
+        dosage SD ``sqrt(2 f (1-f))`` from the LD-cache frequency, which is
+        enough for :func:`ldpred3.score_from_weights` ``scaling="frozen"``.
+        Omit both to write ranking-only weights (``scaling="target"``).
+        Raw ``X @ beta_est`` on 0/1/2 dosages is the wrong scale.
+        """
+        from ldpred3.weights import write_weights
+
+        if trait in (1, "1", "beta1"):
+            weight = np.asarray(self.beta1_est, dtype=float)
+        elif trait in (2, "2", "beta2"):
+            weight = np.asarray(self.beta2_est, dtype=float)
+        else:
+            raise ValueError("trait must be 1 or 2")
+        ids = np.asarray(id)
+        if weight.shape != ids.shape:
+            raise ValueError(
+                f"trait {trait} has {weight.size} effects but provenance "
+                f"length is {ids.size}")
+        if af is not None and sd is None:
+            af = np.asarray(af, dtype=float)
+            sd = np.sqrt(np.maximum(2.0 * af * (1.0 - af), 0.0))
+        return write_weights(
+            path, id=ids, chrom=chrom, pos=pos,
+            effect_allele=effect_allele, other_allele=other_allele,
+            weight=weight, af=af, sd=sd)
 
     @property
     def mixer(self):

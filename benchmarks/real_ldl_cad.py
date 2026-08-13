@@ -78,9 +78,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ldpred3 import standardize_betas                                # noqa: E402
 from bipred.bivariate import _rg_from_quadratics_array               # noqa: E402
 from ldpred3.ld import load_ld_blocks                                # noqa: E402
-from ldpred3.ld_repr import LowRankLD, dense_ld, lowrank_ld          # noqa: E402
+from ldpred3.ld_repr import LowRankLD                                # noqa: E402
 from ldpred3.ldsc import ld_scores                                   # noqa: E402
-from bipred import ldpred3_auto_bivariate_blocks, ldsc_rg            # noqa: E402
+from bipred import (                                                 # noqa: E402
+    ldpred3_auto_bivariate_blocks, ldsc_rg, subset_blocks)
 from bipred.qc import implied_sample_size, ld_consistency_screen     # noqa: E402
 from benchmarks._benchmark_utils import StepTimings                 # noqa: E402
 from benchmarks.real_data_inputs import (                            # noqa: E402
@@ -205,38 +206,6 @@ def read_aligned(path, index, a1_ref, a0_ref, *, rsid_col, a1_col, a2_col,
           f"{stats['allele_mismatch']:,}, bad-value {stats['bad_value']:,}",
           flush=True)
     return out
-
-
-def subset_blocks(blocks, keep):
-    """Restrict blocks to ``keep`` (global indices), re-tiled to 0..m-1.
-
-    A principal submatrix of a low-rank factor is its selected rows, unless so
-    few variants survive that the retained rank would exceed the submatrix --
-    then densify and re-apply the reference's own representation policy.
-    """
-    new, kept_global = [], []
-    for R, idx in blocks:
-        loc = np.array([j for j, g in enumerate(idx) if g in keep],
-                       dtype=np.int64)
-        if loc.size < 2:
-            continue
-        if isinstance(R, LowRankLD):
-            if loc.size >= R.U.shape[1]:
-                sub = LowRankLD(np.ascontiguousarray(R.U[loc]), loc.size, R.scale)
-            else:
-                dense = np.asarray(dense_ld(R), dtype=np.float64)[np.ix_(loc, loc)]
-                sub = (lowrank_ld(dense, variance=0.99, quantize=True)
-                       if loc.size >= 1500
-                       else np.ascontiguousarray(dense.astype(np.float32)))
-        else:
-            sub = np.ascontiguousarray(R[np.ix_(loc, loc)])
-        new.append(sub)
-        kept_global.append(idx[loc])
-    kept_global = np.concatenate(kept_global)
-    sizes = [b.U.shape[0] if isinstance(b, LowRankLD) else b.shape[0] for b in new]
-    offsets = np.concatenate([[0], np.cumsum(sizes)])
-    tiled = [(b, np.arange(offsets[i], offsets[i + 1])) for i, b in enumerate(new)]
-    return tiled, kept_global
 
 
 def quadratic(blocks, beta):

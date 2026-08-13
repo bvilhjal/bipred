@@ -40,6 +40,9 @@ Homepage = "https://github.com/bvilhjal/bipred"
 Repository = "https://github.com/bvilhjal/bipred"
 Issues = "https://github.com/bvilhjal/bipred/issues"
 
+[project.scripts]
+bipred = "bipred.cli:main"
+
 [project.optional-dependencies]
 fast = [
     "numba>=0.59; python_version < '3.14'",

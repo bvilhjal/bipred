@@ -1,9 +1,23 @@
 # Changelog
 
 User-visible changes to **bipred** are recorded here. The project is currently
-`0.3.7`.
+`0.3.8`.
 
 ## [Unreleased]
+
+## [0.3.8] - 2026-08-13
+
+### Added
+
+- `prepare_bivariate_sumstats` loads an ldpred3 LD cache and two GWAS files,
+  harmonizes both to the cache allele, standardizes, and returns contiguous
+  blocks plus provenance. `subset_blocks` is the public retile used after QC.
+  `BivariateResult.write_weights` writes one trait as an ldpred3 weight file
+  (HWE `SD_REF` from cache AF when `sd` is omitted). `python -m bipred`
+  runs that path.
+- `ldsc_chi2_mask` returns the reference LDSC chi-square row filter
+  (`chi2 > max(0.001 N, 80)`). It is for subsetting `ldsc_rg` arguments
+  only.
 
 ### Fixed
 
@@ -14,12 +28,9 @@ User-visible changes to **bipred** are recorded here. The project is currently
 - Table 3 documents `h2_cap` as a ceiling on implied per-trait heritability
   (`s_t ≤ h2_cap_t / n_causal,t`), matching the sampler, not as a raw slab
   variance.
-
-### Added
-
-- `ldsc_chi2_mask` returns the reference LDSC chi-square row filter
-  (`chi2 > max(0.001 N, 80)`). It is for subsetting `ldsc_rg` arguments
-  only.
+- The fit warns when `beta_hat` looks like a z-score (`|beta| >= 1`) or
+  like unstandardized per-allele effects, instead of silently returning a
+  plausible `h2`/`rg` on the wrong scale.
 
 ## [0.3.7] - 2026-08-09
 

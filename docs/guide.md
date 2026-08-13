@@ -11,17 +11,44 @@ For a self-contained first run, use
 
 ## Inputs
 
-Provide:
+From an ldpred3 LD cache and two GWAS files:
 
-1. `beta_hat1`, `beta_hat2`: standardized marginal effects in identical variant
-   order and allele orientation.
+```python
+from ldpred3 import standardize_betas
+from bipred import prepare_bivariate_sumstats, ldpred3_auto_bivariate_blocks
+
+prep = prepare_bivariate_sumstats(
+    "ld.npz", "trait1.tsv.gz", "trait2.tsv.gz",
+    n_eff1=80_000, n_cases2=12_000, n_controls2=38_000)
+res = ldpred3_auto_bivariate_blocks(
+    prep.blocks, prep.beta_hat1, prep.beta_hat2, prep.n_eff1, prep.n_eff2,
+    seed=0)
+res.write_weights("trait1.weights", trait=1, id=prep.id, chrom=prep.chrom,
+                  pos=prep.pos, effect_allele=prep.effect_allele,
+                  other_allele=prep.other_allele, af=prep.af)
+```
+
+`n_cases`/`n_controls` become `n_eff` via `ldpred3.n_eff_case_control`.
+`python -m bipred --ld-cache ld.npz --sumstats1 t1.tsv --sumstats2 t2.tsv`
+is the same path.
+
+The low-level contract (what `prepare_bivariate_sumstats` produces) is:
+
+1. `beta_hat1`, `beta_hat2`: **standardized** marginal effects
+   (`ldpred3.standardize_betas(beta, se, n_eff)[0]`) in identical variant
+   order and allele orientation. Raw GWAS betas or z-scores produce a
+   plausible but wrong `h2`/`rg`; the fitter warns when the scale looks
+   like either.
 2. `n_eff1`, `n_eff2`: positive scalar or per-variant effective sample sizes.
 3. Either one dense LD correlation matrix or blocks `[(R, idx), ...]` whose
-   contiguous indices partition `0..m-1`.
+   contiguous indices partition `0..m-1`. After dropping variants, retile
+   with `subset_blocks` — do not pass `beta[keep]` with the original cache
+   indices.
 4. A scalar `cross_corr` when the two GWAS have correlated sampling errors;
    shared samples are one possible cause.
 
-bipred does not harmonize summary statistics or build LD. Blocks may be dense
+`prepare_bivariate_sumstats` harmonizes to the cache. Direct callers still
+must not build LD themselves unless they already have blocks. Blocks may be dense
 float/int8 matrices or ldpred3 `LowRankLD` objects, including LR8, and
 representations may be mixed.
 
@@ -92,8 +119,9 @@ keep = (ld_consistency_screen(blocks, z1)
 ```
 
 Use raw GWAS z-scores here, not standardized `beta_hat / se`. After intersecting
-the masks, subset and reindex every LD block, both standardized effects, and any
-per-variant sample-size arrays before calling the fit. Recompute standardized
+the masks, retile with `subset_blocks(blocks, keep)` (or pass `screen=True` to
+`prepare_bivariate_sumstats`) so the surviving indices are a contiguous
+`0..m'-1`. Do not pass `beta[keep]` with the original cache indices. Recompute standardized
 effects whenever N changes. With the default fit policy, D8, D32, and low-rank
 blocks match the screen numerically; other dense floats are normalised to D32 in
 both. The screen cannot replay the private D8 copy made by legacy in-fit
@@ -193,8 +221,11 @@ res = ldpred3_auto_bivariate(
 For genome-wide blocks:
 
 ```python
+from ldpred3 import standardize_betas
 from bipred import ldpred3_auto_bivariate_blocks
 
+beta_hat1 = standardize_betas(beta1, se1, n_eff1)[0]
+beta_hat2 = standardize_betas(beta2, se2, n_eff2)[0]
 res = ldpred3_auto_bivariate_blocks(
     blocks, beta_hat1, beta_hat2, n_eff1, n_eff2,
     burn_in=200, num_iter=200, ncores=2, seed=0,
@@ -239,7 +270,7 @@ require different trace contracts. The pooled posterior records
 
 | Field | Meaning |
 |---|---|
-| `beta1_est`, `beta2_est` | posterior-mean standardized effects for scoring |
+| `beta1_est`, `beta2_est` | posterior-mean standardized effects; write them with `res.write_weights` and score with `ldpred3.score_from_weights(..., scaling="frozen")`. Do not do `X @ beta_est` on raw dosages. |
 | `h2` | SNP heritability pair `(h2_1, h2_2)` |
 | `rg` | genome-wide genetic correlation |
 | `p` | total non-null mixture fraction |

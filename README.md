@@ -53,10 +53,27 @@ The example creates a small synthetic two-trait problem, fits one dense LD
 matrix, and prints the main estimates. Its complete source is
 [`examples/minimal.py`](examples/minimal.py).
 
-For real data, start with the input contract and blockwise call in the user
-guide. Summary statistics must already be ancestry-matched, harmonized, and
-checked against the LD reference. bipred includes a lightweight
-LD-consistency sensitivity screen:
+For real data, start from an ldpred3 LD cache:
+
+```python
+from bipred import prepare_bivariate_sumstats, ldpred3_auto_bivariate_blocks
+
+prep = prepare_bivariate_sumstats("ld.npz", "t1.tsv", "t2.tsv", n_eff1=N1, n_eff2=N2)
+res = ldpred3_auto_bivariate_blocks(
+    prep.blocks, prep.beta_hat1, prep.beta_hat2, prep.n_eff1, prep.n_eff2)
+res.write_weights("t1.weights", trait=1, id=prep.id, chrom=prep.chrom,
+                  pos=prep.pos, effect_allele=prep.effect_allele,
+                  other_allele=prep.other_allele, af=prep.af)
+```
+
+```bash
+python -m bipred --ld-cache ld.npz --sumstats1 t1.tsv --sumstats2 t2.tsv \
+    --n-eff1 N1 --n-eff2 N2 --out-weights1 t1.weights --out-weights2 t2.weights
+```
+
+Then score with `ldpred3.score_from_weights(..., scaling="frozen")`. The
+user guide covers QC. bipred includes a lightweight LD-consistency
+sensitivity screen:
 
 ```python
 from bipred.qc import ld_consistency_screen
