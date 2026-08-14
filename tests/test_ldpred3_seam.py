@@ -1,11 +1,11 @@
 """Semantic guards on the private ldpred3 symbols bipred reaches into.
 
 bipred centralizes its underscore-prefixed ldpred3 imports in
-``bipred._ldpred3_compat``. The documented install and CI pin an exact ldpred3
-commit because that surface is private and unversioned. bipred's public API and
-compatibility seam import lazily; these tests force the complete seam to resolve
-and guard its *behaviour*, so an ldpred3 bump fails loudly instead of silently
-changing bivariate numerics or LDSC-rg standard errors.
+``bipred._ldpred3_compat``. The dependency stays within the LDpred3 0.5 line
+because that surface is private and unversioned. Bipred's public API and
+compatibility seam import lazily; these tests force the complete seam to
+resolve and guard its *behaviour*, so a dependency bump fails loudly instead
+of silently changing bivariate numerics or LDSC-rg standard errors.
 """
 
 import subprocess

@@ -8,6 +8,7 @@ import pytest
 from bipred import (BivariateResult, prepare_bivariate_sumstats, subset_blocks,
                     ldpred3_auto_bivariate_blocks)
 from ldpred3 import LowRankLD, save_ld_blocks
+from ldpred3.interop import prepare_ld_cache
 from ldpred3.weights import read_weights
 
 
@@ -49,7 +50,7 @@ def _write_sumstats(path, ids, a1, a2, beta, se, n, chrom="1", pos=None):
                      f"{beta[i]:.8g}\t{se[i]:.8g}\t{n}\n")
 
 
-def _cache_and_sumstats(tmp_path, m=20):
+def _cache_and_sumstats(tmp_path, m=20, *, with_af=True, mmap=False):
     rng = np.random.default_rng(1)
     R = _ar1(m)
     ids = np.array([f"rs{i}" for i in range(m)], dtype=object)
@@ -60,9 +61,9 @@ def _cache_and_sumstats(tmp_path, m=20):
     af = np.full(m, 0.3)
     cache = tmp_path / "ld.npz"
     save_ld_blocks(
-        str(cache), [(R, np.arange(m))], ids,
+        str(cache), [(R, np.arange(m))], ids, mmap=mmap,
         counted_allele=a1, other_allele=a2, chrom=chrom, pos=pos,
-        reference_af=af, n_ref=500, ridge=0.0)
+        reference_af=af if with_af else None, n_ref=500, ridge=0.0)
     n = 10_000
     se = np.full(m, 1.0 / np.sqrt(n))
     b1 = rng.normal(scale=0.02, size=m)
@@ -100,6 +101,24 @@ def test_prepare_n_cases_uses_ldpred3_n_eff(tmp_path):
     assert np.allclose(prep.n_eff2, expected)
 
 
+def test_prepare_accepts_distinct_column_mappings_without_mutating_them(tmp_path):
+    cache, p1, p2, *_ = _cache_and_sumstats(tmp_path)
+    path = tmp_path / "trait1-custom.tsv"
+    path.write_text(
+        (tmp_path / "t1.tsv").read_text(encoding="utf-8").replace(
+            "\tN\n", "\tSAMPLES\n", 1),
+        encoding="utf-8")
+    columns = {"n_eff": "SAMPLES"}
+    prep = prepare_bivariate_sumstats(
+        cache, path, p2, n_eff2=10_000, columns1=columns, qc=False)
+    assert columns == {"n_eff": "SAMPLES"}
+    assert np.all(prep.n_eff1 == 10_000)
+    with pytest.raises(ValueError, match="either a scalar n_eff or an n_eff column"):
+        prepare_bivariate_sumstats(
+            cache, path, p2, n_eff1=10_000, n_eff2=10_000,
+            columns1=columns, qc=False)
+
+
 def test_write_weights_uses_hwe_sd_from_cache_af(tmp_path):
     cache, p1, p2, *_ = _cache_and_sumstats(tmp_path, m=16)
     prep = prepare_bivariate_sumstats(cache, p1, p2, n_eff1=10_000,
@@ -108,9 +127,10 @@ def test_write_weights_uses_hwe_sd_from_cache_af(tmp_path):
         prep.blocks, prep.beta_hat1, prep.beta_hat2, prep.n_eff1, prep.n_eff2,
         burn_in=5, num_iter=5, seed=0)
     path = tmp_path / "t1.weights"
-    res.write_weights(str(path), trait=1, id=prep.id, chrom=prep.chrom,
-                      pos=prep.pos, effect_allele=prep.effect_allele,
-                      other_allele=prep.other_allele, af=prep.af)
+    with pytest.warns(RuntimeWarning, match="HWE reference-panel scale"):
+        res.write_weights(str(path), trait=1, id=prep.id, chrom=prep.chrom,
+                          pos=prep.pos, effect_allele=prep.effect_allele,
+                          other_allele=prep.other_allele, af=prep.af)
     wt = read_weights(str(path))
     assert wt.has_scale
     assert np.allclose(wt.weight, res.beta1_est)
@@ -136,3 +156,135 @@ def test_unstandardized_z_scores_warn(tmp_path):
             burn_in=3, num_iter=3, seed=0)
     messages = " ".join(str(w.message) for w in caught)
     assert "|beta_hat| >= 1" in messages
+
+
+def test_subset_blocks_strict_indices_sets_singletons_and_views():
+    first, second = _ar1(4), _ar1(3)
+    blocks = [(first, np.arange(4)), (second, np.arange(4, 7))]
+
+    tiled, kept = subset_blocks(blocks, {1, 6})
+    assert kept.tolist() == [1, 6]
+    assert [idx.tolist() for _, idx in tiled] == [[0], [1]]
+    assert [R.shape for R, _ in tiled] == [(1, 1), (1, 1)]
+
+    whole, kept = subset_blocks(blocks, np.ones(7, dtype=bool))
+    assert whole is blocks
+    assert whole[0][0] is first
+    assert kept.tolist() == list(range(7))
+    consecutive, _ = subset_blocks(blocks, [1, 2])
+    assert np.shares_memory(consecutive[0][0], first)
+
+    with pytest.raises(ValueError, match="length"):
+        subset_blocks(blocks, np.ones(3, dtype=bool))
+    with pytest.raises(TypeError, match="integer"):
+        subset_blocks(blocks, [1.0])
+    with pytest.raises(ValueError, match="duplicate"):
+        subset_blocks(blocks, [1, 1])
+    with pytest.raises(IndexError, match=r"\[0, 7\)"):
+        subset_blocks(blocks, [-1])
+    with pytest.raises(IndexError, match=r"\[0, 7\)"):
+        subset_blocks(blocks, [7])
+
+
+def test_prepare_screen_uses_joint_principal_panel_not_zero_filling(tmp_path):
+    """A missing neighbour must not become an observed z=0 in the screen."""
+    m, n = 120, 10_000
+    R = _ar1(m, rho=0.5)
+    ids = np.array([f"rs{i}" for i in range(m)], dtype=object)
+    alleles1 = np.array(["A"] * m, dtype=object)
+    alleles2 = np.array(["G"] * m, dtype=object)
+    cache = tmp_path / "screen.npz"
+    save_ld_blocks(
+        cache, [(R, np.arange(m))], ids,
+        counted_allele=alleles1, other_allele=alleles2,
+        chrom=np.array(["1"] * m), pos=np.arange(1, m + 1),
+        reference_af=np.full(m, 0.3), n_ref=500, ridge=0.0)
+
+    rng = np.random.default_rng(6)
+    observed = np.sort(rng.choice(m, 84, replace=False))
+    z = rng.normal(size=m)
+    outlier = int(rng.integers(observed.size))
+    z[observed[outlier]] = rng.choice([-1, 1]) * 8.0
+    assert observed[outlier] == 8 and z[8] == -8.0
+    se = np.full(observed.size, 1.0 / np.sqrt(n))
+    beta = z[observed] * se
+    p1, p2 = tmp_path / "screen1.tsv", tmp_path / "screen2.tsv"
+    for path in (p1, p2):
+        _write_sumstats(
+            path, ids[observed], alleles1[observed], alleles2[observed],
+            beta, se, n, pos=observed + 1)
+
+    prep = prepare_bivariate_sumstats(
+        cache, p1, p2, n_eff1=n, n_eff2=n, qc=False,
+        screen=True, screen_seed=11)
+    # Correct principal-panel screening drops the injected outlier and its
+    # inconsistent observed neighbour. The old zero-filled full-cache screen
+    # dropped rs8 only and incorrectly retained rs9.
+    assert prep.log["n_joint"] == 84
+    assert prep.log["n_screen_drop"] == 2
+    assert "rs8" not in prep.id and "rs9" not in prep.id
+
+
+def test_prepare_screen_subsets_a_complete_joint_cache(monkeypatch, tmp_path):
+    cache, p1, p2, *_ = _cache_and_sumstats(tmp_path, mmap=True)
+
+    def screen(blocks, z, **kwargs):
+        keep = np.ones(len(z), dtype=bool)
+        keep[3] = False
+        return keep
+
+    monkeypatch.setattr("bipred.qc.ld_consistency_screen", screen)
+    prep = prepare_bivariate_sumstats(
+        cache, p1, p2, n_eff1=10_000, n_eff2=10_000,
+        qc=False, screen=True)
+    assert prep.log["n_joint"] == 20
+    assert prep.log["n_screen_drop"] == 1
+    assert len(prep.id) == 19 and "rs3" not in prep.id
+    owner = prep._ld_owner
+    prep.close()
+    assert owner.closed
+
+
+def test_prepare_keeps_mmap_owner_alive_until_close(tmp_path):
+    cache, p1, p2, *_ = _cache_and_sumstats(tmp_path, mmap=True)
+    prep = prepare_bivariate_sumstats(
+        cache, p1, p2, n_eff1=10_000, n_eff2=10_000, qc=False)
+    owner = prep._ld_owner
+    assert owner is not None and not owner.closed
+    # The fit reads the mmap-backed view before explicit release.
+    result = ldpred3_auto_bivariate_blocks(
+        prep.blocks, prep.beta_hat1, prep.beta_hat2,
+        prep.n_eff1, prep.n_eff2, burn_in=2, num_iter=2, seed=0)
+    assert np.all(np.isfinite(result.beta1_est))
+    prep.close()
+    assert owner.closed and prep.blocks == []
+
+
+def test_prepare_reuses_a_caller_owned_validated_cache(tmp_path):
+    cache, p1, p2, *_ = _cache_and_sumstats(tmp_path, mmap=True)
+    with prepare_ld_cache(cache) as shared:
+        prep = prepare_bivariate_sumstats(
+            shared, p1, p2, n_eff1=10_000, n_eff2=10_000, qc=False)
+        assert prep.log["prepared_cache"] is True
+        assert prep._ld_owner is None
+        prep.close()
+        assert not shared.closed
+        assert len(prep.blocks) == 1
+    assert shared.closed
+
+
+def test_missing_cache_af_writes_safe_target_scaled_weights(tmp_path):
+    cache, p1, p2, *_ = _cache_and_sumstats(tmp_path, with_af=False)
+    prep = prepare_bivariate_sumstats(
+        cache, p1, p2, n_eff1=10_000, n_eff2=10_000, qc=False)
+    assert prep.af is None
+    res = BivariateResult(
+        beta1_est=np.full(len(prep.id), 0.01),
+        beta2_est=np.full(len(prep.id), -0.01), h2=(0.1, 0.1),
+        rg=0.0, p=0.02, sigma=np.eye(2))
+    path = tmp_path / "target.weights"
+    res.write_weights(
+        path, trait=1, id=prep.id, chrom=prep.chrom, pos=prep.pos,
+        effect_allele=prep.effect_allele, other_allele=prep.other_allele,
+        af=prep.af)
+    assert not read_weights(path).has_scale

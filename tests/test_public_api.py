@@ -1,4 +1,4 @@
-"""The lazy public API must remain loadable against the pinned ldpred3."""
+"""The lazy public API must remain loadable against the supported LDpred3 line."""
 
 import subprocess
 import sys

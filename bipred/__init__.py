@@ -9,12 +9,13 @@ prediction.
 Public API::
 
     from bipred import prepare_bivariate_sumstats, ldpred3_auto_bivariate_blocks
-    prep = prepare_bivariate_sumstats("ld.npz", "t1.tsv", "t2.tsv")
-    res = ldpred3_auto_bivariate_blocks(
-        prep.blocks, prep.beta_hat1, prep.beta_hat2, prep.n_eff1, prep.n_eff2)
-    res.write_weights("t1.weights", trait=1, id=prep.id, chrom=prep.chrom,
-                      pos=prep.pos, effect_allele=prep.effect_allele,
-                      other_allele=prep.other_allele, af=prep.af)
+    with prepare_bivariate_sumstats("ld.npz", "t1.tsv", "t2.tsv") as prep:
+        res = ldpred3_auto_bivariate_blocks(
+            prep.blocks, prep.beta_hat1, prep.beta_hat2,
+            prep.n_eff1, prep.n_eff2)
+        res.write_weights("t1.weights", trait=1, id=prep.id, chrom=prep.chrom,
+                          pos=prep.pos, effect_allele=prep.effect_allele,
+                          other_allele=prep.other_allele)
 
     from bipred import ldpred3_auto_bivariate_chains
     multi = ldpred3_auto_bivariate_chains(blocks, beta_hat1, beta_hat2, n1, n2)
@@ -52,7 +53,7 @@ from ldpred3's ``[fast]`` extra.
 
 import importlib
 
-__version__ = "0.3.8"
+__version__ = "0.3.9.dev0"
 
 # public name -> submodule it lives in. No module name may equal one of its own
 # exported names: importing a submodule binds it on this package, and the cache

@@ -10,12 +10,13 @@ LD representations and sampler utilities.
 
 ## Installation
 
-Python 3.9–3.14 is supported. Numba is strongly recommended. ldpred3 is private
-and not on PyPI, so its Git install requires authenticated GitHub read access.
-Install the exact revision tested here:
+Python 3.9–3.14 is supported. Numba is strongly recommended. The current
+Bipred development line requires LDpred3 0.5. Neither package is on PyPI, so a
+Git install requires authenticated GitHub read access. Until the coordinated
+0.5 release is tagged, install the sibling development line tested by CI:
 
 ```bash
-python -m pip install "ldpred3[fast] @ git+https://github.com/bvilhjal/ldpred3.git@5d86ac9d97e42c57fa31d84ff093d3bf637dc0e6"
+python -m pip install "ldpred3[fast] @ git+https://github.com/bvilhjal/ldpred3.git@master"
 python -m pip install "bipred[fast] @ git+https://github.com/bvilhjal/bipred.git"
 ```
 
@@ -26,13 +27,12 @@ python -m pip install -e "../ldpred3[fast]"
 python -m pip install -e ".[fast,test]"
 ```
 
-Bumping the pinned ldpred3 (the seam in `bipred/_ldpred3_compat.py` is
-private and unversioned): run the weekly `ldpred3-head` CI leg (or trigger it
-manually — it runs the suite against ldpred3@master), audit the seam for any
-drift it flags, then update `LDPRED3_REV` / `LDPRED3_VERSION` in
-`.github/workflows/ci.yml`, the matching constants in
-`benchmarks/real_data_inputs.py`, and the git revision in the install command
-above. A test keeps those three pins aligned.
+CI installs Bipred through its declared `ldpred3>=0.5.0.dev1,<0.6` dependency
+contract rather than bypassing the resolver. The private sampler seam in
+`bipred/_ldpred3_compat.py` still has behavioural tests. Archived real-data
+benchmarks deliberately retain their immutable LDpred3 0.4.5 provenance in
+`benchmarks/real_data_inputs.py`; do not rewrite historical evidence when the
+runtime dependency moves.
 
 The `[sim]` extra adds msprime, the default simulation backend for benchmarks
 (fastest: 0.80 s per 10,000-sample segment); without it, benchmark scripts fall
@@ -58,12 +58,14 @@ For real data, start from an ldpred3 LD cache:
 ```python
 from bipred import prepare_bivariate_sumstats, ldpred3_auto_bivariate_blocks
 
-prep = prepare_bivariate_sumstats("ld.npz", "t1.tsv", "t2.tsv", n_eff1=N1, n_eff2=N2)
-res = ldpred3_auto_bivariate_blocks(
-    prep.blocks, prep.beta_hat1, prep.beta_hat2, prep.n_eff1, prep.n_eff2)
-res.write_weights("t1.weights", trait=1, id=prep.id, chrom=prep.chrom,
-                  pos=prep.pos, effect_allele=prep.effect_allele,
-                  other_allele=prep.other_allele, af=prep.af)
+with prepare_bivariate_sumstats(
+        "ld.npz", "t1.tsv", "t2.tsv", n_eff1=N1, n_eff2=N2) as prep:
+    res = ldpred3_auto_bivariate_blocks(
+        prep.blocks, prep.beta_hat1, prep.beta_hat2,
+        prep.n_eff1, prep.n_eff2, seed=0)
+    res.write_weights("t1.weights", trait=1, id=prep.id, chrom=prep.chrom,
+                      pos=prep.pos, effect_allele=prep.effect_allele,
+                      other_allele=prep.other_allele)
 ```
 
 ```bash
@@ -71,8 +73,12 @@ python -m bipred --ld-cache ld.npz --sumstats1 t1.tsv --sumstats2 t2.tsv \
     --n-eff1 N1 --n-eff2 N2 --out-weights1 t1.weights --out-weights2 t2.weights
 ```
 
-Then score with `ldpred3.score_from_weights(..., scaling="frozen")`. The
-user guide covers QC. bipred includes a lightweight LD-consistency
+The default file has no fit-cohort dosage-scale metadata; score it with
+`ldpred3.score_from_weights(..., scaling="target")`. Passing `af=prep.af`
+adds an HWE-derived `SD_REF`, which is an explicit approximation rather than an
+observed fit-cohort dosage SD. The CLI likewise requires
+`--hwe-frozen-scale` to opt into that approximation. The user guide covers QC.
+Bipred includes a lightweight LD-consistency
 sensitivity screen:
 
 ```python

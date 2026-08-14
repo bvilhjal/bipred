@@ -408,7 +408,7 @@ def test_real_data_checksum_manifest_and_validator(tmp_path):
     assert _source_tree_sha256(package) != first
 
 
-def test_manual_benchmark_ldpred3_pin_matches_ci_and_install_docs():
+def test_runtime_ci_and_frozen_benchmark_use_explicit_distinct_sources():
     import pathlib
 
     from benchmarks.real_data_inputs import LDPRED3_REV, LDPRED3_VERSION
@@ -416,10 +416,12 @@ def test_manual_benchmark_ldpred3_pin_matches_ci_and_install_docs():
     root = pathlib.Path(__file__).resolve().parent.parent
     ci = (root / ".github" / "workflows" / "ci.yml").read_text(
         encoding="utf-8")
-    readme = (root / "README.md").read_text(encoding="utf-8")
-    assert f'LDPRED3_REV: "{LDPRED3_REV}"' in ci
-    assert f'LDPRED3_VERSION: "{LDPRED3_VERSION}"' in ci
-    assert f"ldpred3.git@{LDPRED3_REV}" in readme
+    benchmark_readme = (root / "benchmarks" / "README.md").read_text(
+        encoding="utf-8")
+    assert 'LDPRED3_REV: "master"' in ci
+    assert 'LDPRED3_VERSION: "0.5.0.dev1"' in ci
+    assert LDPRED3_REV in benchmark_readme
+    assert LDPRED3_VERSION == "0.4.5"
 
 
 def test_real_data_provenance_requires_clean_source_and_writes_sidecar(tmp_path):

@@ -1,9 +1,37 @@
 # Changelog
 
 User-visible changes to **bipred** are recorded here. The project is currently
-`0.3.8`.
+`0.3.9.dev0`.
 
 ## [Unreleased]
+
+### Changed
+
+- The development line now requires LDpred3 0.5 and delegates strict principal
+  LD subsetting to its public interoperability API.
+- CI installs the current sibling through the declared resolver contract; the
+  now-redundant second `ldpred3-head` suite has been removed.
+- The command line exposes column mappings, summary-statistic QC, allele-
+  frequency concordance, LD-screen controls, sampling-error correlation and
+  deterministic multi-chain inference. Target-scaled weight files are now the
+  safe CLI default; HWE-derived frozen scaling requires an explicit flag.
+
+### Fixed
+
+- Missing or QC-dropped variants are intersected before LD-consistency
+  screening and are never imputed as z=0 observations.
+- Principal subsetting validates masks and indices, retains singleton blocks,
+  supports set callers, reuses complete mmap blocks, and never expands a whole
+  low-rank parent merely to select a small principal submatrix.
+- Prepared mmap panels retain their cache owner until explicitly closed.
+  A caller-owned `ldpred3.interop.PreparedLDCache` can instead be shared across
+  sibling fits without rescanning the complete payload.
+- Threaded multi-chain fitting retains at most one completed genome-wide result
+  per worker, and single-chain finalization no longer normalizes posterior
+  vectors twice.
+- A cache without reference allele frequencies writes target-scaled weights
+  instead of failing after the fit. HWE-derived dosage SD is labeled as an
+  approximation rather than an observed fit-cohort scale.
 
 ## [0.3.8] - 2026-08-13
 

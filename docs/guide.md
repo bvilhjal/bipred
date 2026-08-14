@@ -17,20 +17,32 @@ From an ldpred3 LD cache and two GWAS files:
 from ldpred3 import standardize_betas
 from bipred import prepare_bivariate_sumstats, ldpred3_auto_bivariate_blocks
 
-prep = prepare_bivariate_sumstats(
-    "ld.npz", "trait1.tsv.gz", "trait2.tsv.gz",
-    n_eff1=80_000, n_cases2=12_000, n_controls2=38_000)
-res = ldpred3_auto_bivariate_blocks(
-    prep.blocks, prep.beta_hat1, prep.beta_hat2, prep.n_eff1, prep.n_eff2,
-    seed=0)
-res.write_weights("trait1.weights", trait=1, id=prep.id, chrom=prep.chrom,
-                  pos=prep.pos, effect_allele=prep.effect_allele,
-                  other_allele=prep.other_allele, af=prep.af)
+with prepare_bivariate_sumstats(
+        "ld.npz", "trait1.tsv.gz", "trait2.tsv.gz",
+        n_eff1=80_000, n_cases2=12_000, n_controls2=38_000) as prep:
+    res = ldpred3_auto_bivariate_blocks(
+        prep.blocks, prep.beta_hat1, prep.beta_hat2,
+        prep.n_eff1, prep.n_eff2, seed=0)
+    res.write_weights(
+        "trait1.weights", trait=1, id=prep.id, chrom=prep.chrom, pos=prep.pos,
+        effect_allele=prep.effect_allele, other_allele=prep.other_allele)
 ```
 
 `n_cases`/`n_controls` become `n_eff` via `ldpred3.n_eff_case_control`.
 `python -m bipred --ld-cache ld.npz --sumstats1 t1.tsv --sumstats2 t2.tsv`
-is the same path.
+is the same path. An mmap cache stays open through the context and is released
+on exit; call `prep.close()` after fitting when not using `with`.
+For several sibling fits, create one fully validated
+`ldpred3.interop.prepare_ld_cache(...)` context and pass that object in place
+of the path; its outer context owns the mappings and avoids another complete
+payload scan.
+
+The default weight file is scored with `scaling="target"`. Bipred has no
+observed fit-cohort dosage SD in an LD cache. Passing `af=prep.af` (or CLI
+`--hwe-frozen-scale`) writes `SD_REF = sqrt(2 f (1-f))`: a reference-panel HWE
+approximation that may differ under imputation uncertainty or HWE departure.
+Pass an observed `sd=` to `write_weights` when an exact frozen scale is
+available.
 
 The low-level contract (what `prepare_bivariate_sumstats` produces) is:
 
@@ -270,7 +282,7 @@ require different trace contracts. The pooled posterior records
 
 | Field | Meaning |
 |---|---|
-| `beta1_est`, `beta2_est` | posterior-mean standardized effects; write them with `res.write_weights` and score with `ldpred3.score_from_weights(..., scaling="frozen")`. Do not do `X @ beta_est` on raw dosages. |
+| `beta1_est`, `beta2_est` | posterior-mean standardized effects; write them with `res.write_weights` and use target scaling unless you supplied observed fit-cohort AF/SD. Do not do `X @ beta_est` on raw dosages. |
 | `h2` | SNP heritability pair `(h2_1, h2_2)` |
 | `rg` | genome-wide genetic correlation |
 | `p` | total non-null mixture fraction |

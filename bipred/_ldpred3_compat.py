@@ -1,10 +1,10 @@
-"""Lazy compatibility seam for the pinned :mod:`ldpred3` dependency.
+"""Lazy compatibility seam for the bounded :mod:`ldpred3` dependency.
 
 The names here are private helpers that bipred deliberately shares with the
-exact ldpred3 version pinned in ``pyproject.toml``. Keeping those imports here
-makes the next dependency review one small, explicit audit; loading a lightweight
-helper such as LDSC does not import the Numba kernels. Public ``LowRankLD`` is
-imported from :mod:`ldpred3` by its consumers.
+LDpred3 0.5 development line bounded in ``pyproject.toml``. Keeping those
+imports here makes the next dependency review one small, explicit audit;
+loading a lightweight helper such as LDSC does not import the Numba kernels.
+Data-level sibling integration uses the stable :mod:`ldpred3.interop` surface.
 """
 
 from __future__ import annotations

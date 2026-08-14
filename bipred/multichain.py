@@ -439,16 +439,43 @@ def ldpred3_auto_bivariate_chains(
     pool = None
     if chain_ncores > 1 and n_chains > 1:
         # Threads, not processes: the sweep kernels release the GIL and the LD
-        # blocks are read shared rather than pickled per worker. Every chain is
-        # submitted up front, and results are consumed in chain order, so
-        # pooling and the split-Rhat diagnostic see exactly the sequence a
-        # serial run produces.
+        # blocks are read shared rather than pickled per worker. Keep at most
+        # one future per worker: a Future retains its completed BivariateResult,
+        # including two genome-length posterior vectors. Submitting every chain
+        # at once therefore made completed-result memory O(n_chains * m).
+        # Results are still consumed in chain order, so pooling remains
+        # bit-identical to a serial run.
         from concurrent.futures import ThreadPoolExecutor
 
-        pool = ThreadPoolExecutor(max_workers=min(chain_ncores, n_chains))
-        futures = [pool.submit(_run_one, index, *rest)
-                   for index, rest in chain_args]
-        chain_results = (future.result() for future in futures)
+        workers = min(chain_ncores, n_chains)
+        pool = ThreadPoolExecutor(max_workers=workers)
+
+        def _bounded_results():
+            pending = {}
+            next_submit = 0
+            for _ in range(workers):
+                index, rest = chain_args[next_submit]
+                pending[index] = pool.submit(_run_one, index, *rest)
+                next_submit += 1
+            for index in range(n_chains):
+                future = pending.pop(index)
+                result = future.result()
+                try:
+                    yield result
+                finally:
+                    # Do not retain the just-pooled genome-wide vectors in this
+                    # suspended generator frame.
+                    del result
+                # Refill only after the caller has pooled and released the
+                # yielded result. During pooling, the current result plus the
+                # remaining futures therefore total at most ``workers``.
+                if next_submit < n_chains:
+                    new_index, rest = chain_args[next_submit]
+                    pending[new_index] = pool.submit(
+                        _run_one, new_index, *rest)
+                    next_submit += 1
+
+        chain_results = _bounded_results()
     else:
         # Lazy on purpose: a chain is only fitted when the loop below asks for
         # it, so a chain that fails validation aborts the fit without paying for
@@ -492,10 +519,12 @@ def ldpred3_auto_bivariate_chains(
     # Raw quadratics, as in the single-chain fit: h2 is clamped for reporting,
     # but clamping the rg denominator alone would saturate the ratio.
     rg = _rg_from_quadratics(genetic_mean[1], genetic_mean[0], genetic_mean[2])
+    beta1_sum /= n_chains
+    beta2_sum /= n_chains
 
     posterior = BivariateResult(
-        beta1_est=beta1_sum / n_chains,
-        beta2_est=beta2_sum / n_chains,
+        beta1_est=beta1_sum,
+        beta2_est=beta2_sum,
         h2=(h21, h22),
         rg=rg,
         p=float(pi_mean[1:].sum()),

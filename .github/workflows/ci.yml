@@ -5,16 +5,17 @@ on:
     branches: [main, "claude/**"]
   pull_request:
     branches: [main]
-  # Weekly drift early-warning (the ldpred3-head leg below), plus manual runs.
+  # Weekly current-sibling drift check, plus manual runs.
   schedule:
     - cron: "17 5 * * 1"
   workflow_dispatch:
 
 env:
-  # ldpred3 is not published yet and bipred consumes an internal compatibility
-  # seam. Keep CI reproducible instead of silently following its moving branch.
-  LDPRED3_REV: "5d86ac9d97e42c57fa31d84ff093d3bf637dc0e6"
-  LDPRED3_VERSION: "0.4.5"
+  # The sibling development line supplies the public interoperability API that
+  # bipred 0.3.9.dev0 requires. Archived real-data benchmarks retain their own
+  # immutable 0.4.5 source pin in benchmarks/real_data_inputs.py.
+  LDPRED3_REV: "master"
+  LDPRED3_VERSION: "0.5.0.dev1"
   # ldpred3 lives in a private repo, so the runner's default GITHUB_TOKEN (scoped
   # to this repo only) cannot clone it. Provide a repo/organization secret
   # LDPRED3_FOR_BIPRED (or LDPRED3_TOKEN) — a PAT or fine-grained token with
@@ -112,7 +113,7 @@ jobs:
         if: matrix.numba == 'no-numba'
         run: pip install -e ".[test]"
 
-      - name: Verify pinned ldpred3 version
+      - name: Verify declared ldpred3 development version
         run: python -c "import ldpred3; assert ldpred3.__version__ == '${{ env.LDPRED3_VERSION }}'"
 
       - name: Verify pure-NumPy fallback
@@ -178,75 +179,6 @@ jobs:
 
       - name: Smoke-test Windows peak RSS
         run: python -c "import sys; sys.path.insert(0, 'benchmarks'); from _benchmark_utils import peak_rss_bytes; assert peak_rss_bytes() > 0"
-
-  ldpred3-head:
-    # Drift early-warning: run the suite against ldpred3's master instead of the
-    # pinned LDPRED3_REV. Informational (continue-on-error): a failure means the
-    # private seam drifted upstream and the next pin bump needs its audit, not
-    # that this repo is broken at its pin. Scheduled weekly (see `on.schedule`)
-    # and on demand; it does not run on pushes.
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    name: drift watch · ldpred3@master
-    env:
-      OPENBLAS_NUM_THREADS: "1"
-      OMP_NUM_THREADS: "1"
-      MKL_NUM_THREADS: "1"
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Authenticate to private ldpred3
-        shell: bash
-        env:
-          TOKEN: ${{ secrets.LDPRED3_FOR_BIPRED || secrets.LDPRED3_TOKEN }}
-        run: |
-          # The guard lives in bash, not in an `if:` expression. A secret piped
-          # through workflow-level `env` reads as empty to the expression
-          # evaluator, so `if: env.LDPRED3_TOKEN != ''` skipped this step even
-          # with the secret set -- and the only symptom was `could not read
-          # Username` from a pip subprocess several steps later. Say it plainly
-          # instead.
-          if [ -z "$TOKEN" ]; then
-            echo "::error::No ldpred3 token secret is set on this repository."
-            echo "ldpred3 is private, so every install below will fail."
-            echo "Add a token with read access to bvilhjal/ldpred3:"
-            echo "  printf %s '<token>' | gh secret set LDPRED3_FOR_BIPRED --repo bvilhjal/bipred"
-            exit 1
-          fi
-          git config --global \
-            url."https://x-access-token:${TOKEN}@github.com/".insteadOf \
-            "https://github.com/"
-          # Windows only in effect, harmless elsewhere. ldpred3's benchmark
-          # archive carries a 187-character path
-          # (benchmarks/results/<run>/source/<sha>/untracked/...), and pip clones
-          # into a ~95-character temp directory, so checkout overruns MAX_PATH
-          # and fails with "Filename too long" *after* a successful clone.
-          git config --global core.longpaths true
-
-      - name: Install ldpred3 from master (not the pin)
-        run: pip install "ldpred3[fast] @ git+https://github.com/bvilhjal/ldpred3.git@master"
-
-      - name: Install bipred without re-resolving ldpred3
-        # --no-deps is load-bearing. This leg deliberately installs an ldpred3
-        # whose version differs from bipred's declared range, and ldpred3 is on
-        # no package index, so letting pip re-resolve the dependency fails at
-        # resolution and the leg never reaches pytest -- silently, because it is
-        # continue-on-error. Install bipred's other runtime deps explicitly.
-        run: |
-          pip install "numpy>=1.20" "numba>=0.59" "pytest>=7"
-          pip install -e . --no-deps
-
-      - name: Report the ldpred3 under test
-        # Recorded in the log so a drift failure names the version that caused
-        # it, and so a run that silently fell back to the pin is visible.
-        run: python -c "import ldpred3; print('ldpred3 under test:', ldpred3.__version__)"
-
-      - name: Run tests against ldpred3@master
-        run: pytest -q
 
   build:
     runs-on: ubuntu-latest

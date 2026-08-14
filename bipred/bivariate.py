@@ -1508,12 +1508,15 @@ class BivariateResult:
         :class:`~bipred.prepare.PreparedBivariate` after a cache on-ramp).
 
         When ``af`` is given and ``sd`` is omitted, ``SD_REF`` is the HWE
-        dosage SD ``sqrt(2 f (1-f))`` from the LD-cache frequency, which is
-        enough for :func:`ldpred3.score_from_weights` ``scaling="frozen"``.
-        Omit both to write ranking-only weights (``scaling="target"``).
-        Raw ``X @ beta_est`` on 0/1/2 dosages is the wrong scale.
+        approximation ``sqrt(2 f (1-f))`` from that allele frequency.  This is
+        not an observed fit-cohort dosage SD: imputation uncertainty or Hardy-
+        Weinberg disequilibrium can make the two differ.  Pass an observed
+        ``sd`` for an exact frozen scale, use the approximation only when its
+        assumptions are defensible, or omit both and score with
+        ``scaling="target"``. Raw ``X @ beta_est`` on 0/1/2 dosages is the
+        wrong scale.
         """
-        from ldpred3.weights import write_weights
+        from ldpred3.interop import write_weights
 
         if trait in (1, "1", "beta1"):
             weight = np.asarray(self.beta1_est, dtype=float)
@@ -1527,6 +1530,15 @@ class BivariateResult:
                 f"trait {trait} has {weight.size} effects but provenance "
                 f"length is {ids.size}")
         if af is not None and sd is None:
+            import warnings
+
+            warnings.warn(
+                "SD_REF is being approximated as sqrt(2*AF_REF*(1-AF_REF)); "
+                "this is an HWE reference-panel scale, not an observed "
+                "fit-cohort dosage SD",
+                RuntimeWarning,
+                stacklevel=2,
+            )
             af = np.asarray(af, dtype=float)
             sd = np.sqrt(np.maximum(2.0 * af * (1.0 - af), 0.0))
         return write_weights(
@@ -2207,13 +2219,19 @@ def _ldpred3_auto_bivariate_prepared_inner(prepared, options, start):
     # Divergence is a separate failure from implausibility and the two do not
     # overlap: the fit that motivated this check had a *sparse* causal fraction
     # and touched no bound, so the heuristic above stayed silent on it.
-    _warn_if_fit_diverged(avg1 / count, avg2 / count,
+    # These accumulators are no longer needed as sums. Normalize in place so
+    # finalization does not hold sums plus two additional genome-length means.
+    avg1 /= count
+    avg2 /= count
+    beta1_mean = avg1
+    beta2_mean = avg2
+    _warn_if_fit_diverged(beta1_mean, beta2_mean,
                           (float(g11), float(g22)),
                           (float(s1_mean), float(s2_mean)),
                           genetic_samples[:count], m,
                           largest_block=max((b[3] for b in prepared.blocks),
                                             default=None))
-    return BivariateResult(beta1_est=avg1 / count, beta2_est=avg2 / count,
+    return BivariateResult(beta1_est=beta1_mean, beta2_est=beta2_mean,
                            h2=(float(h2_1), float(h2_2)), rg=rg,
                            p=float(pi_mean[1] + pi_mean[2] + pi_mean[3]),
                            sigma=np.array([[s1_mean, s12_mean],

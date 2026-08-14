@@ -451,6 +451,53 @@ def test_nonfinite_or_unequal_chain_aborts_the_fit(monkeypatch):
         )
 
 
+def test_threaded_driver_submits_only_one_result_per_worker(monkeypatch):
+    """Completed genome-wide results stay bounded by chain_ncores."""
+    import concurrent.futures
+
+    events = []
+
+    class ImmediateFuture:
+        def __init__(self, index, m, retained):
+            self.index = index
+            self.value = _result(m, retained, index)
+
+        def result(self):
+            events.append(("result", self.index))
+            return self.value
+
+    class RecordingPool:
+        def __init__(self, max_workers):
+            self.max_workers = max_workers
+
+        def submit(self, fn, index, *rest):
+            events.append(("submit", index))
+            return ImmediateFuture(index, 5, 4)
+
+        def shutdown(self, wait=True):
+            events.append(("shutdown", wait))
+
+    monkeypatch.setattr(concurrent.futures, "ThreadPoolExecutor", RecordingPool)
+    blocks, beta1, beta2 = _inputs()
+    result = multichain.ldpred3_auto_bivariate_chains(
+        blocks, beta1, beta2, 10_000, 12_000,
+        n_chains=6, chain_ncores=2, num_iter=4)
+
+    assert result.n_chains == 6
+    assert events[:5] == [
+        ("submit", 0), ("submit", 1), ("result", 0),
+        ("submit", 2), ("result", 1)]
+    pending = 0
+    max_pending = 0
+    for action, _ in events:
+        if action == "submit":
+            pending += 1
+            max_pending = max(max_pending, pending)
+        elif action == "result":
+            pending -= 1
+    assert max_pending == 2
+
+
 def test_sampler_failure_reports_chain_and_seed(monkeypatch):
     calls = []
 
