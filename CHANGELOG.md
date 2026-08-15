@@ -7,6 +7,17 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 ### Changed
 
+- The LD-consistency screen explains blocked parallelism. Requesting
+  `ncores > 1` and silently getting a serial screen read as a no-op flag; the
+  conservative BLAS gate is unchanged, but a blocked run now warns which
+  condition failed (unpinned BLAS threads, missing `threadpoolctl`, or a
+  non-reentrant BLAS) and how to enable the pool. The gate opening, and
+  `ncores=1`, stay quiet.
+- `ldpred3_auto_bivariate_blocks` warns once per process when the pure-Python
+  no-Numba fallback is active (`warn_no_numba`, re-exported through the
+  `ldpred3._numba` seam) — the fallback is numerically identical but orders of
+  magnitude slower, and was previously indistinguishable from the compiled
+  path at runtime.
 - The development line now requires LDpred3 0.5 and delegates strict principal
   LD subsetting to its public interoperability API.
 - CI installs the current sibling through the declared resolver contract; the

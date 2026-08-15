@@ -28,7 +28,9 @@ _MODULE_NAMES = {
     # Nesting a thread pool over BLAS is safe only for some builds of it, and
     # ldpred3 already owns that determination. Importing it here rather than
     # re-deriving it keeps one answer to the question across both packages.
-    "ldpred3.ld": ("_blas_pool_safe",),
+    # ``_blas_runtime_info`` backs the screen's why-was-parallelism-blocked
+    # hint with the same introspection the gate itself used.
+    "ldpred3.ld": ("_blas_pool_safe", "_blas_runtime_info"),
     "ldpred3._numba": (
         "HAVE_NUMBA",
         "_jit",
@@ -38,6 +40,7 @@ _MODULE_NAMES = {
         "_jit_parallel",
         "_set_threads",
         "prange",
+        "warn_no_numba",
     ),
     "ldpred3.ldsc": ("_weights", "_wls"),
 }

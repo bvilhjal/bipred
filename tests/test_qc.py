@@ -484,3 +484,41 @@ def test_qc_boolean_controls_reject_strings():
         sd_consistency(beta, se, 100_000.0, af, normalise="False")
     with pytest.raises(ValueError, match="include_apoe must be a boolean"):
         in_long_range_ld(["1"], [1], include_apoe="False")
+
+
+def test_blocked_screen_parallelism_explains_itself(monkeypatch):
+    """Requesting ncores>1 and silently getting serial is a no-op flag.
+
+    The conservative BLAS gate is correct; the missing piece was that it never
+    said why. Each blocked cause must name itself, and an open gate (or
+    ncores=1) must stay quiet.
+    """
+    import warnings as warnings_module
+
+    import bipred.qc as qc
+    import bipred._ldpred3_compat as compat
+
+    blocks, z = _clean_panel(k=100, blocks=2, rho=0.9, seed=5)
+    mask = None
+
+    monkeypatch.setattr(compat, "_blas_runtime_info", lambda: (4, True))
+    with pytest.warns(RuntimeWarning, match="4 threads"):
+        mask = ld_consistency_screen(blocks, z, rounds=1, seed=3, ncores=4)
+    assert mask.dtype == bool and mask.size == z.size
+
+    monkeypatch.setattr(compat, "_blas_runtime_info", lambda: (None, None))
+    with pytest.warns(RuntimeWarning, match="threadpoolctl"):
+        ld_consistency_screen(blocks, z, rounds=1, seed=3, ncores=2)
+
+    monkeypatch.setattr(compat, "_blas_runtime_info", lambda: (1, False))
+    with pytest.warns(RuntimeWarning, match="not reentrant"):
+        ld_consistency_screen(blocks, z, rounds=1, seed=3, ncores=2)
+
+    monkeypatch.setattr(qc, "_pool_is_worthwhile", lambda ncores, n: True)
+    with warnings_module.catch_warnings():
+        warnings_module.simplefilter("error")
+        ld_consistency_screen(blocks, z, rounds=1, seed=3, ncores=4)
+
+    with warnings_module.catch_warnings():
+        warnings_module.simplefilter("error")
+        ld_consistency_screen(blocks, z, rounds=1, seed=3)

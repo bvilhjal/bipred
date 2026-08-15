@@ -51,6 +51,7 @@ univariate fit::
 from __future__ import annotations
 
 import functools
+import warnings
 
 import numpy as np
 
@@ -391,6 +392,26 @@ def ld_consistency_screen(
         with ThreadPoolExecutor(max_workers=ncores) as executor:
             results = list(executor.map(settle, tasks))
     else:
+        if ncores > 1 and len(tasks) > 1:
+            # The gate can only have blocked on the BLAS conditions; say which
+            # one, because "ncores=8 requested, ran serial anyway" otherwise
+            # reads as a no-op flag.
+            from ._ldpred3_compat import _blas_runtime_info
+            threads, nested_safe = _blas_runtime_info()
+            if threads is None:
+                reason = ("threadpoolctl is not installed, so BLAS "
+                          "reentrancy cannot be confirmed")
+            elif threads != 1:
+                reason = (f"the loaded BLAS is using {threads} threads "
+                          "(the pool would oversubscribe them)")
+            else:
+                reason = "the loaded BLAS is not reentrant"
+            warnings.warn(
+                f"screen ncores={ncores} requested but the screen is running "
+                f"serial: {reason}. Pin one BLAS thread (e.g. "
+                "OPENBLAS_NUM_THREADS=1, OMP_NUM_THREADS=1) and install "
+                "threadpoolctl to enable the block pool.", RuntimeWarning,
+                stacklevel=2)
         results = [settle(task) for task in tasks]
 
     keep = np.ones(total, dtype=bool)

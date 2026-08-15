@@ -64,6 +64,7 @@ from ._ldpred3_compat import (
     _validate_iterations,
     _validate_seed,
     prange,
+    warn_no_numba,
 )
 
 # int8 LD quantisation scale (127): correlations in [-1, 1] are stored as
@@ -1801,6 +1802,7 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     -------
     BivariateResult
     """
+    warn_no_numba()
     options = _validate_bivariate_options(
         ld_int8=ld_int8,
         h2_init=h2_init,
