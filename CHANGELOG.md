@@ -7,6 +7,19 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 ### Changed
 
+- **The shared multi-chain diagnostics converged upstream.** The deterministic
+  chain-seed helper (character-identical here and in LDpred3) and the
+  scalar-trace basic split-Rhat now live in `ldpred3.diagnostics` — the
+  split-Rhat as the public `basic_split_rhat`, ported verbatim from
+  `bipred/multichain.py` — and this package imports them.
+  `BivariateBasicSplitRHat` is now an alias of LDpred3's `NamedBasicSplitRHat`
+  (same fields), so the public result type is unchanged; one implementation
+  now serves both this sampler and GWFM's per-variant PIP diagnostic. The
+  seam's Numba decorators and input validators likewise bind through the new
+  public `ldpred3.shim` module instead of LDpred3's private `_numba` /
+  `_common`, shrinking the private borrowing list to what LDpred3 has not
+  published. The LDpred3 floor advances to `>=0.5.3.dev0,<0.6` for
+  `ldpred3.shim`.
 - **`--chi2-cap` now defaults to `regression` in `benchmarks/real_ldl_cad.py`
   and `benchmarks/qc_factorial.py`** (was `both`). The chi-square cap of 80 is
   a leverage filter for LD Score regression, whose weights come from the fitted

@@ -1,10 +1,14 @@
 """Lazy compatibility seam for the bounded :mod:`ldpred3` dependency.
 
-The names here are private helpers that bipred deliberately shares with the
-LDpred3 0.5 development line bounded in ``pyproject.toml``. Keeping those
-imports here makes the next dependency review one small, explicit audit;
-loading a lightweight helper such as LDSC does not import the Numba kernels.
-Data-level sibling integration uses the stable :mod:`ldpred3.interop` surface.
+The names here are shared with the LDpred3 0.5 development line bounded in
+``pyproject.toml``. Most of them -- the Numba decorators, the input
+validators, ``warn_no_numba`` -- are *published* by the public
+:mod:`ldpred3.shim` module (added in LDpred3 0.5.3), and the seam binds those
+through it. The remainder are still underscore-private helpers LDpred3 has
+not published: keeping every borrowing here makes the next dependency review
+one small, explicit audit, and loading a lightweight helper such as LDSC does
+not import the Numba kernels. Data-level sibling integration uses the stable
+:mod:`ldpred3.interop` surface.
 """
 
 from __future__ import annotations
@@ -13,16 +17,29 @@ import importlib
 
 
 _MODULE_NAMES = {
+    # Published code-level surface: stable by the same promise as interop.
+    "ldpred3.shim": (
+        "HAVE_NUMBA",
+        "_get_thread_id",
+        "_integer_at_least",
+        "_jit",
+        "_jit_fastmath_nogil",
+        "_jit_nogil",
+        "_jit_parallel",
+        "_set_threads",
+        "_validate_beta_hat",
+        "_validate_blocks",
+        "_validate_iterations",
+        "_validate_seed",
+        "prange",
+        "warn_no_numba",
+    ),
+    # Still-private helpers below; each entry is an explicit borrowing.
     "ldpred3._common": (
         "_as_n_vector",
         "_check_h2_p",
         "_finite_control",
-        "_integer_at_least",
-        "_validate_beta_hat",
-        "_validate_blocks",
         "_validate_boolean_controls",
-        "_validate_iterations",
-        "_validate_seed",
     ),
     "ldpred3.ld_repr": ("_Q8",),
     # Nesting a thread pool over BLAS is safe only for some builds of it, and
@@ -31,17 +48,6 @@ _MODULE_NAMES = {
     # ``_blas_runtime_info`` backs the screen's why-was-parallelism-blocked
     # hint with the same introspection the gate itself used.
     "ldpred3.ld": ("_blas_pool_safe", "_blas_runtime_info"),
-    "ldpred3._numba": (
-        "HAVE_NUMBA",
-        "_jit",
-        "_get_thread_id",
-        "_jit_fastmath_nogil",
-        "_jit_nogil",
-        "_jit_parallel",
-        "_set_threads",
-        "prange",
-        "warn_no_numba",
-    ),
     "ldpred3.ldsc": ("_weights", "_wls"),
 }
 
