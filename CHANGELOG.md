@@ -7,6 +7,28 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 ### Changed
 
+- **`--chi2-cap` now defaults to `regression` in `benchmarks/real_ldl_cad.py`
+  and `benchmarks/qc_factorial.py`** (was `both`). The chi-square cap of 80 is
+  a leverage filter for LD Score regression, whose weights come from the fitted
+  means so an uncapped large-effect variant keeps near-full leverage on the
+  slope. It is not a joint-fit mask: the bivariate model's slab component
+  exists to hold exactly the variants the cap deletes. `bipred.ldsc.ldsc_rg`
+  and `docs/guide.md` have said so for several releases; only the driver
+  defaults still applied one per-variant mask to both. Measured over the
+  HapMap3 reference, capping the fit discards 0.4% of CAD's summed chi-square
+  but 51% of lipoprotein(a)'s and 73% of total bilirubin's, from under 3,000
+  variants in a million — it is invisible on a polygenic trait and removes a
+  concentrated one. Under `both` the cap also ran upstream of the
+  LD-consistency screen, so the screen never evaluated the variants it had
+  already dropped. `--chi2-cap both` is retained and reproduces the prior
+  behaviour; `none` removes the cap everywhere.
+
+  This aligns the drivers with the reported science rather than changing it:
+  `studies/oligogenic-overlap` already reports the uncapped-fit arm, and every
+  row of both studies' `results/estimates.csv` is labelled `fit_chi2_cap`.
+  Six of nine committed `ldl-cad` rows are `capped` and now need `--chi2-cap
+  both` explicitly; each study README records which.
+
 - The LD-consistency screen explains blocked parallelism. Requesting
   `ncores > 1` and silently getting a serial screen read as a no-op flag; the
   conservative BLAS gate is unchanged, but a blocked run now warns which

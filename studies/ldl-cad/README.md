@@ -56,3 +56,21 @@ regression canary — does a real-shaped GWAS still produce an admissible fit? �
 is real and belongs there. What belongs here is the estimate and its
 interpretation. Those two roles want opposite handling: the canary should be
 regenerated freely, the estimate should not change quietly.
+
+### Reproducing the committed rows
+
+`--chi2-cap` now defaults to `regression`: the chi-square cap of 80 stays on
+the LD Score regression rows, which need it, and comes off the joint fit, whose
+slab component exists to hold large effects. Six of the nine committed rows
+predate that change and carry `fit_chi2_cap=capped`, so reproducing them takes
+
+```bash
+python benchmarks/real_ldl_cad.py --chi2-cap both
+```
+
+The default invocation now reproduces the three `uncapped` rows instead. Read
+`fit_chi2_cap` before comparing any two rows in this file. On LDL the cap costs
+7.6% of summed chi-square and on CAD 0.4%, so the LDL x CAD estimate is one of
+the least cap-sensitive in the registry — this is a provenance note, not a
+retraction. [`oligogenic-overlap`](../oligogenic-overlap/) is where the
+distinction changes conclusions.

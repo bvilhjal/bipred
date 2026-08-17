@@ -51,8 +51,14 @@ A third came from the QC. The chi-square cap of 80, inherited from LD Score
 regression, was also being applied to the joint fit -- suppressing Lp(a)'s h2
 by a factor of six and inflating every trait's estimated polygenicity, by 9%
 for Lp(a) and 93% for dbilirubin. Removing it from the fit is what the numbers
-above rest on. It also broke one fit: GGT x bilirubin diverges without the cap,
-so the filter was load-bearing there even as it destroyed signal elsewhere.
+above rest on. It also broke one fit: GGT x bilirubin diverges without the cap.
+The capped arm converges for that pair, but only with 73% of bilirubin's summed
+chi-square deleted, and this study reports neither — the pair is excluded from
+every figure in both arms. So the cap bought convergence there rather than a
+usable estimate, while destroying signal everywhere else. As of bipred 0.3.9
+`--chi2-cap` defaults to `regression`, which is the arm these numbers come
+from; `--chi2-cap both` reproduces the superseded `fit_chi2_cap=capped` rows in
+`results/estimates.csv`.
 
 ## Gaps
 

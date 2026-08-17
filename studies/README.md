@@ -75,7 +75,7 @@ globals:
 import qc_factorial as Q
 Q.TRAITS = {**Q.TRAITS, **NEW}
 Q.PAIRS = [...]
-Q.main(Q.parse_args(["--out", "mine.csv", "--chi2-cap", "ldsc"]))
+Q.main(Q.parse_args(["--out", "mine.csv", "--chi2-cap", "both"]))
 ```
 
 `real_data_inputs.py` -- manifest validation, clean-source gate, provenance

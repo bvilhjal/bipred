@@ -129,16 +129,17 @@ def parse_args(argv=None):
              "artifact, so an exploratory run must name its own file rather "
              "than overwrite the recorded one.")
     parser.add_argument(
-        "--chi2-cap", choices=("both", "regression", "none"), default="both",
-        help="where the chi2 <= 80 filter applies. 'both' (default) is the "
-             "historical behaviour: one per-variant mask feeds LD Score "
-             "regression and the joint fit alike. 'regression' keeps the cap "
-             "on the LD Score regression, which needs it -- an uncapped "
-             "large-effect variant holds near-full leverage on the slope -- "
-             "while the fit sees "
-             "every variant, which is what its slab component is for. 'none' "
-             "removes it. Under 'both' the cap also runs upstream of the "
-             "LD-consistency screen, so the screen never evaluates the "
+        "--chi2-cap", choices=("regression", "both", "none"),
+        default="regression",
+        help="where the chi2 <= 80 filter applies. 'regression' (default) "
+             "keeps the cap on the LD Score regression, which needs it -- its "
+             "weights come from the fitted means, so an uncapped large-effect "
+             "variant holds near-full leverage on the slope -- while the joint "
+             "fit sees every variant, which is what its slab component is for. "
+             "'both' is the historical behaviour: one per-variant mask feeds "
+             "the regression and the fit alike, and reproduces the committed "
+             "CSV. 'none' removes it. Under 'both' the cap also runs upstream "
+             "of the LD-consistency screen, so the screen never evaluates the "
              "variants it removed.")
     parser.add_argument(
         "--rounds", type=int, default=SCREEN_ROUNDS,
@@ -236,10 +237,10 @@ def main(args=None):
         sd_kw = STRICT if strict else LENIENT
         keep, _ = sd_consistency(d["beta"], d["se"], d["n_fit"], d["af"],
                                  binary=d["binary"], **sd_kw)
-        # The cap is in this mask only under --chi2-cap both. Under 'ldsc' it
-        # moves to the regression rows below; under 'none' it is gone. Leaving
-        # it here also puts it upstream of the screen, which is why the two
-        # cannot be separated by a later filter.
+        # The cap is in this mask only under --chi2-cap both. Under
+        # 'regression' (the default) it moves to the regression rows below;
+        # under 'none' it is gone. Leaving it here also puts it upstream of the
+        # screen, which is why the two cannot be separated by a later filter.
         capped = (((d["beta"] / d["se"]) ** 2 <= CHI2_MAX)
                   if args.chi2_cap == "both"
                   else np.ones(d["beta"].shape, bool))
