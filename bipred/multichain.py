@@ -25,6 +25,11 @@ from .bivariate import (
     _validate_seed,
     _validate_sigma_prior_scale,
 )
+from ldpred3.diagnostics import (
+    NamedBasicSplitRHat,
+    basic_split_rhat,
+    deterministic_chain_seeds,
+)
 
 __all__ = [
     "BivariateBasicSplitRHat",
@@ -34,14 +39,14 @@ __all__ = [
 ]
 
 
-@dataclass
-class BivariateBasicSplitRHat:
-    """Classical basic split-Rhat for the named scalar traces."""
-
-    rhat: dict[str, float]
-    degenerate: dict[str, bool]
-    n_chains: int
-    half_length: int
+# The public diagnostic type and the seed helper are LDpred3's, shared
+# verbatim with GWFM's per-variant PIP diagnostic: ``deterministic_chain_seeds``
+# was character-identical here, and ``basic_split_rhat`` (upstreamed from this
+# module, delegated below) carries the same split/degeneracy semantics this
+# package defined. The aliases keep bipred's internal call sites and tests
+# stable while one implementation serves both samplers.
+BivariateBasicSplitRHat = NamedBasicSplitRHat
+_deterministic_chain_seeds = deterministic_chain_seeds
 
 
 @dataclass
@@ -114,64 +119,16 @@ def _accumulate_chains(chain_args, chain_results, m, retained, beta1_sum,
         )
 
 
-def _deterministic_chain_seeds(seed, n_chains):
-    """Spawn reproducible uint32 seeds and deterministically repair collisions."""
-    sequence = np.random.SeedSequence(seed)
-    children = sequence.spawn(n_chains)
-    seeds = np.empty(n_chains, dtype=np.uint32)
-    used = set()
-    modulus = int(np.iinfo(np.uint32).max) + 1
-    for index, child in enumerate(children):
-        candidate = int(child.generate_state(1, dtype=np.uint32)[0])
-        while candidate in used:
-            candidate = (candidate + 1) % modulus
-        used.add(candidate)
-        seeds[index] = candidate
-    return seeds
-
-
 def _basic_split_rhat(traces):
-    """Return classical basic split-Rhat for equal-length scalar traces."""
-    if not traces:
-        raise ValueError("traces must contain at least one named metric")
-    shapes = {np.asarray(values).shape for values in traces.values()}
-    if len(shapes) != 1:
-        raise ValueError("all diagnostic traces must have the same shape")
-    shape = shapes.pop()
-    if len(shape) != 2 or shape[0] < 2 or shape[1] < 4 or shape[1] % 2:
-        raise ValueError(
-            "diagnostic traces must have shape (n_chains >= 2, even draws >= 4)"
-        )
-    n_chains, n_draws = shape
-    half = n_draws // 2
-    rhat = {}
-    degenerate = {}
-    for name, values in traces.items():
-        values = np.asarray(values, dtype=float)
-        if not np.all(np.isfinite(values)):
-            raise FloatingPointError(
-                f"diagnostic trace {name!r} contains non-finite values"
-            )
-        split = np.concatenate((values[:, :half], values[:, half:]), axis=0)
-        within = float(np.mean(np.var(split, axis=1, ddof=1)))
-        split_means = np.mean(split, axis=1)
-        between = float(half * np.var(split_means, ddof=1))
-        variance_hat = ((half - 1) / half * within + between / half)
-        is_degenerate = within <= 0.0
-        degenerate[name] = bool(is_degenerate)
-        if is_degenerate:
-            # Identical constant split chains contain no scale information;
-            # different constants have zero within-chain variance but positive
-            # between-chain variance and therefore infinite disagreement.
-            rhat[name] = float("inf") if between > 0.0 else float("nan")
-        else:
-            rhat[name] = float(np.sqrt(max(variance_hat, 0.0) / within))
-    return BivariateBasicSplitRHat(
-        rhat=rhat,
-        degenerate=degenerate,
-        n_chains=n_chains,
-        half_length=half,
-    )
+    """Delegate to :func:`ldpred3.diagnostics.basic_split_rhat`.
+
+    The implementation upstreamed from this module keeps bipred's semantics
+    verbatim -- predeclared equal halves, NaN for identical constant split
+    chains, infinity for differing ones -- and is shared with GWFM's
+    per-variant diagnostic. Retained as a named function so the historical
+    call sites and tests read the same.
+    """
+    return basic_split_rhat(traces)
 
 
 def _validated_chain_traces(result, m, retained, chain_index, seed):
