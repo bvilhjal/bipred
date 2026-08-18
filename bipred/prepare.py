@@ -104,10 +104,15 @@ def _cache_variants(ids, meta):
 
 
 def _resolve_n_eff(n_eff, n_cases, n_controls, label):
-    if n_cases is not None or n_controls is not None:
+    has_counts = n_cases is not None or n_controls is not None
+    if has_counts:
         if n_cases is None or n_controls is None:
             raise ValueError(f"{label}: n_cases and n_controls must be given "
                              "together")
+        if n_eff is not None:
+            raise ValueError(
+                f"{label}: pass either a scalar n_eff or n_cases/n_controls, "
+                "not both")
         return n_eff_case_control(float(n_cases), float(n_controls))
     return n_eff
 
@@ -177,7 +182,8 @@ def prepare_bivariate_sumstats(
     and converted with :func:`ldpred3.standardize_betas`. The returned blocks
     are the cache restricted to variants present in both files, re-tiled to
     ``0..m'-1``. Case/control counts become ``n_eff`` via
-    :func:`ldpred3.n_eff_case_control`.
+    :func:`ldpred3.n_eff_case_control`. A trait may take a scalar ``n_eff`` or
+    case/control counts, not both.
 
     ``columns1`` / ``columns2`` map canonical LDpred3 fields to file columns.
     ``qc_params`` is passed to :func:`ldpred3.qc.qc_sumstats` for both traits.

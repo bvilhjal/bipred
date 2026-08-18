@@ -24,6 +24,7 @@ from .bivariate import (
     _rg_from_quadratics_array,
     _validate_seed,
     _validate_sigma_prior_scale,
+    warn_no_numba,
 )
 from ldpred3.diagnostics import (
     NamedBasicSplitRHat,
@@ -260,6 +261,7 @@ def ldpred3_auto_bivariate_chains(
     one axis. For n_chains >= the core count, chain_ncores is usually the better
     one, since it has no per-sweep synchronisation at all.
     """
+    warn_no_numba()
     chain_ncores = _integer_at_least("chain_ncores", chain_ncores, 1)
     n_chains = _integer_at_least("n_chains", n_chains, 2)
     if n_chains > int(np.iinfo(np.uint32).max) + 1:

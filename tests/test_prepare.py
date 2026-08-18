@@ -101,6 +101,14 @@ def test_prepare_n_cases_uses_ldpred3_n_eff(tmp_path):
     assert np.allclose(prep.n_eff2, expected)
 
 
+def test_prepare_rejects_scalar_n_eff_with_case_controls(tmp_path):
+    cache, p1, p2, *_ = _cache_and_sumstats(tmp_path)
+    with pytest.raises(ValueError, match="scalar n_eff or n_cases"):
+        prepare_bivariate_sumstats(
+            cache, p1, p2, n_eff1=80_000, n_cases1=12_000, n_controls1=38_000,
+            n_eff2=10_000, qc=False)
+
+
 def test_prepare_accepts_distinct_column_mappings_without_mutating_them(tmp_path):
     cache, p1, p2, *_ = _cache_and_sumstats(tmp_path)
     path = tmp_path / "trait1-custom.tsv"

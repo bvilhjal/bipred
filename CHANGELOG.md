@@ -5,6 +5,19 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 ## [Unreleased]
 
+### Fixed
+
+- CI, README, and `pyproject.toml` now share the LDpred3 `>=0.5.3.dev0,<0.6`
+  floor (`ldpred3.shim`). The archived real-data pin stays at 0.4.5.
+- `prepare_bivariate_sumstats` (and the CLI) reject a trait given both a
+  scalar `n_eff` and case/control counts, matching the scalar-vs-column rule.
+- Multi-chain fits call `warn_no_numba()` so the recommended path is not a
+  silent pure-Python fallback.
+- LD-consistency screening slides the last window so remainder variants are
+  tested instead of treated as consistent.
+- Post-burn-in divergence also warns when genetic variance collapses, not
+  only when it rises.
+
 ### Changed
 
 - **The shared multi-chain diagnostics converged upstream.** The deterministic

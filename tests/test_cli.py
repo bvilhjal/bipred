@@ -82,6 +82,16 @@ def test_cli_routes_columns_qc_screen_overlap_and_multichain(monkeypatch):
     assert prep.closed
 
 
+def test_cli_rejects_scalar_n_eff_with_case_controls(capsys):
+    with pytest.raises(SystemExit):
+        main([
+            "--ld-cache", "ld.npz", "--sumstats1", "one.tsv",
+            "--sumstats2", "two.tsv", "--n-eff1", "80000",
+            "--n-cases1", "12000", "--n-controls1", "38000",
+        ])
+    assert "either --n-eff" in capsys.readouterr().err
+
+
 def test_cli_rejects_hwe_scale_without_cache_af_before_fitting(monkeypatch):
     prep = _prepared(af=None)
     fit_called = False

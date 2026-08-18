@@ -83,6 +83,16 @@ def _inputs(m=5):
     return blocks, beta1, beta2
 
 
+def test_multi_chain_warns_when_numba_is_absent(monkeypatch):
+    called = []
+    monkeypatch.setattr(multichain, "warn_no_numba",
+                        lambda: called.append(True))
+    with pytest.raises(ValueError, match="n_chains"):
+        multichain.ldpred3_auto_bivariate_chains(
+            *_inputs(), 10_000, 12_000, n_chains=1)
+    assert called == [True]
+
+
 def test_default_starts_seeds_shared_prior_and_equal_pool(monkeypatch):
     calls = []
     monkeypatch.setattr(

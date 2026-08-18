@@ -35,6 +35,29 @@ def test_clean_data_survives_screening():
     assert keep.mean() > 0.99, f"dropped {100*(1-keep.mean()):.1f}% of clean data"
 
 
+def test_ld_screen_tests_the_window_remainder(monkeypatch):
+    """A short last tile must still be screened, not treated as consistent."""
+    from bipred import qc
+
+    seen = []
+    real = qc._window_ld
+
+    def spy(block, local):
+        seen.append(np.asarray(local))
+        return real(block, local)
+
+    monkeypatch.setattr(qc, "_window_ld", spy)
+    k, window = 149, 100
+    R = np.eye(k, dtype=np.float32)
+    ld_consistency_screen(
+        [(R, np.arange(k))], np.zeros(k), rounds=1, window=window, seed=0)
+    covered = np.zeros(k, dtype=bool)
+    for local in seen:
+        covered[local] = True
+    assert covered.all()
+    assert covered[140]
+
+
 def test_a_sign_flipped_variant_is_caught():
     """The error harmonisation cannot see: an allele flip inside strong LD.
 

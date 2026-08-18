@@ -276,7 +276,14 @@ def _settle_block(task, *, z, window, threshold, eigenvalue_floor):
         live = np.where(keep)[0]
         if live.size < MIN_WINDOW:
             continue
-        for start in range(0, live.size, window):
+        # Tile from 0, then slide the last window to live.size - window so a
+        # remainder shorter than MIN_WINDOW is still tested in a full
+        # neighbourhood instead of being silently treated as consistent.
+        starts = list(range(0, max(live.size - window + 1, 1), window))
+        tail = max(0, live.size - window)
+        if starts[-1] != tail:
+            starts.append(tail)
+        for start in starts:
             local = live[start:start + window]
             if local.size < MIN_WINDOW:
                 continue
@@ -334,7 +341,9 @@ def ld_consistency_screen(
         guess. Pin BLAS (``OMP_NUM_THREADS=1``) to opt in. Peak memory rises
         from one window's dense LD to ``ncores`` of them.
     window, threshold, eigenvalue_floor, seed
-        See the module constants.
+        See the module constants. Each block is tiled into ``window``-sized
+        chunks; the last window is slid so a short remainder is tested in a
+        full neighbourhood rather than skipped.
 
     Returns
     -------

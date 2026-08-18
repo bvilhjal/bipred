@@ -1622,9 +1622,17 @@ def test_divergence_warning_catches_a_trace_that_never_settled():
     """Post-burn-in drift: the real fit's gvar1 rose by a factor of 1.63."""
     rising = np.column_stack([np.linspace(0.42, 0.82, 80),
                               np.full(80, 0.01), np.full(80, 0.0706)])
-    with pytest.warns(RuntimeWarning, match="had not settled"):
+    with pytest.warns(RuntimeWarning, match="rose .* had not settled"):
         bivariate._warn_if_fit_diverged(**_diverged_args(
             genetic_samples=rising))
+
+
+def test_divergence_warning_catches_a_collapsing_trace():
+    falling = np.column_stack([np.linspace(0.82, 0.42, 80),
+                               np.full(80, 0.01), np.full(80, 0.0706)])
+    with pytest.warns(RuntimeWarning, match="fell .* had not settled"):
+        bivariate._warn_if_fit_diverged(**_diverged_args(
+            genetic_samples=falling))
 
 
 def test_divergence_warning_is_silent_on_small_panels():

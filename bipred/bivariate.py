@@ -769,11 +769,17 @@ def _warn_if_fit_diverged(beta1, beta2, raw_h2, sigma_diag, genetic_samples, m,
             for label, column in (("1", 0), ("2", 2)):
                 first = float(np.mean(trace[:quarter, column]))
                 last = float(np.mean(trace[-quarter:, column]))
-                if first > 0.0 and last / first > _DIVERGENCE_MAX_TRACE_DRIFT:
-                    reasons.append(
-                        "trait %s's genetic variance rose %.2fx across the "
-                        "retained sweeps, so the chain had not settled" %
-                        (label, last / first))
+                if first > 0.0 and last > 0.0:
+                    if last / first > _DIVERGENCE_MAX_TRACE_DRIFT:
+                        reasons.append(
+                            "trait %s's genetic variance rose %.2fx across the "
+                            "retained sweeps, so the chain had not settled" %
+                            (label, last / first))
+                    elif first / last > _DIVERGENCE_MAX_TRACE_DRIFT:
+                        reasons.append(
+                            "trait %s's genetic variance fell %.2fx across the "
+                            "retained sweeps, so the chain had not settled" %
+                            (label, first / last))
     if reasons:
         # Block geometry is reported here rather than warned about on its own.
         # Size alone does not predict this failure -- the fit that motivated

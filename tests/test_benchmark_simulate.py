@@ -410,16 +410,21 @@ def test_real_data_checksum_manifest_and_validator(tmp_path):
 
 def test_runtime_ci_and_frozen_benchmark_use_explicit_distinct_sources():
     import pathlib
+    import re
 
     from benchmarks.real_data_inputs import LDPRED3_REV, LDPRED3_VERSION
 
     root = pathlib.Path(__file__).resolve().parent.parent
     ci = (root / ".github" / "workflows" / "ci.yml").read_text(
         encoding="utf-8")
+    pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
     benchmark_readme = (root / "benchmarks" / "README.md").read_text(
         encoding="utf-8")
+    match = re.search(r'ldpred3>=([^,<"\s]+)', pyproject)
+    assert match is not None
+    floor = match.group(1)
     assert 'LDPRED3_REV: "master"' in ci
-    assert 'LDPRED3_VERSION: "0.5.0.dev1"' in ci
+    assert f'LDPRED3_VERSION: "{floor}"' in ci
     assert LDPRED3_REV in benchmark_readme
     assert LDPRED3_VERSION == "0.4.5"
 

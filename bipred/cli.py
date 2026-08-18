@@ -120,6 +120,13 @@ def main(argv=None):
     if (args.hwe_frozen_scale
             and not (args.out_weights1 or args.out_weights2)):
         parser.error("--hwe-frozen-scale requires a weight output")
+    for n_eff, n_cases, n_controls, name in (
+            (args.n_eff1, args.n_cases1, args.n_controls1, "trait 1"),
+            (args.n_eff2, args.n_cases2, args.n_controls2, "trait 2")):
+        if n_eff is not None and (n_cases is not None or n_controls is not None):
+            parser.error(
+                f"{name}: pass either --n-eff or --n-cases/--n-controls, "
+                "not both")
 
     from . import (
         ldpred3_auto_bivariate_blocks,

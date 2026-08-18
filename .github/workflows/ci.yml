@@ -15,7 +15,7 @@ env:
   # bipred 0.3.9.dev0 requires. Archived real-data benchmarks retain their own
   # immutable 0.4.5 source pin in benchmarks/real_data_inputs.py.
   LDPRED3_REV: "master"
-  LDPRED3_VERSION: "0.5.0.dev1"
+  LDPRED3_VERSION: "0.5.3.dev0"
   # ldpred3 lives in a private repo, so the runner's default GITHUB_TOKEN (scoped
   # to this repo only) cannot clone it. Provide a repo/organization secret
   # LDPRED3_FOR_BIPRED (or LDPRED3_TOKEN) — a PAT or fine-grained token with
