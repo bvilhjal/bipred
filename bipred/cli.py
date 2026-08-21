@@ -67,7 +67,10 @@ def build_parser():
     screen.add_argument("--screen-window", type=int, default=1000)
     screen.add_argument("--screen-threshold", type=float, default=29.72)
     screen.add_argument("--screen-eigenvalue-floor", type=float, default=1e-3)
-    screen.add_argument("--screen-seed", type=int)
+    screen.add_argument("--screen-seed", type=int,
+                        help="seed for the screen's random LD splits; "
+                             "defaults to --seed, so changing the fit seed "
+                             "also changes the screen splits")
     screen.add_argument(
         "--screen-ncores", type=int,
         help="screening threads; defaults to --ncores")

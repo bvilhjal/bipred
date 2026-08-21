@@ -649,18 +649,16 @@ def implied_sample_size(beta, se, af, *, binary=False, reported_n=None):
     if not np.all(np.isfinite(af)) or np.any((af <= 0) | (af >= 1)):
         raise ValueError("af must contain finite values strictly between 0 and 1")
     sd_ref = np.sqrt(2.0 * af * (1.0 - af))
-    usable = np.ones(beta.size, dtype=bool)
     reported = None
     if reported_n is not None:
         reported = np.asarray(reported_n, dtype=np.float64)
         if reported.ndim == 0:
-            reported = np.full(usable.shape, float(reported))
-        elif reported.shape != usable.shape:
+            reported = np.full(beta.shape, float(reported))
+        elif reported.shape != beta.shape:
             raise ValueError(
                 "reported_n must be a scalar or a vector matching beta")
         if not np.all(np.isfinite(reported)) or np.any(reported <= 0):
             raise ValueError("reported_n must contain finite positive values")
-    beta, se, sd_ref = beta[usable], se[usable], sd_ref[usable]
     if not binary:
         return {"median": float("nan"), "ratio": float("nan"),
                 "consistent": False}
@@ -669,7 +667,7 @@ def implied_sample_size(beta, se, af, *, binary=False, reported_n=None):
     median = float(np.median(implied))
     ratio = float("nan")
     if reported is not None:
-        reported_median = float(np.median(reported[usable]))
+        reported_median = float(np.median(reported))
         ratio = median / reported_median
     return {"median": median, "ratio": ratio,
             "consistent": bool(np.isfinite(ratio) and 0.9 <= ratio <= 1.1)}

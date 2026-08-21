@@ -463,8 +463,6 @@ def _warn_if_unstandardized(beta, n_eff, name):
     ``|beta| * sqrt(n_eff)`` is a GWAS z-score. Passing z-scores or tiny
     raw per-allele effects still converges.
     """
-    import warnings
-
     z = np.abs(beta) * np.sqrt(n_eff)
     max_abs = float(np.max(np.abs(beta)))
     if max_abs >= 1.0:
@@ -1537,8 +1535,6 @@ class BivariateResult:
                 f"trait {trait} has {weight.size} effects but provenance "
                 f"length is {ids.size}")
         if af is not None and sd is None:
-            import warnings
-
             warnings.warn(
                 "SD_REF is being approximated as sqrt(2*AF_REF*(1-AF_REF)); "
                 "this is an HWE reference-panel scale, not an observed "

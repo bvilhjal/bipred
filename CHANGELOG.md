@@ -79,6 +79,12 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 - Missing or QC-dropped variants are intersected before LD-consistency
   screening and are never imputed as z=0 observations.
+- `implied_sample_size` no longer carries a dead all-true filter mask; the
+  reported-N shape checks and medians are unchanged.
+- `bipred --help` documents that `--screen-seed` defaults to `--seed`, so
+  changing the fit seed also changes the screen's random LD splits.
+
+## [0.3.8] - 2026-08-13
 - Principal subsetting validates masks and indices, retains singleton blocks,
   supports set callers, reuses complete mmap blocks, and never expands a whole
   low-rank parent merely to select a small principal submatrix.
