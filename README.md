@@ -27,7 +27,7 @@ python -m pip install -e "../ldpred3[fast]"
 python -m pip install -e ".[fast,test]"
 ```
 
-CI installs Bipred through its declared `ldpred3>=0.5.3.dev0,<0.6` dependency
+CI installs Bipred through its declared `ldpred3>=0.5.5.dev0,<0.6` dependency
 contract rather than bypassing the resolver. The private sampler seam in
 `bipred/_ldpred3_compat.py` still has behavioural tests. Archived real-data
 benchmarks deliberately retain their immutable LDpred3 0.4.5 provenance in

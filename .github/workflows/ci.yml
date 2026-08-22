@@ -15,7 +15,13 @@ env:
   # bipred 0.3.9.dev0 requires. Archived real-data benchmarks retain their own
   # immutable 0.4.5 source pin in benchmarks/real_data_inputs.py.
   LDPRED3_REV: "master"
-  LDPRED3_VERSION: "0.5.3.dev0"
+  # The floor bipred supports -- NOT a prediction about what `master` is at.
+  # Those are different facts, and the workflow used to assert the installed
+  # version equalled this one, which held only while master sat exactly on the
+  # floor and broke the moment LDpred3 moved to 0.5.4, with no bipred change at
+  # fault. The verify step below checks range membership instead, so this value
+  # tracks pyproject and nothing else.
+  LDPRED3_FLOOR: "0.5.5.dev0"
   # ldpred3 lives in a private repo, so the runner's default GITHUB_TOKEN (scoped
   # to this repo only) cannot clone it. Provide a repo/organization secret
   # LDPRED3_FOR_BIPRED (or LDPRED3_TOKEN) — a PAT or fine-grained token with
@@ -113,8 +119,42 @@ jobs:
         if: matrix.numba == 'no-numba'
         run: pip install -e ".[test]"
 
-      - name: Verify declared ldpred3 development version
-        run: python -c "import ldpred3; assert ldpred3.__version__ == '${{ env.LDPRED3_VERSION }}'"
+      # Read the range back from bipred's own installed metadata rather than
+      # restating it here, so the gate cannot drift from the dependency it
+      # guards. Prereleases must be enabled explicitly: every version in this
+      # family is a `.devN`, which a default SpecifierSet excludes.
+      - name: Verify installed ldpred3 satisfies the declared range
+        run: |
+          pip install packaging
+          python - <<'PY'
+          import ldpred3
+          from importlib.metadata import requires, version
+          from packaging.requirements import Requirement
+          from packaging.specifiers import SpecifierSet
+
+          spec = None
+          for raw in requires("bipred") or ():
+              req = Requirement(raw)
+              if req.name == "ldpred3" and req.marker is None:
+                  spec = SpecifierSet(str(req.specifier), prereleases=True)
+                  break
+          if spec is None:
+              raise SystemExit("bipred declares no unconditional ldpred3 dependency")
+
+          # Check the version that actually governs behaviour. For an editable
+          # install of a dynamic-version package the recorded dist metadata is
+          # whatever it was at install time and can lag the module by several
+          # releases, so both are printed and the imported one decides.
+          imported, recorded = ldpred3.__version__, version("ldpred3")
+          print(f"ldpred3 imported {imported} (dist metadata {recorded});"
+                f" bipred declares {spec}")
+          if imported not in spec:
+              raise SystemExit(
+                  f"::error::ldpred3 {imported} is outside bipred's declared "
+                  f"range '{spec}'. Either move the floor/ceiling in "
+                  f"pyproject.toml, or pin LDPRED3_REV to a tag inside the range."
+              )
+          PY
 
       - name: Verify pure-NumPy fallback
         if: matrix.numba == 'no-numba'

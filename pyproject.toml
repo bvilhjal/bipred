@@ -11,13 +11,17 @@ requires-python = ">=3.9"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Bjarni Vilhjálmsson" }]
-# The 0.5.3 floor supplies the public cache/subsetting interoperability
-# boundary and ldpred3.shim, the published code-level surface the seam binds
-# the Numba decorators and validators through. A minor-version ceiling still
-# guards the private sampler/LDSC borrowings isolated in
-# bipred/_ldpred3_compat.py. Neither package is on PyPI yet; install from the
-# sibling checkout or authenticated Git source documented in README.
-dependencies = ["numpy>=1.20", "ldpred3>=0.5.3.dev0,<0.6"]
+# The 0.5 line supplies the public cache/subsetting interoperability boundary
+# and ldpred3.shim, the published code-level surface the seam binds the Numba
+# decorators and validators through. The floor moved 0.5.3 -> 0.5.5 when
+# BivariateResult.write_weights started passing `sd_source=` to
+# ldpred3.interop.write_weights: that keyword does not exist before 0.5.5.dev0,
+# so the older floor would have installed cleanly and then raised TypeError on
+# the first weight write. A minor-version ceiling still guards the private
+# sampler/LDSC borrowings isolated in bipred/_ldpred3_compat.py. Neither package
+# is on PyPI yet; install from the sibling checkout or authenticated Git source
+# documented in README.
+dependencies = ["numpy>=1.20", "ldpred3>=0.5.5.dev0,<0.6"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
@@ -37,7 +41,7 @@ Issues = "https://github.com/bvilhjal/bipred/issues"
 bipred = "bipred.cli:main"
 
 [project.optional-dependencies]
-fast = ["ldpred3[fast]>=0.5.3.dev0,<0.6"]
+fast = ["ldpred3[fast]>=0.5.5.dev0,<0.6"]
 sim = ["msprime>=1.3"]          # simulation only; plots are intentionally optional
 bench = ["msprime>=1.3", "matplotlib>=3.7"]
 test = ["pytest>=7"]

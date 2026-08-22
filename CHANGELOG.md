@@ -7,8 +7,24 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 ### Fixed
 
-- CI, README, and `pyproject.toml` now share the LDpred3 `>=0.5.3.dev0,<0.6`
-  floor (`ldpred3.shim`). The archived real-data pin stays at 0.4.5.
+- CI no longer asserts an exact LDpred3 version. The workflow installed ldpred3
+  from `master` and then asserted `__version__` equalled the declared *floor*,
+  which held only while master sat on the floor: every `test` leg failed once
+  LDpred3 reached 0.5.4, with no bipred change at fault. `LDPRED3_VERSION` is
+  now `LDPRED3_FLOOR`, and the gate checks the installed version against the
+  range read back from bipred's own installed metadata. The archived real-data
+  pin (0.4.5) is untouched.
+- `BivariateResult.write_weights` records `SD_SOURCE=hwe` when it fills
+  `SD_REF` with the Hardy-Weinberg approximation `sqrt(2f(1-f))`. The
+  `RuntimeWarning` it already raised reaches the caller who chose the
+  approximation, but could not survive serialisation, so
+  `score_from_weights(scaling="frozen")` consumed an approximated and an
+  observed SD identically.
+- The LDpred3 floor advances `0.5.3.dev0` -> `0.5.5.dev0`, because
+  `write_weights(sd_source=...)` above does not exist before it: the older floor
+  would have installed cleanly and then raised `TypeError` on the first weight
+  write. CI, README and `pyproject.toml` share the `>=0.5.5.dev0,<0.6` range
+  (`ldpred3.shim`). The archived real-data pin stays at 0.4.5.
 - `prepare_bivariate_sumstats` (and the CLI) reject a trait given both a
   scalar `n_eff` and case/control counts, matching the scalar-vs-column rule.
 - Multi-chain fits call `warn_no_numba()` so the recommended path is not a

@@ -424,9 +424,21 @@ def test_runtime_ci_and_frozen_benchmark_use_explicit_distinct_sources():
     assert match is not None
     floor = match.group(1)
     assert 'LDPRED3_REV: "master"' in ci
-    assert f'LDPRED3_VERSION: "{floor}"' in ci
+    assert f'LDPRED3_FLOOR: "{floor}"' in ci
     assert LDPRED3_REV in benchmark_readme
     assert LDPRED3_VERSION == "0.4.5"
+
+    # CI installs ldpred3 from `master` but supports a *range*, so it must not
+    # assert equality between the installed version and the declared floor.
+    # That check passed only while master sat exactly on the floor and failed
+    # every leg once LDpred3 reached 0.5.4 -- a red build caused by the guard,
+    # not by a real incompatibility.
+    assert "__version__ == " not in ci, (
+        "ci.yml pins an exact ldpred3 version again; it installs from "
+        f"{LDPRED3_REV!r} and declares a range, so it must check membership "
+        "in that range instead"
+    )
+    assert "satisfies the declared range" in ci
 
 
 def test_real_data_provenance_requires_clean_source_and_writes_sidecar(tmp_path):

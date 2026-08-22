@@ -1520,6 +1520,10 @@ class BivariateResult:
         assumptions are defensible, or omit both and score with
         ``scaling="target"``. Raw ``X @ beta_est`` on 0/1/2 dosages is the
         wrong scale.
+
+        The choice is recorded in the file as ``SD_SOURCE`` (``"hwe"`` or
+        ``"empirical"``), so a downstream frozen-scale scorer can see which it
+        got instead of inferring it from which package produced the file.
         """
         from ldpred3.interop import write_weights
 
@@ -1534,6 +1538,7 @@ class BivariateResult:
             raise ValueError(
                 f"trait {trait} has {weight.size} effects but provenance "
                 f"length is {ids.size}")
+        sd_source = "empirical"
         if af is not None and sd is None:
             warnings.warn(
                 "SD_REF is being approximated as sqrt(2*AF_REF*(1-AF_REF)); "
@@ -1544,10 +1549,16 @@ class BivariateResult:
             )
             af = np.asarray(af, dtype=float)
             sd = np.sqrt(np.maximum(2.0 * af * (1.0 - af), 0.0))
+            # Record it in the file too. The warning above fires once, in this
+            # process, for the caller who chose the approximation -- it cannot
+            # reach whoever scores the file weeks later, and
+            # score_from_weights(scaling="frozen") consumed both kinds of SD_REF
+            # identically until the SD_SOURCE column existed.
+            sd_source = "hwe"
         return write_weights(
             path, id=ids, chrom=chrom, pos=pos,
             effect_allele=effect_allele, other_allele=other_allele,
-            weight=weight, af=af, sd=sd)
+            weight=weight, af=af, sd=sd, sd_source=sd_source)
 
     @property
     def mixer(self):
