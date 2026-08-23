@@ -56,6 +56,14 @@ version = { attr = "bipred.__version__" }
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+# Marker taxonomy for selective CI, mirroring ldpred3/gwfm so the legs read the
+# same way. No test is tagged yet; the suite currently runs as one fast leg.
+markers = [
+    "slow: heavy tests (multi-chain inference, end-to-end pipeline, large sims); skipped on the fast CI leg",
+    "integration: end-to-end tests that exercise a whole pipeline, not a single unit",
+    "external: needs an external tool not installed in CI (msprime, R/SBayesRC, LDAK, GCTB)",
+    "numba: specifically exercises or requires the Numba JIT path",
+]
 
 [tool.ruff]
 # Lint for real defects, not style: like ldpred3, the codebase uses compact

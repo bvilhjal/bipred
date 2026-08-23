@@ -1,0 +1,76 @@
+$ /Users/au507860/REPOS/bipred/benchmarks/.venv-ldsc/bin/ldsc.py --rg <WORK>/shared_pos_0_t2.sumstats.gz --ref-ld <WORK>/panel --w-ld <WORK>/panel --out <WORK>/shared_pos_0_rg
+
+*********************************************************************
+* LD Score Regression (LDSC)
+* Version 2.0.0
+* (C) 2014-2019 Brendan Bulik-Sullivan and Hilary Finucane
+* Broad Institute of MIT and Harvard / MIT Department of Mathematics
+* GNU General Public License v3
+*********************************************************************
+Call: 
+./ldsc.py \
+--out <WORK>/shared_pos_0_rg \
+--rg <WORK>/shared_pos_0_t2.sumstats.gz \
+--ref-ld <WORK>/panel \
+--w-ld <WORK>/panel 
+
+Beginning analysis at Sat Aug 22 22:29:19 2026
+Reading summary statistics from <WORK>/shared_pos_0_t1.sumstats.gz ...
+Read summary statistics for 5000 SNPs.
+Reading reference panel LD Score from <WORK>/panel ... (ldscore_fromlist)
+Read reference panel LD Scores for 5000 SNPs.
+Removing partitioned LD Scores with zero variance.
+Reading regression weight LD Score from <WORK>/panel ... (ldscore_fromlist)
+Read regression weight LD Scores for 5000 SNPs.
+After merging with reference panel LD, 5000 SNPs remain.
+After merging with regression SNP LD, 5000 SNPs remain.
+Computing rg for phenotype 2/2
+Reading summary statistics from <WORK>/shared_pos_0_t2.sumstats.gz ...
+Read summary statistics for 5000 SNPs.
+After merging with summary statistics, 5000 SNPs remain.
+5000 SNPs with valid alleles.
+WARNING: number of SNPs less than 200k; this is almost always bad.
+
+Heritability of phenotype 1
+---------------------------
+Total Observed scale h2: 0.9844 (0.0739)
+Lambda GC: 54.2013
+Mean Chi^2: 428.704
+Intercept: -49.5814 (8.8471)
+Ratio < 0 (usually indicates GC correction).
+
+Heritability of phenotype 2/2
+-----------------------------
+Total Observed scale h2: 0.2558 (0.0789)
+Lambda GC: 22.8494
+Mean Chi^2: 363.1214
+Intercept: 232.5877 (36.5862)
+Ratio: 0.6395 (0.101)
+
+Genetic Covariance
+------------------
+Total Observed scale gencov: 0.167 (0.0477)
+Mean z1*z2: 151.4246
+Intercept: 80.0668 (21.0777)
+
+Genetic Correlation
+-------------------
+Genetic Correlation: 0.3328 (0.078)
+Z-score: 4.2644
+P: 2.004e-05
+
+
+Summary of Genetic Correlation Results
+                                                                                 p1                                                                                  p2     rg    se      z          p  h2_obs  h2_obs_se   h2_int  h2_int_se  gcov_int  gcov_int_se
+<WORK>/shared_pos_0_t1.sumstats.gz <WORK>/shared_pos_0_t2.sumstats.gz 0.3328 0.078 4.2644 2.0040e-05  0.2558     0.0789 232.5877    36.5862   80.0668      21.0777
+
+Analysis finished at Sat Aug 22 22:29:19 2026
+Total time elapsed: 0.04s
+/Users/au507860/REPOS/bipred/benchmarks/.venv-ldsc/lib/python3.10/site-packages/ldscore/parse.py:21: FutureWarning: The 'delim_whitespace' keyword in pd.read_csv is deprecated and will be removed in a future version. Use ``sep='\s+'`` instead
+  return pd.read_csv(fh, delim_whitespace=True, na_values='.', **kwargs)
+/Users/au507860/REPOS/bipred/benchmarks/.venv-ldsc/lib/python3.10/site-packages/ldscore/parse.py:21: FutureWarning: The 'delim_whitespace' keyword in pd.read_csv is deprecated and will be removed in a future version. Use ``sep='\s+'`` instead
+  return pd.read_csv(fh, delim_whitespace=True, na_values='.', **kwargs)
+/Users/au507860/REPOS/bipred/benchmarks/.venv-ldsc/lib/python3.10/site-packages/ldscore/parse.py:21: FutureWarning: The 'delim_whitespace' keyword in pd.read_csv is deprecated and will be removed in a future version. Use ``sep='\s+'`` instead
+  return pd.read_csv(fh, delim_whitespace=True, na_values='.', **kwargs)
+/Users/au507860/REPOS/bipred/benchmarks/.venv-ldsc/lib/python3.10/site-packages/ldscore/parse.py:21: FutureWarning: The 'delim_whitespace' keyword in pd.read_csv is deprecated and will be removed in a future version. Use ``sep='\s+'`` instead
+  return pd.read_csv(fh, delim_whitespace=True, na_values='.', **kwargs)

@@ -1,0 +1,6 @@
+arm,tool,ok,m,rg,rg_se,intercept,intercept_se,h2_1,h2_2,frac_shared,rho_beta,rg_from_overlap,cross_corr,time_s,note
+ldsc_orig,ldsc 2.0.1 (CBIIT PyPI port),1,,-0.6064,0.0716,-0.2807,0.02,0.2358,0.2688,,,,,7.0,
+bipred_ldsc,bipred 0.3.9.dev0,1,836832,-0.6561905888166227,0.04552030253945648,-0.3574611353418559,,0.13408817217889882,0.12669679760148658,,,,,,
+bipred_joint,bipred 0.3.9.dev0,1,836832,-0.48289080193369105,,,,0.09652964930412661,0.09196810916842767,0.9746518499103064,-0.5389371502587988,-0.507696797860572,-0.3574611353418559,136.2,
+bipred_joint_cc0,bipred 0.3.9.dev0,1,836832,-0.8353192944816673,,,,0.31873077957314916,0.31486471692261064,0.9939436423948513,-0.8639269130390145,-0.8571351101230595,0.0,140.0,
+mixer_orig,none,0,,,,,,,,,,,,,skipped: MIXER_REF (1000G.EUR.QC bundle) not provided or gsa-mixer not built; GB-scale download is not fetched automatically

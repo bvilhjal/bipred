@@ -23,6 +23,11 @@ proof that a retained variant is correct.
 | `bipred.ldsc_rg` | fast screen or independent check | unstable when marginal LDSC `h2` is near zero; one-step and unfiltered, so single large-effect loci carry full leverage |
 | two univariate LDpred fits | additional diagnostic | often attenuated under power asymmetry |
 
+These are reimplementations, not wrappers: agreement with the original
+cross-trait LDSC and MiXeR software has not been validated, and the benchmark
+record compares these estimators against simulated truth and each other only
+(see the README's *Citing and prior work*).
+
 Cross-trait LDSC fits the moment relation:
 
 **Equation 1. Cross-trait LD Score regression.**

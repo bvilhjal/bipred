@@ -100,7 +100,32 @@ alibi.
 | `qc_factorial.py` | **QC sensitivity**: 2x2x2 over strict thresholds, long-range LD exclusion and the LD-consistency screen, on three real trait pairs; records bipred and LDSC on identical variants and uses each arm's raw in-range LDSC intercept as a `cross_corr` sensitivity value (→ `qc_factorial.csv`). This assumes the whole intercept is correlated sampling noise; confounding may also contribute. ~126 min on the benchmark's 10-core Apple M2 Pro, same inputs as `real_ldl_cad.py` plus GLGC HDL/TG and GIANT height | — |
 | `real_ldl_cad.py` | **Real GWAS**: LDL x CAD on a UK Biobank HapMap3 LD reference, fitted at three cleaning stages; checks numerical diagnostics and the divergence warning, with external estimates used only as rough context (→ `real_ldl_cad.csv` and step-level `real_ldl_cad_timing.csv`). Needs ~9 GB of downloads, see its docstring | — |
 | `rg_env_overlap.py` | Individual-genotype stress test under **environmental** correlation on shared samples; records paired MAE and failures after the `|r_g| <= 1.5` diagnostic window (→ `rg_env_overlap.csv`) | opt |
+| `external_overlap.py` | **External-tool validation on simulated truth**: bipred vs the original MiXeR (gsa-mixer v2.2.1, source-built) vs the original LDSC (CBIIT Python-3 port) on one small coalescent panel with known causal overlap, in-sample LD (→ `external_overlap.csv` + sidecar). Needs the `.venv-ldsc` and `.mixer` environments (see *External tools* below); absent tools become NaN rows | opt |
+| `external_hdl_tg.py` | **External-tool validation on real data**: GLGC 2013 HDL x TG through the original LDSC (standard `eur_w_ld_chr` weights) against bipred's `ldsc_rg` and the joint fit with and without the overlap correction (→ `external_hdl_tg.csv` + sidecar). MiXeR cells need a user-supplied 1000G.EUR.QC bundle via `MIXER_REF` and skip otherwise | — |
 | `hapnest/run_bivariate.py` | rg / h² / MiXeR-overlap recovery **and** out-of-sample PRS gain (bivariate vs univariate) on **HAPNEST** genotypes+phenotypes — synthetic genomes resampled from a real 1000G+HGDP reference, so real LD/MAF/structure with known truth (→ `hapnest/run_bivariate.csv`). See [`hapnest/README.md`](hapnest/README.md). | — (needs HAPNEST) |
+
+## External tools
+
+`external_overlap.py` and `external_hdl_tg.py` compare against the *original*
+MiXeR and LDSC implementations rather than bipred's reimplementations. Both
+tools live in isolated, gitignored environments inside this directory:
+
+- **LDSC** — `bash benchmarks/external_setup.sh ldsc` creates
+  `.venv-ldsc/`, installs the CBIIT/ldsc PyPI port (`ldsc` 2.0.1), and applies
+  two one-line compatibility patches for modern bitarray/numpy (documented in
+  the script; unfixed upstream as of 2026-08). Override discovery with
+  `LDSC_BIN=/path/to/bin`.
+- **MiXeR** — gsa-mixer v2.2.1 is built from source into `.mixer/` (macOS
+  arm64 is not a supported platform; the exact working recipe and its
+  hello-world validation output are in `.mixer/BUILD_LOG.txt` on machines that
+  ran it). Discovery env vars: `MIXER_PY`, `MIXER_SRC`, `MIXER_LIB`.
+- The real-arm MiXeR cells additionally need `MIXER_REF` pointing at a
+  1000G.EUR.QC reference bundle (GB-scale; never downloaded by the scripts).
+
+The LDSC 1000G EUR weights come from the Zenodo mirror named in Table 4 (the
+Broad host is requester-pays since 2026); `w_hm3.snplist` ships inside the same
+tarball. Both files are pinned in
+[`real_data_inputs.sha256`](real_data_inputs.sha256).
 
 `rg_env_overlap.py` reuses the univariate `infer_vs_ldsc_sbayes.py` benchmark
 (which stays a univariate benchmark and imports only from `ldpred3`) for its
@@ -136,6 +161,9 @@ manually:
 | `bivariate_demo` | 60 | `bivariate_demo.provenance.json` | locally generated `ld_library.npz` |
 | `qc_factorial` | 24 | `qc_factorial.provenance.json` | public real-GWAS inputs; ~126 min on a 10-core Apple M2 Pro |
 | `real_ldl_cad` | 3 + 34 timing rows | `real_ldl_cad.provenance.json` | public real-GWAS inputs; 1,365.693 s on the same machine |
+| `external_overlap` | 40 (2 cells x 5 reps x 4 methods) | `external_overlap.provenance.json` | `.venv-ldsc` / `.mixer` tool environments (see *External tools*) |
+| `external_overlap_ldsc200k` | 24 (2 cells x 3 reps x 4 methods) | `external_overlap_ldsc200k.provenance.json` | same; the LDSC-scale panel (m = 200k) variant of the above |
+| `external_hdl_tg` | 5 | `external_hdl_tg.provenance.json` | GLGC HDL/TG inputs + LDSC weights from Table 4 |
 
 The complete 0.3.5 regeneration used clean revision `5c06ec7`, Python 3.14.6,
 NumPy 2.4.6, Numba 0.66.0, and ldpred3 0.4.5. `run_all.sh` selected msprime
@@ -153,6 +181,8 @@ that 10-core Apple M2 Pro under one-thread controls, not portable expectations.
 | `sumstats/jointGwasMc_TG.txt.gz` | [GLGC 2013 triglycerides](http://csg.sph.umich.edu/willer/public/lipids2013/jointGwasMc_TG.txt.gz) | Willer et al. (2013); follow the provider's data-use terms. |
 | `sumstats/cad.add.160614.website.txt` | [CARDIoGRAMplusC4D 2015, GCST003116](https://ftp.ebi.ac.uk/pub/databases/gwas/summary_statistics/GCST003001-GCST004000/GCST003116/cad.add.160614.website.txt) | Nikpay et al. (2015), GWAS Catalog study GCST003116; follow the archive's terms. |
 | `sumstats/GIANT_HEIGHT_2014.txt.gz` | [GIANT height 2014 public release](https://giant-consortium.web.broadinstitute.org/images/0/01/GIANT_HEIGHT_Wood_et_al_2014_publicrelease_HapMapCeuFreq.txt.gz) | Wood et al. (2014); save under the manifest filename and follow the provider's terms. |
+| `ldsc-weights/eur_w_ld_chr.tar.gz` | [Zenodo record 8182036](https://zenodo.org/records/8182036), a mirror of the Broad Institute's 1000 Genomes European LD scores (the Broad host is requester-pays since 2026) | Bulik-Sullivan et al. (2015); verify against the manifest hash after download. |
+| `ldsc-weights/w_hm3.snplist` | Ships inside the `eur_w_ld_chr` tarball above | HapMap3 allele list used by `munge_sumstats.py --merge-alleles`. |
 
 For example, the five summary-statistic files can be staged without changing
 their compressed bytes:

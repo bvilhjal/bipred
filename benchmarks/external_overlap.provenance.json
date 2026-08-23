@@ -1,0 +1,37 @@
+{
+  "artifact": "external_overlap.csv",
+  "created_utc": "2026-08-22T22:04:05.747588+00:00",
+  "dependency_sources": {
+    "ldsc": "ldsc 2.0.1 (CBIIT PyPI port)",
+    "mixer": "gsa-mixer v2.2.1 source build (gsa-mixer src)",
+    "simulator": "numba-v1"
+  },
+  "inputs_sha256": {},
+  "notes": [
+    "tool label corrected post-run (script predated ldsc_version_label); no estimate values changed"
+  ],
+  "packages": {
+    "bipred": "0.3.9.dev0",
+    "ldpred3": "0.5.5.dev1",
+    "numba": "0.66.0",
+    "numpy": "1.26.4"
+  },
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "python": "3.10.20",
+  "python_executable": "/Users/au507860/anaconda3/bin/python",
+  "run_controls": {
+    "elapsed_s": 1028.6,
+    "h2": 0.25,
+    "k": 500,
+    "m": 40000,
+    "min_maf": 0.05,
+    "n_gwas": 100000,
+    "n_ref": 3000,
+    "nb": 80,
+    "reps": 5,
+    "shrink": 0.05
+  },
+  "schema_version": 2,
+  "source_clean": false,
+  "source_revision": "f7ee37af866078381cf0f13c2e4dd38435162677"
+}

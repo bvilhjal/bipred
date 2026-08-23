@@ -5,6 +5,30 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 ## [Unreleased]
 
+### Added
+
+- **External-tool validation benchmarks.** `benchmarks/external_overlap.py`
+  runs bipred, the original MiXeR (gsa-mixer v2.2.1, built from source under
+  `benchmarks/.mixer/`), and the original LDSC (CBIIT Python-3 port, in
+  `benchmarks/.venv-ldsc/`) on one small coalescent panel with known four-state
+  causal-overlap truth, and `benchmarks/external_hdl_tg.py` runs GLGC 2013
+  HDL x TG through the original LDSC (`eur_w_ld_chr` weights) alongside
+  bipred's `ldsc_rg` and joint fits. Both follow the probe/fallback pattern:
+  an absent tool writes NaN rows rather than failing, and both write provenance
+  sidecars that record the actual (possibly dirty) tree state instead of
+  refusing to run. Setup lives in `benchmarks/external_setup.sh` (LDSC venv,
+  including two one-line py2-era compat patches the CBIIT port still needs for
+  modern bitarray/numpy) and `benchmarks/.mixer/BUILD_LOG.txt` (the MiXeR
+  source build on macOS arm64, with hello-world validation). The LDSC 1000G EUR
+  weights and `w_hm3.snplist` are pinned in `real_data_inputs.sha256` from a
+  Zenodo mirror, because the Broad host became requester-pays.
+- Registered the workspace marker taxonomy (`slow` / `integration` /
+  `external` / `numba`) in `pyproject.toml`, mirroring ldpred3/gwfm. No test
+  is tagged yet; the suite still runs as one fast leg.
+- Plumbing tests for the external benchmarks
+  (`tests/test_external_benchmark.py`): output parsers against committed
+  fixtures, probe fail-closed behaviour, and truth-simulation invariants.
+
 ### Fixed
 
 - CI no longer asserts an exact LDpred3 version. The workflow installed ldpred3

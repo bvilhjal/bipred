@@ -29,6 +29,12 @@ benchmarks/.ld_cache/
 # Bivariate rg benchmark population-LD cache (regenerated on demand)
 benchmarks/.rg_cache/
 
+# External-tool benchmark environments and work dir (local-only; see
+# benchmarks/README.md "External tools" section)
+benchmarks/.venv-ldsc/
+benchmarks/.mixer/
+benchmarks/.ext_work/
+
 # LaTeX build artifacts from studies/*/REPORT.tex (the PDF itself is committed)
 studies/*/*.aux
 studies/*/*.log

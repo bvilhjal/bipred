@@ -1,0 +1,37 @@
+{
+  "artifact": "external_hdl_tg.csv",
+  "created_utc": "2026-08-22T21:46:43.890210+00:00",
+  "dependency_sources": {
+    "gsa_mixer_src": "/Users/au507860/REPOS/bipred/benchmarks/.mixer/src",
+    "ldsc": "ldsc 2.0.1 (CBIIT PyPI port)",
+    "mixer": "not provided"
+  },
+  "inputs_sha256": {
+    "ldref-hm3/ldpred3_ldref_hm3.npz": "06b5bc3a8887d231ef27c741a0c433ccef03b426a6ddbbc3d5de0ba9adb8b309",
+    "ldsc-weights/eur_w_ld_chr.tar.gz": "9537f00eb0d163a935aaa2cf04b358b7cf21852279b9c7925802526f6060b069",
+    "ldsc-weights/w_hm3.snplist": "ec73fca0b696e8beba465b51e52911676fcade375bcc9475d99c0ec30509d3ed",
+    "sumstats/jointGwasMc_HDL.txt.gz": "7d03f9691db53ddd78d8545f85ebd11bf8a4d6686e334e44509b1ec447355278",
+    "sumstats/jointGwasMc_TG.txt.gz": "37087a0015c3211f5696616ad276eb4b5fae7219e0b8a2f37a5ed86b626c5f0b"
+  },
+  "notes": [
+    "tool label corrected post-run (script predated ldsc_version_label); no estimate values changed"
+  ],
+  "packages": {
+    "bipred": "0.3.9.dev0",
+    "ldpred3": "0.5.5.dev0",
+    "numba": "0.66.0",
+    "numpy": "1.26.4"
+  },
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "python": "3.10.20",
+  "python_executable": "/Users/au507860/anaconda3/bin/python",
+  "run_controls": {
+    "chi2_max": 80.0,
+    "elapsed_s": 1221.9,
+    "screen_rounds": 4,
+    "traits": "GLGC 2013 HDL x TG"
+  },
+  "schema_version": 2,
+  "source_clean": false,
+  "source_revision": "f7ee37af866078381cf0f13c2e4dd38435162677"
+}

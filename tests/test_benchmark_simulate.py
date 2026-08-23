@@ -371,6 +371,10 @@ def test_real_data_checksum_manifest_and_validator(tmp_path):
         "sumstats/jointGwasMc_HDL.txt.gz",
         "sumstats/jointGwasMc_TG.txt.gz",
         "sumstats/GIANT_HEIGHT_2014.txt.gz",
+        # LDSC 1000G EUR weights for the external-tool benchmarks
+        # (external_overlap.py / external_hdl_tg.py); Zenodo mirror.
+        "ldsc-weights/eur_w_ld_chr.tar.gz",
+        "ldsc-weights/w_hm3.snplist",
     }
     assert all(len(digest) == 64 for digest in committed.values())
     benchmark_readme = (pathlib.Path(__file__).resolve().parent.parent

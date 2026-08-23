@@ -1,0 +1,14 @@
+{
+  "analysis": "bivariate",
+  "options": {"totalhet": 5120.0, "num_snp": 40000,
+              "trait1_nval": 100000.0, "trait2_nval": 100000.0},
+  "params": {"pi": [0.005, 0.005, 0.005],
+             "sig2_beta": [4.1, 4.1],
+             "sig2_zero": [1.0, 1.0],
+             "rho_beta": 0.55,
+             "rho_zero": 0.0},
+  "optimize": {"final": {"cost": 1234.5}},
+  "ci": {"pi1u": 0.01, "pi2u": 0.01, "pi12": 0.005,
+         "rg": 0.275, "h2_T1": 0.25, "h2_T2": 0.251,
+         "dice": {"point estimate": 0.4}}
+}

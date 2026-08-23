@@ -30,7 +30,10 @@ with prepare_bivariate_sumstats(
 
 `n_cases`/`n_controls` become `n_eff` via `ldpred3.n_eff_case_control`.
 `python -m bipred --ld-cache ld.npz --sumstats1 t1.tsv --sumstats2 t2.tsv`
-is the same path. An mmap cache stays open through the context and is released
+is the same path. The CLI runs a single chain unless `--n-chains` is at least 2
+(see *Fit multiple chains* below), and advanced options such as `tol`,
+`noise_inflation`, `iw_df`, and `pi_init` are Python-API only. An mmap cache
+stays open through the context and is released
 on exit; call `prep.close()` after fitting when not using `with`.
 For several sibling fits, create one fully validated
 `ldpred3.interop.prepare_ld_cache(...)` context and pass that object in place
@@ -168,14 +171,19 @@ with the screen documented here.
 
 ### What the factorial established
 
-Three related trait pairs spanning the sign range — LDL × CAD (+0.26), height ×
-LDL (≈ 0), and HDL × TG (−0.53) — were each fitted under all eight
+Three related trait pairs spanning the sign range — LDL × CAD (`rg` ≈ +0.27),
+height × LDL (≈ 0), and HDL × TG (`rg` ≈ −0.52 to −0.55 across the screened
+arms) — were each fitted under all eight
 combinations of stricter per-variant thresholds, long-range-LD exclusion, and
 the screen. Every pair contains at least one GLGC lipid file, so these 24 arms
 are repeated perturbations of three file combinations, not independent
 validation across 24 settings. The saved rows come from a clean 0.3.5 run in
 which every requested random partition completed. That makes them current for
 these files and this reference, not a general validation of the screen.
+Two decimals are the resolution these point values support: the companion
+LDL × CAD study records its screened estimate moving from 0.2856 to 0.2658 when
+0.3.6 reseeded the screen's random partitions, and HDL × TG under a
+`cross_corr` overlap correction gives −0.52 (see [`rg.md`](rg.md)).
 
 **Table 1. Divergence warnings across 24 current-screen arms.**
 
