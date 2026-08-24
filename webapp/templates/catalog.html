@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>GWAS Catalog accessions tried here</h1>
+<p>Every accession this service has resolved or downloaded, recorded
+automatically: successes when a job completes, failures (with the reason)
+when resolution or download fails. Updated as jobs run.</p>
+
+<h2>Known to work ({{ works|length }})</h2>
+{% if works %}
+<table>
+<tr><th>Accession</th><th>Trait</th><th class="num">Effective N</th>
+<th class="num">Variants kept</th><th>Last used</th></tr>
+{% for acc, e in works %}
+<tr>
+<td><a href="https://www.ebi.ac.uk/gwas/studies/{{ acc }}">{{ acc }}</a></td>
+<td>{{ e.trait or "—" }}{% if e.pmid %} (PMID {{ e.pmid }}){% endif %}</td>
+<td class="num">{% if e.n_cases and e.n_controls %}
+{{ "{:,}".format(e.n_cases|int) }} / {{ "{:,}".format(e.n_controls|int) }} cc
+{% elif e.n_eff %}{{ "{:,}".format(e.n_eff|int) }}{% else %}—{% endif %}</td>
+<td class="num">{{ "{:,}".format(e.kept|int) if e.kept else "—" }}</td>
+<td class="muted">{{ e.when }}</td>
+</tr>
+{% endfor %}
+</table>
+{% else %}
+<p class="muted">None yet — run a job with a GCST accession.</p>
+{% endif %}
+
+<h2>Known not to work ({{ failed|length }})</h2>
+{% if failed %}
+<table>
+<tr><th>Accession</th><th>Trait</th><th>Reason</th><th>Last tried</th></tr>
+{% for acc, e in failed %}
+<tr>
+<td><a href="https://www.ebi.ac.uk/gwas/studies/{{ acc }}">{{ acc }}</a></td>
+<td>{{ e.trait or "—" }}</td>
+<td>{{ e.reason }}</td>
+<td class="muted">{{ e.when }}</td>
+</tr>
+{% endfor %}
+</table>
+{% else %}
+<p class="muted">No failures recorded.</p>
+{% endif %}
+
+<p><a href="/">Back to the upload form</a></p>
+{% endblock %}

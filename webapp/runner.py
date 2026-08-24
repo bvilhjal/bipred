@@ -1,0 +1,241 @@
+"""Fit driver for one web job: ``python -m webapp.runner <job dir>``.
+
+Runs validate -> harmonize -> ldsc -> fit -> (optional) weights, updating
+``job.json`` after every stage so the status page shows progress, and writes
+``result.json`` / ``munge.json`` on success. Any unhandled exception fails the
+job with a user-readable message; the full traceback lands in ``runner.log``.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import numbers
+import sys
+import time
+import traceback
+from pathlib import Path
+
+from . import caches, jobs
+
+
+class _Stages:
+    """Per-stage progress: current stage + elapsed seconds, in job.json."""
+
+    def __init__(self, root, job):
+        self.root, self.job = root, job
+        self.t0 = None
+
+    def start(self, name):
+        self.job["stage"] = name
+        self.t0 = time.time()
+        jobs.save_job(self.root, self.job)
+
+    def done(self, name):
+        self.job["stages"][name] = round(time.time() - self.t0, 3)
+        self.job["progress"] = None
+        jobs.save_job(self.root, self.job)
+
+    def progress(self, **fields):
+        """Intra-stage progress (e.g. download bytes), throttled to 1 Hz."""
+        now = time.time()
+        if now - getattr(self, "_last_progress", 0.0) < 1.0:
+            return
+        self._last_progress = now
+        fields.setdefault("mb_s", None)
+        self.job["progress"] = fields
+        jobs.save_job(self.root, self.job)
+
+
+def _to_float_list(values):
+    return [float(v) for v in values]
+
+
+def _json_safe(value):
+    """Recursively map non-finite floats to None (NaN is not valid JSON)."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
+def run(job_dir: Path, job: dict) -> None:
+    root = job_dir.parent.parent
+    opt = job["options"]
+    cache = caches.cache_path(opt["cache_key"], root)
+    stage = _Stages(root, job)
+
+    if opt.get("gcst1") or opt.get("gcst2"):
+        stage.start("download")
+        from . import gwascat
+        keep_ids = gwascat.cache_ids(cache)
+        for trait in (1, 2):
+            meta = opt.get(f"catalog{trait}")
+            if not meta:
+                continue
+            dest = job_dir / f"trait{trait}.gcst.tsv.gz"
+            t0 = time.time()
+
+            def on_bytes(n, meta=meta, trait=trait, t0=t0):
+                elapsed = time.time() - t0
+                stage.progress(
+                    trait=trait, accession=meta["accession"], bytes=n,
+                    total=meta.get("remote_bytes") or 0,
+                    mb_s=round(n / elapsed / 1048576, 1) if elapsed else None)
+            try:
+                info = gwascat.stream_filter(meta["url"], keep_ids, dest,
+                                             on_bytes=on_bytes)
+            except Exception as exc:
+                raise ValueError(
+                    f"{job['labels'][f'trait{trait}']} "
+                    f"({meta['accession']}): download failed: {exc}")
+            job["files"][f"sumstats{trait}"] = dest.name
+            meta.update(kept=info["kept"], seen=info["seen"],
+                        effect_from=info["effect_from"])
+        jobs.save_job(root, job)
+        stage.done("download")
+
+    ss1 = job_dir / job["files"]["sumstats1"]
+    ss2 = job_dir / job["files"]["sumstats2"]
+
+    stage.start("validate")
+    from ldpred3.sumstats import detect_columns
+    for path, overrides, label in (
+            (ss1, opt["columns1"], job["labels"]["trait1"]),
+            (ss2, opt["columns2"], job["labels"]["trait2"])):
+        try:
+            detect_columns(str(path), **overrides)
+        except Exception as exc:
+            raise ValueError(f"{label}: cannot interpret columns: {exc}")
+    stage.done("validate")
+
+    stage.start("harmonize")
+    from bipred import prepare_bivariate_sumstats
+    prep = prepare_bivariate_sumstats(
+        str(cache), str(ss1), str(ss2),
+        n_eff1=opt["n_eff1"], n_eff2=opt["n_eff2"],
+        n_cases1=opt["n_cases1"], n_controls1=opt["n_controls1"],
+        n_cases2=opt["n_cases2"], n_controls2=opt["n_controls2"],
+        columns1=opt["columns1"], columns2=opt["columns2"],
+        screen=opt["screen"], screen_rounds=4, screen_window=1000,
+        screen_threshold=29.72, screen_eigenvalue_floor=1e-3,
+        screen_seed=opt["seed"], screen_ncores=1)
+    try:
+        # prep.log carries nested per-trait QC/harmonization dicts; the report
+        # keeps only the top-level scalar counts.
+        munge = {key: int(value) for key, value in prep.log.items()
+                 if isinstance(value, numbers.Integral)
+                 and not isinstance(value, bool)}
+        (job_dir / "munge.json").write_text(json.dumps(munge, indent=1))
+        stage.done("harmonize")
+
+        stage.start("ldsc")
+        from bipred.ldsc import ldsc_rg
+        from ldpred3 import ld_scores
+        try:
+            ell = ld_scores(prep.blocks)
+            r = ldsc_rg(prep.beta_hat1, prep.beta_hat2, ell,
+                        prep.n_eff1, prep.n_eff2)
+            ldsc_out = {"rg": float(r.rg), "rg_se": float(r.rg_se),
+                        "gcov": float(r.gcov),
+                        "gcov_intercept": float(r.gcov_intercept),
+                        "h2": _to_float_list(r.h2)}
+        except Exception as exc:                # LDSC is a bonus; fit decides
+            ldsc_out = {"error": str(exc)}
+        stage.done("ldsc")
+
+        stage.start("fit")
+        from bipred import ldpred3_auto_bivariate_blocks
+        res = ldpred3_auto_bivariate_blocks(
+            prep.blocks, prep.beta_hat1, prep.beta_hat2,
+            prep.n_eff1, prep.n_eff2,
+            seed=opt["seed"], burn_in=opt["burn_in"],
+            num_iter=opt["num_iter"], ncores=1)
+        mixer = {key: (_to_float_list(value) if isinstance(value, tuple)
+                       else float(value))
+                 for key, value in res.mixer.items()}
+        joint = {
+            "h2": _to_float_list(res.h2),
+            "rg": float(res.rg),
+            "p": float(res.p),
+            "pi": _to_float_list(res.pi) if res.pi is not None else None,
+            "mixer": mixer,
+            "noise_scale": (_to_float_list(res.noise_scale)
+                            if res.noise_scale is not None else None),
+            "retained_iterations": res.retained_iterations,
+            "stopped_early": bool(res.stopped_early),
+        }
+        stage.done("fit")
+
+        written = []
+        if opt["weights"]:
+            stage.start("weights")
+            common = dict(id=prep.id, chrom=prep.chrom, pos=prep.pos,
+                          effect_allele=prep.effect_allele,
+                          other_allele=prep.other_allele)
+            for trait in (1, 2):
+                name = f"weights{trait}.tsv"
+                res.write_weights(job_dir / name, trait=trait, **common)
+                written.append(name)
+            stage.done("weights")
+    finally:
+        prep.close()
+
+    import bipred
+    import ldpred3
+    import numpy
+    result = {
+        "joint": joint,
+        "ldsc": ldsc_out,
+        "munge": munge,
+        "weights": written,
+        "provenance": {
+            "bipred": bipred.__version__,
+            "ldpred3": ldpred3.__version__,
+            "numpy": numpy.__version__,
+            "cache_key": opt["cache_key"],
+            "cache_sha256": caches.sha256_cached(cache),
+            "seed": opt["seed"],
+            "burn_in": opt["burn_in"],
+            "num_iter": opt["num_iter"],
+            "screen": opt["screen"],
+            "stages": job["stages"],
+        },
+    }
+    catalog = {f"trait{t}": {k: opt[f"catalog{t}"].get(k) for k in
+                             ("accession", "trait", "pmid", "n_basis",
+                              "kept", "seen", "effect_from")}
+               for t in (1, 2) if opt.get(f"catalog{t}")}
+    if catalog:
+        result["provenance"]["catalog"] = catalog
+    (job_dir / "result.json").write_text(
+        json.dumps(_json_safe(result), indent=1))
+
+
+def main(argv=None) -> int:
+    job_dir = Path((argv or sys.argv[1:])[0]).resolve()
+    root = job_dir.parent.parent
+    job = jobs.load_job(root, job_dir.name)
+    if job is None:
+        print(f"no job.json in {job_dir}", file=sys.stderr)
+        return 2
+    job["status"] = "running"
+    job["started"] = time.time()
+    jobs.save_job(root, job)
+    try:
+        run(job_dir, job)
+    except Exception as exc:
+        traceback.print_exc()
+        jobs.update_job(root, job["id"], status="failed",
+                        finished=time.time(), error=str(exc))
+        return 1
+    jobs.update_job(root, job["id"], status="done", stage=None,
+                    finished=time.time())
+    return 0
+
+
+if __name__ == "__main__":                      # pragma: no cover
+    raise SystemExit(main())

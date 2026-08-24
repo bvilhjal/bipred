@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Job {{ job.id }} <span class="badge badge-{{ job.status }}"
+id="badge">{{ job.status }}</span></h1>
+<p class="muted">{{ job.labels.trait1 }} × {{ job.labels.trait2 }} —
+submitted {{ "%Y-%m-%d %H:%M:%S"|format_datetime(job.created) }}</p>
+
+<div class="error" id="failure"{% if job.status != "failed" %} hidden{% endif %}>
+<strong>Job failed.</strong> <span id="failure-msg">{{ job.error }}</span></div>
+
+{% if job.status == "done" %}
+<div class="ok">Job finished. <a href="/jobs/{{ job.id }}/results">View the
+results</a>.</div>
+{% endif %}
+
+{% if running %}
+<p id="status-note">Current stage: <strong
+id="stage-name">{{ job.stage or "queued" }}</strong>. This page updates
+live.</p>
+<p class="muted" id="progress-line" hidden></p>
+<noscript><p class="muted">JavaScript is disabled —
+<a href="/jobs/{{ job.id }}">reload this page</a> to update the status.</p>
+</noscript>
+{% endif %}
+
+<h2>Stages</h2>
+<ul class="stages" id="stages">
+{% for name in stages %}
+<li class="{% if name in job.stages %}done{% elif name == job.stage %}active{% else %}pending{% endif %}">
+<span>{{ name }}</span>
+<span class="state">{% if name in job.stages %}{{ "%.2f"|format(job.stages[name]) }} s{% elif name == job.stage %}running{% else %}pending{% endif %}</span>
+</li>
+{% endfor %}
+</ul>
+
+<div id="munge"{% if not munge %} hidden{% endif %}>
+<h2>Harmonization</h2>
+<table>
+<tr><td>Variants in LD reference</td>
+<td class="num" id="m-n-cache">{{ munge.n_cache if munge else "—" }}</td></tr>
+<tr><td>Observed in both GWAS</td>
+<td class="num" id="m-n-joint">{{ munge.n_joint if munge else "—" }}</td></tr>
+<tr><td>Kept for fitting</td>
+<td class="num" id="m-n-kept">{{ munge.n_kept if munge else "—" }}</td></tr>
+<tr id="m-screen-row"{% if not (munge and munge.n_screen_drop) %} hidden{% endif %}>
+<td>Dropped by screen</td>
+<td class="num" id="m-screen-drop">{{ munge.n_screen_drop if munge else "" }}</td></tr>
+</table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+window.BIPRED_JOB = {id: {{ job.id | tojson }},
+                     status: {{ job.status | tojson }},
+                     stages: {{ stages | tojson }}};
+</script>
+<script src="/static/job.js" defer></script>
+{% endblock %}

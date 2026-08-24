@@ -22,9 +22,39 @@ User-visible changes to **bipred** are recorded here. The project is currently
   source build on macOS arm64, with hello-world validation). The LDSC 1000G EUR
   weights and `w_hm3.snplist` are pinned in `real_data_inputs.sha256` from a
   Zenodo mirror, because the Broad host became requester-pays.
+- **Web service (`webapp/`).** A FastAPI front end for two-trait estimates:
+  upload two GWAS files (or press the synthetic-demo button), and a queued
+  subprocess fit returns the joint genetic correlation, heritabilities,
+  MiXeR-style overlap, an LDSC comparison, optional posterior-mean weights, a
+  harmonization report, and full provenance (versions, LD-cache content hash,
+  seed). Job state lives in per-job JSON on disk — no database or queue
+  service — with subprocesses pinned to one numerical thread, a concurrency
+  cap, upload size limits, unguessable job URLs, and time-based purging. The
+  default LD reference is the UK Biobank European HapMap3 cache used by the
+  real-data benchmarks, picked up from its conventional workspace location;
+  further caches register with `BIPRED_WEB_CACHES`. The upload form previews
+  each file's header client-side against ldpred3's column-alias table and
+  re-renders inline with entries preserved on validation errors; the job page
+  polls a new `GET /jobs/<id>/status` JSON endpoint for live stage progress
+  instead of full-page refreshes. Either trait can also be a **GWAS Catalog
+  accession**: the form resolves GCST ids live (trait, sample size — used to
+  prefill label and N when left empty), and the runner downloads the
+  harmonised file as a first job stage, stream-filtering it to the LD
+  reference and normalizing both catalog layouts (`hm_`-prefixed and
+  current; beta / log(OR) / z·se effects) following
+  `ldpred3/benchmarks/gwas_catalog_harvest.py`, with download provenance on
+  the results page. A `/catalog` page lists every accession the service has
+  tried — successes recorded on job completion, failures (no harmonised
+  file, dead URL, empty reference overlap) with their reason — persisted in
+  `_meta/gwascat/accessions.json` and updated automatically as jobs run.
+  The catalog `download` stage reports live progress (MB read, percent of
+  the resolved file size, MB/s) through the status endpoint to the job page.
+  See `webapp/README.md`.
+  Installed via the new `web` optional extra.
 - Registered the workspace marker taxonomy (`slow` / `integration` /
-  `external` / `numba`) in `pyproject.toml`, mirroring ldpred3/gwfm. No test
-  is tagged yet; the suite still runs as one fast leg.
+  `external` / `numba`) in `pyproject.toml`, mirroring ldpred3/gwfm.
+  `tests/test_webapp.py` carries the first `slow` tag: it runs real
+  subprocess fits (~15 s on this host).
 - Plumbing tests for the external benchmarks
   (`tests/test_external_benchmark.py`): output parsers against committed
   fixtures, probe fail-closed behaviour, and truth-simulation invariants.

@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ job.labels.trait1 }} × {{ job.labels.trait2 }}</h1>
+<p class="muted">Job {{ job.id }} — joint bipred fit on
+{{ res.munge.n_kept }} harmonized variants.</p>
+
+<h2>Genetic correlation and heritability (joint fit)</h2>
+<table>
+<tr><th>Quantity</th><th class="num">Estimate</th></tr>
+<tr><td>Genetic correlation r<sub>g</sub></td>
+    <td class="num">{{ res.joint.rg|f3 }}</td></tr>
+<tr><td>SNP heritability, {{ job.labels.trait1 }}</td>
+    <td class="num">{{ res.joint.h2[0]|f3 }}</td></tr>
+<tr><td>SNP heritability, {{ job.labels.trait2 }}</td>
+    <td class="num">{{ res.joint.h2[1]|f3 }}</td></tr>
+<tr><td>Causal fraction (per-trait average)</td>
+    <td class="num">{{ "%.4f"|format(res.joint.p) }}</td></tr>
+</table>
+
+<h2>Polygenic overlap (MiXeR-style)</h2>
+<table>
+<tr><th>Quantity</th><th class="num">Estimate</th></tr>
+<tr><td>Polygenicity, {{ job.labels.trait1 }} / {{ job.labels.trait2 }}</td>
+    <td class="num">{{ "%.4f"|format(res.joint.mixer.polygenicity[0]) }} /
+        {{ "%.4f"|format(res.joint.mixer.polygenicity[1]) }}</td></tr>
+<tr><td>Causal variants, {{ job.labels.trait1 }} / {{ job.labels.trait2 }}</td>
+    <td class="num">{{ "%.0f"|format(res.joint.mixer.n_causal[0]) }} /
+        {{ "%.0f"|format(res.joint.mixer.n_causal[1]) }}</td></tr>
+<tr><td>Shared causal variants</td>
+    <td class="num">{{ "%.0f"|format(res.joint.mixer.n_shared) }}</td></tr>
+<tr><td>Fraction of the smaller trait shared</td>
+    <td class="num">{{ "%.3f"|format(res.joint.mixer.frac_shared) }}</td></tr>
+<tr><td>Effect correlation at shared variants (rho_beta)</td>
+    <td class="num">{{ "%.3f"|format(res.joint.mixer.rho_beta) }}</td></tr>
+<tr><td>r<sub>g</sub> implied by the overlap</td>
+    <td class="num">{{ "%.3f"|format(res.joint.mixer.rg_from_overlap) }}</td></tr>
+</table>
+
+<h2>Cross-trait LD Score regression (moment estimator)</h2>
+{% if res.ldsc.error %}
+<p class="muted">The LDSC stage did not converge on this panel:
+{{ res.ldsc.error }}</p>
+{% else %}
+<table>
+<tr><th>Quantity</th><th class="num">Estimate</th></tr>
+<tr><td>r<sub>g</sub></td>
+    <td class="num">{{ res.ldsc.rg|f3 }} ± {{ res.ldsc.rg_se|f3 }}</td></tr>
+<tr><td>Intercept (sample overlap / confounding)</td>
+    <td class="num">{{ res.ldsc.gcov_intercept|f3 }}</td></tr>
+<tr><td>h², {{ job.labels.trait1 }} / {{ job.labels.trait2 }}</td>
+    <td class="num">{{ res.ldsc.h2[0]|f3 }} / {{ res.ldsc.h2[1]|f3 }}</td></tr>
+</table>
+{% endif %}
+
+<h2>Downloads</h2>
+<ul>
+<li><a href="/jobs/{{ job.id }}/download/result">result.json</a> — all
+estimates and provenance</li>
+<li><a href="/jobs/{{ job.id }}/download/munge">munge.json</a> —
+harmonization counts</li>
+{% for name in res.weights %}
+<li><a href="/jobs/{{ job.id }}/download/weights{{ loop.index }}">{{ name }}</a>
+— posterior-mean effects, {{ job.labels["trait" ~ loop.index] }}
+(score with <code>scaling="target"</code>)</li>
+{% endfor %}
+</ul>
+
+<h2>Provenance</h2>
+<table>
+<tr><td>bipred / ldpred3 / numpy</td>
+<td>{{ res.provenance.bipred }} / {{ res.provenance.ldpred3 }} /
+{{ res.provenance.numpy }}</td></tr>
+<tr><td>LD reference</td><td>{{ res.provenance.cache_key }}
+(sha256 {{ res.provenance.cache_sha256[:12] }}…)</td></tr>
+<tr><td>Seed / burn-in / iterations</td>
+<td>{{ res.provenance.seed }} / {{ res.provenance.burn_in }} /
+{{ res.provenance.num_iter }}</td></tr>
+<tr><td>LD-consistency screen</td>
+<td>{{ "on" if res.provenance.screen else "off" }}</td></tr>
+{% if res.provenance.catalog %}
+<tr><td>GWAS Catalog</td><td>
+{% for c in res.provenance.catalog.values() %}
+{{ c.accession }} — {{ c.trait }}{% if c.pmid %} (PMID
+{{ c.pmid }}){% endif %}; {{ c.kept }} of {{ c.seen }} variants kept,
+effect from {{ c.effect_from }}{% if c.n_basis %}; N: {{ c.n_basis }}{% endif %}{% if not loop.last %}<br>{% endif %}
+{% endfor %}
+</td></tr>
+{% endif %}
+<tr><td>Stage seconds</td>
+<td>{% for k, v in res.provenance.stages.items() %}{{ k }} {{ "%.1f"|format(v) }}s{% if not loop.last %}, {% endif %}{% endfor %}</td></tr>
+</table>
+{% endblock %}

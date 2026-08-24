@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+{% block content %}
+{% set f = form or {} %}
+{% set selected_cache = f.get('cache_key') or default_key %}
+<h1>Estimate two-trait genetic correlation</h1>
+<p>Upload two GWAS summary-statistics files (TSV or TSV.GZ) — or fetch them
+straight from the <a href="https://www.ebi.ac.uk/gwas/">GWAS Catalog</a> by
+pasting a GCST accession per trait. Common column names are recognized
+automatically (rsID/SNP, A1/A2, BETA/OR, SE, P, CHR/BP, EAF); both traits
+are harmonized to the selected LD reference. You get back genetic
+correlation with a standard error, per-trait SNP heritability, a MiXeR-style
+polygenic-overlap summary, and a harmonization report.</p>
+<p><a class="button" href="/demo">Try it on the synthetic demo pair</a>
+<span class="muted"> — runs in seconds, includes posterior weights.</span></p>
+
+{% if error %}
+<div class="error"><strong>Please fix the following and resubmit.</strong>
+{{ error }} Your entries below are preserved, but browsers clear file
+selections on every reload — please re-select your two files.</div>
+{% endif %}
+
+<form method="post" action="/jobs" enctype="multipart/form-data">
+<div class="cards">
+  <div class="card">
+    <h2>Trait 1</h2>
+    <label for="sumstats1">Summary statistics</label>
+    <input type="file" id="sumstats1" name="sumstats1">
+    <div class="preview" id="preview1"></div>
+    <span class="muted">…or fetch from the GWAS Catalog:</span>
+    <input type="text" id="gcst1" name="gcst1" class="gcst"
+           placeholder="GCST accession, e.g. GCST90446168"
+           value="{{ f.get('gcst1', '') }}">
+    <div class="preview" id="catalog1"></div>
+    <label for="label1">Label</label>
+    <input type="text" id="label1" name="label1"
+           value="{{ f.get('label1', 'Trait 1') }}">
+    <label for="n_eff1">Effective N</label>
+    <input type="text" id="n_eff1" name="n_eff1" placeholder="e.g. 80000"
+           value="{{ f.get('n_eff1', '') }}">
+    <span class="muted">…or cases + controls:</span>
+    <div class="row">
+      <input type="text" name="n_cases1" placeholder="cases"
+             value="{{ f.get('n_cases1', '') }}">
+      <input type="text" name="n_controls1" placeholder="controls"
+             value="{{ f.get('n_controls1', '') }}">
+    </div>
+  </div>
+  <div class="card">
+    <h2>Trait 2</h2>
+    <label for="sumstats2">Summary statistics</label>
+    <input type="file" id="sumstats2" name="sumstats2">
+    <div class="preview" id="preview2"></div>
+    <span class="muted">…or fetch from the GWAS Catalog:</span>
+    <input type="text" id="gcst2" name="gcst2" class="gcst"
+           placeholder="GCST accession, e.g. GCST90446168"
+           value="{{ f.get('gcst2', '') }}">
+    <div class="preview" id="catalog2"></div>
+    <label for="label2">Label</label>
+    <input type="text" id="label2" name="label2"
+           value="{{ f.get('label2', 'Trait 2') }}">
+    <label for="n_eff2">Effective N</label>
+    <input type="text" id="n_eff2" name="n_eff2" placeholder="e.g. 50000"
+           value="{{ f.get('n_eff2', '') }}">
+    <span class="muted">…or cases + controls:</span>
+    <div class="row">
+      <input type="text" name="n_cases2" placeholder="cases"
+             value="{{ f.get('n_cases2', '') }}">
+      <input type="text" name="n_controls2" placeholder="controls"
+             value="{{ f.get('n_controls2', '') }}">
+    </div>
+  </div>
+</div>
+<p class="muted">Using a GCST accession? See the
+<a href="/catalog">accessions tried on this server</a> — which worked, and
+which did not (updated automatically as jobs run).</p>
+
+<label for="cache_key">LD reference</label>
+<select id="cache_key" name="cache_key">
+{% for c in caches %}
+  <option value="{{ c.key }}"{% if c.key == selected_cache %} selected{% endif %}>{{ c.label }}</option>
+{% endfor %}
+</select>
+<span class="muted">Uploads must match the reference's ancestry and genome
+build. Limit {{ max_mb }} MB per file.</span>
+
+<details>
+<summary>Advanced options</summary>
+  <div class="row">
+    <div>
+      <label for="columns1">Trait 1 column overrides</label>
+      <input type="text" id="columns1" name="columns1"
+             placeholder="id=RSID,ea=EFFECT_ALLELE"
+             value="{{ f.get('columns1', '') }}">
+    </div>
+    <div>
+      <label for="columns2">Trait 2 column overrides</label>
+      <input type="text" id="columns2" name="columns2"
+             placeholder="id=RSID,ea=EFFECT_ALLELE"
+             value="{{ f.get('columns2', '') }}">
+    </div>
+  </div>
+  <div class="row">
+    <div>
+      <label for="seed">Random seed</label>
+      <input type="text" id="seed" name="seed"
+             value="{{ f.get('seed', '0') }}">
+    </div>
+    <div>
+      <label for="burn_in">Burn-in iterations</label>
+      <input type="text" id="burn_in" name="burn_in"
+             value="{{ f.get('burn_in', '200') }}">
+    </div>
+    <div>
+      <label for="num_iter">Sampling iterations</label>
+      <input type="text" id="num_iter" name="num_iter"
+             value="{{ f.get('num_iter', '200') }}">
+    </div>
+  </div>
+  <label><input type="checkbox" name="screen" value="1"
+    {% if f.get('screen') %} checked{% endif %}>
+    LD-consistency sensitivity screen (slower; DENTIST-inspired)</label>
+  <label><input type="checkbox" name="weights" value="1"
+    {% if f.get('weights') or not f %} checked{% endif %}>
+    Also write per-trait posterior-mean weight files</label>
+</details>
+
+<button type="submit">Run bipred</button>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+window.BIPRED_ALIASES = {{ aliases | tojson }};
+window.BIPRED_MAX_MB = {{ max_mb }};
+</script>
+<script src="/static/preview.js" defer></script>
+<script src="/static/catalog.js" defer></script>
+{% endblock %}
