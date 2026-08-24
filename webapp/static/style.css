@@ -23,16 +23,38 @@ body {
 }
 
 header {
-  background: var(--brand);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: rgba(44, 62, 80, 0.92);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   color: #fff;
-  padding: 0.8rem 1.5rem;
+  padding: 0.7rem 1.5rem;
   display: flex;
-  align-items: baseline;
-  gap: 0.7rem;
+  align-items: center;
+  gap: 0.9rem;
   flex-wrap: wrap;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
 }
-header a { color: #fff; text-decoration: none; font-weight: 600; }
-header .tag { font-size: 0.92rem; opacity: 0.85; }
+header .brand { color: #fff; text-decoration: none; font-weight: 700; font-size: 1.1rem; }
+header .tag { font-size: 0.85rem; opacity: 0.75; }
+header nav {
+  margin-left: auto;
+  display: flex;
+  gap: 0.35rem;
+}
+header nav a {
+  color: rgba(255, 255, 255, 0.82);
+  text-decoration: none;
+  font-weight: 500;
+  font-size: 0.92rem;
+  padding: 0.32rem 0.85rem;
+  border-radius: 999px;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+header nav a:hover { background: rgba(255, 255, 255, 0.14); color: #fff; }
+header nav a.active { background: #fff; color: var(--brand); }
 
 main {
   max-width: 960px;

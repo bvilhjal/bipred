@@ -65,6 +65,9 @@ def test_index_offers_demo_and_form(web):
     assert 'name="n_eff1"' in page.text
     # The LD-consistency screen ships checked.
     assert re.search(r'name="screen"[^>]*\bchecked\b', page.text)
+    # Header navigation.
+    assert 'href="/catalog"' in page.text
+    assert '<a href="/" class="active">New analysis</a>' in page.text
 
 
 def test_index_carries_preview_assets(web):
@@ -315,6 +318,35 @@ def test_transient_resolution_error_not_recorded(web, monkeypatch):
         "/jobs", data={"gcst1": "GCST000010", "cache_key": "demo"})
     assert response.status_code == 400
     assert "GCST000010" not in gwascat.accession_registry(root)
+
+
+def test_results_page_tolerates_pre_qc_report_munge(web):
+    """Jobs from before the per-step QC report still render, with a note."""
+    from webapp import jobs
+    client, root = web
+    job = jobs.create_job(root, options={"weights": False},
+                          labels={"trait1": "A", "trait2": "B"})
+    jobs.update_job(root, job["id"], status="done", finished=time.time())
+    result = {
+        "joint": {"rg": 0.1, "h2": [0.1, 0.2], "p": 0.01, "pi": None,
+                  "noise_scale": None, "retained_iterations": 1,
+                  "stopped_early": False,
+                  "mixer": {"polygenicity": [0.1, 0.2], "n_causal": [10, 20],
+                            "n_shared": 5, "frac_shared": 0.5,
+                            "rho_beta": 0.3, "rg_from_overlap": 0.1}},
+        "ldsc": {"error": "not run"},
+        "munge": {"n_cache": 100, "n_joint": 90, "n_kept": 80,
+                  "n_screen_drop": 0},
+        "weights": [],
+        "provenance": {"bipred": "x", "ldpred3": "y", "numpy": "z",
+                       "cache_key": "demo", "cache_sha256": "abc",
+                       "seed": 0, "burn_in": 1, "num_iter": 1,
+                       "screen": False, "stages": {}},
+    }
+    (root / "jobs" / job["id"] / "result.json").write_text(json.dumps(result))
+    page = client.get(f"/jobs/{job['id']}/results")
+    assert page.status_code == 200
+    assert "predates the per-step QC report" in page.text
 
 
 def test_accession_registry_semantics(tmp_path):

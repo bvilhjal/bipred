@@ -41,6 +41,7 @@
 </table>
 
 <h2>QC and harmonization</h2>
+{% if res.munge.trait1 is defined and res.munge.trait1 %}
 <p class="muted">Per-trait filters applied on load, then alignment to the LD
 reference. Counts are sequential: each row removes variants from what the
 rows above left. Flip counts are informational (alleles were aligned, not
@@ -90,6 +91,10 @@ dropped).</p>
 </div>
 {% endfor %}
 </div>
+{% else %}
+<p class="muted">This job predates the per-step QC report; only joint counts
+are available. Run a new job for the full breakdown.</p>
+{% endif %}
 <table>
 <tr><th>Joint panel</th><th class="num">Variants</th></tr>
 <tr><td>In LD reference</td><td class="num">{{ res.munge.n_cache }}</td></tr>

@@ -53,7 +53,9 @@ User-visible changes to **bipred** are recorded here. The project is currently
   each reference-alignment drop, per trait), standard errors where available
   (LDSC jackknife r_g SE; posterior SD across retained sweeps for the joint
   r_g and h²), and defaults the DENTIST-inspired LD-consistency screen on.
-  See `webapp/README.md`.
+  A sticky top nav links the form, the catalog track record, and the demo;
+  results pages from jobs that predate the QC report render with a note
+  instead of the breakdown. See `webapp/README.md`.
   Installed via the new `web` optional extra.
 - Registered the workspace marker taxonomy (`slow` / `integration` /
   `external` / `numba`) in `pyproject.toml`, mirroring ldpred3/gwfm.

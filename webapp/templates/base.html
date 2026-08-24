@@ -7,8 +7,16 @@
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<header><a href="/">bipred</a> <span class="tag">two-trait SNP heritability,
-genetic correlation and polygenic overlap</span></header>
+<header>
+  <a class="brand" href="/">bipred</a>
+  <span class="tag">two-trait SNP heritability, genetic correlation and
+  polygenic overlap</span>
+  <nav>
+    <a href="/"{% if request.url.path == "/" %} class="active"{% endif %}>New analysis</a>
+    <a href="/catalog"{% if request.url.path == "/catalog" %} class="active"{% endif %}>Catalog accessions</a>
+    <a href="/demo">Run demo</a>
+  </nav>
+</header>
 <main>{% block content %}{% endblock %}</main>
 <footer>
 Estimates are produced by the bipred/ldpred3 reimplementations, not the
