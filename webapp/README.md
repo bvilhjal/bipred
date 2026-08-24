@@ -1,16 +1,18 @@
 # bipred web service
 
 A small web front end for bipred: upload two GWAS summary-statistics files,
-get back the joint two-trait estimates — genetic correlation with a standard
-error, per-trait SNP heritability, a MiXeR-style polygenic-overlap summary, a
-cross-trait LDSC comparison, and (optionally) per-trait posterior-mean weight
-files — plus a harmonization report and full provenance. The results page
+get back the joint two-trait estimates — genetic correlation, per-trait SNP
+heritability, a model-implied MiXeR-style overlap summary, an unfiltered
+fitted-panel LDSC-style moment diagnostic, and (optionally) per-trait
+posterior-mean weight files — plus a harmonization report and full provenance.
+The results page
 breaks the harmonization report down per trait — rows in, and the count
 removed by each QC step (non-finite values, duplicates, low per-variant N,
 MAF/INFO floors) and by reference alignment (unmatched, palindromic,
-allele-mismatch) — and shows standard errors where the estimators provide
-them: the block-jackknife SE on the LDSC r_g, and the posterior SD across
-retained sampler sweeps on the joint r_g and heritabilities.
+allele-mismatch). It labels the block-jackknife SE on the moment-estimator
+`r_g` separately from posterior SD across retained, autocorrelated joint-fit
+sweeps; the latter is not a frequentist standard error or convergence test.
+Critical fit warnings are visible and quarantine estimates and weight files.
 
 This directory is **not** part of the installed `bipred` package. It is a
 single-VM deployment: one web process, fit jobs as subprocesses, files on
@@ -35,7 +37,9 @@ exercise the flow, not to characterize the method — `benchmarks/` owns that.
 Sumstats parsing is ldpred3's: TSV/TSV.GZ with common column aliases
 (rsID/SNP, A1/A2, BETA/OR, SE, P, CHR/BP, EAF) detected automatically;
 unusual headers can be mapped with `FIELD=COLUMN` overrides in the advanced
-section. Each trait needs an effective N or a case/control split.
+section. Each trait can use a detected per-variant N column, a constant
+effective N, or a case/control split. The result records the actual basis and
+the retained N range.
 
 ### Fetching from the GWAS Catalog
 
@@ -57,31 +61,24 @@ harmonised-file index for a week and per-study metadata indefinitely under
 and the effect provenance on the results page. Requires network access on
 the host, both at submit time and in the fit subprocess.
 
-The service keeps a **track record** of every accession it tries, at
-`/catalog` (linked from the upload form): successes are recorded when a job
-completes, failures — no such study, no harmonised file, dead URL, empty
-reference overlap — with their reason. Transient network errors are not
-recorded, and a later success upgrades an earlier failure. The registry
-lives in `<data dir>/_meta/gwascat/accessions.json`, so it survives
-restarts but stays per-deployment.
+The `/catalog` page reads LDpred3's canonical, hashed benchmark registry
+directly from the sibling checkout. It currently exposes 49 accessions that
+completed an end-to-end fit and 37 documented rejected/failed deposits (36
+preflight rejections plus one fit-stage failure), then merges later attempts
+from this deployment. A completed LDpred3 phenotype satisfies the shared
+input/QC/harmonization/LD contracts used by bipred; that is an input-
+compatibility statement, not scientific endorsement of the phenotype or
+estimate. The page reports the canonical table and registry hashes, row-level
+runtime/peak RSS, and the current-profile CPU, OS, Python/numerical stack,
+chains, sweeps, and worker/thread settings. It explicitly separates those 11
+current-profile runs from the 38 legacy rows whose complete host snapshot was
+not retained.
 
-Accessions verified against the UKB European HapMap3 reference (file size
-and effective N as resolved by the service):
-
-| Accession | Trait | File | Effective N |
-|---|---|---|---|
-| `GCST90432107` | Influenza | 274 MB | 36,474 / 1,339,760 cases/controls |
-| `GCST90104541` | Cardioembolic stroke | 286 MB | 10,804 / 1,234,808 cases/controls |
-| `GCST90446645` | Body mass index | 57 MB | ≈650,000 |
-| `GCST90310294` | Systolic blood pressure | 194 MB | ≈1,028,980 |
-| `GCST90029070` | C-reactive protein | 272 MB | ≈575,531 |
-| `GCST90704647` | Alzheimer's disease or related dementias | 587 MB | 75,638 / 1,043,805 cases/controls |
-| `GCST90239649` / `GCST90239661` | HDL cholesterol / triglycerides | ~1.3 GB each | ≈1,320,016 |
-
-The influenza × stroke pair was run end-to-end through the service: the two
-~280 MB deposits stream-filtered to ~1.04M reference variants each in about
-3 minutes, and the whole job finished in under 7. Larger files work the
-same way; the download stage just takes proportionally longer.
+Local successes are recorded when a job completes. Deterministic failures —
+no such study, no harmonised file, empty reference overlap, or structural
+schema/QC failure — keep their reason; transient 5xx, timeout, and DNS errors
+do not poison the registry. A later success upgrades an earlier failure. The
+local registry lives in `<data dir>/_meta/gwascat/accessions.json`.
 
 Two browser-side conveniences, both advisory only (the runner remains the
 authority):
@@ -105,14 +102,19 @@ reload link.
 
 ## How it runs
 
-Uploads land in `<data dir>/jobs/<id>/`; an in-process supervisor launches at
+Uploads are written under a `staging` job and transition atomically to
+`queued` only after both inputs are durable. An in-process supervisor launches at
 most `BIPRED_WEB_CONCURRENCY` fit subprocesses (`python -m webapp.runner`),
 each pinned to one numerical thread (the same BLAS pins as the test suite, so
 N jobs never oversubscribe the host and numerics stay deterministic).
 `job.json` tracks validate → harmonize → ldsc → fit → (weights) with
-per-stage seconds; the runner writes `result.json`, `munge.json`, and the
-optional weight files. Results record bipred/ldpred3 versions, the LD-cache
-content hash, and the seed. Finished jobs are purged after
+per-stage seconds; a persisted `launching` claim prevents duplicate starts,
+and startup reconciliation fails interrupted staging/running jobs rather than
+leaving them stuck. The runner writes `result.json`, `munge.json`, and optional
+weight files. Results record input/cache hashes, N basis and range, column
+overrides, screen and sampling-error assumptions, source revision, CPU/OS/
+Python/numerical backends and thread limits, wall/user/system CPU seconds,
+peak RSS, and stage timings. Finished jobs are purged after
 `BIPRED_WEB_TTL_DAYS` (default 7).
 
 ## Configuration (environment variables)
@@ -125,6 +127,7 @@ content hash, and the seed. Finished jobs are purged after
 | `BIPRED_WEB_MAX_UPLOAD_MB` | `500` | per-file upload cap |
 | `BIPRED_WEB_TTL_DAYS` | `7` | retention of finished jobs |
 | `BIPRED_WEB_HOST` / `BIPRED_WEB_PORT` | `127.0.0.1` / `8000` | bind address |
+| `BIPRED_WEB_LDPRED3_BENCHMARKS` | `../ldpred3/benchmarks` | canonical Catalog evidence directory |
 
 ## Real LD references
 
@@ -133,7 +136,8 @@ Figshare LD reference converted to ldpred3 format, 1.05M variants from
 362k samples), picked up automatically when present at its conventional
 workspace location
 `../ldpred3/benchmarks/.work/ldref-hm3/ldpred3_ldref_hm3.npz` — the same file
-the real-data benchmarks use. The synthetic demo cache is always listed last.
+the real-data benchmarks use. The synthetic demo cache is accepted only by
+`/demo`; normal uploads can never silently run against it.
 
 To build further ancestries, use ldpred3 and register each through
 `BIPRED_WEB_CACHES`:
@@ -157,9 +161,12 @@ up as a near-empty harmonization report, not a wrong fit).
   needs outgrow one host.
 - No accounts: the job URL is the capability. Anyone with the URL can see
   that job until it is purged.
-- The LD-consistency screen and multi-chain fits from the CLI are not
-  exposed yet; the screen checkbox runs the single-fit sensitivity screen
-  and is on by default.
+- Multi-chain fits from the CLI are not exposed yet. The LD-consistency screen
+  is an opt-in single-fit sensitivity analysis with fixed, recorded parameters;
+  it is not a calibrated “conservatism” dial.
+- `cross_corr=0` means no correlated sampling error. The form exposes this
+  assumption, but does not substitute the fitted-panel moment intercept: that
+  intercept can also contain confounding.
 - Estimates come from the bipred/ldpred3 reimplementations; see
   `benchmarks/RESULTS.md` for how they compare against the original LDSC and
   MiXeR programs before quoting numbers publicly.

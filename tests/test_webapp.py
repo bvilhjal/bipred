@@ -1,9 +1,4 @@
-"""End-to-end tests for the bipred web service (webapp/).
-
-Marked slow: each job runs the full fit in a subprocess, which pays the
-Numba warm-up once per process. Requires the ``web`` extra; skipped when
-FastAPI/httpx are absent so the base suite needs no web dependencies.
-"""
+"""Unit and end-to-end tests for the checkout-only bipred web service."""
 
 import csv
 import gzip
@@ -19,8 +14,6 @@ pytest.importorskip("httpx")
 
 from fastapi.testclient import TestClient
 
-pytestmark = pytest.mark.slow
-
 JOB_TIMEOUT = 240.0
 
 
@@ -32,11 +25,17 @@ def web(tmp_path_factory):
     os.environ.pop("BIPRED_WEB_CACHES", None)
     from webapp import caches, demo
     demo.build_demo(caches.demo_cache_dir(root), m=1500, n_samples=600, seed=7)
+    # Normal uploads need an explicitly registered real cache.  The fixture
+    # reuses demo bytes under a clearly test-only registry key; production code
+    # refuses the synthetic ``demo`` key outside /demo.
+    os.environ["BIPRED_WEB_CACHES"] = (
+        f"TEST={root / 'caches' / 'demo' / 'demo.ld.npz'}")
     from webapp.app import create_app
     with TestClient(create_app()) as client:
         yield client, root
     del os.environ["BIPRED_WEB_DATA"]
     del os.environ["BIPRED_WEB_CONCURRENCY"]
+    del os.environ["BIPRED_WEB_CACHES"]
 
 
 def _wait_for_terminal(root, job_id, timeout=JOB_TIMEOUT):
@@ -60,14 +59,14 @@ def test_index_offers_demo_and_form(web):
     client, _ = web
     page = client.get("/")
     assert page.status_code == 200
-    assert "Demo (synthetic" in page.text
+    assert "Run the synthetic demo" in page.text
     assert 'name="sumstats1"' in page.text
     assert 'name="n_eff1"' in page.text
-    # The LD-consistency screen ships checked.
-    assert re.search(r'name="screen"[^>]*\bchecked\b', page.text)
+    # The experimental screen is an opt-in sensitivity analysis.
+    assert not re.search(r'name="screen"[^>]*\bchecked\b', page.text)
     # Header navigation.
     assert 'href="/catalog"' in page.text
-    assert '<a href="/" class="active">New analysis</a>' in page.text
+    assert 'aria-current="page"' in page.text
 
 
 def test_index_carries_preview_assets(web):
@@ -75,11 +74,13 @@ def test_index_carries_preview_assets(web):
     page = client.get("/")
     assert page.status_code == 200
     assert "BIPRED_ALIASES" in page.text      # alias map for the JS preview
-    assert 'class="card"' in page.text
+    assert 'class="card trait-1"' in page.text
     for asset in ("style.css", "job.js", "preview.js"):
         assert client.get(f"/static/{asset}").status_code == 200
 
 
+@pytest.mark.slow
+@pytest.mark.integration
 def test_demo_job_end_to_end(web):
     client, root = web
     redirect = client.get("/demo", follow_redirects=False)
@@ -101,15 +102,22 @@ def test_demo_job_end_to_end(web):
     assert t1["qc"]["n_input"] >= t1["qc"]["n_kept"] > 0
     assert t1["harmonize"]["n_matched"] > 0
     assert "af_corr" in result["munge"]
+    assert result["diagnostics"]["valid_for_interpretation"] in (True, False)
+    assert result["provenance"]["compute"]["logical_cpus"] >= 1
+    assert result["provenance"]["resources"]["wall_s"] > 0
+    assert result["provenance"]["resources"]["peak_rss_gb"] > 0
+    assert result["provenance"]["sample_size"]["trait1"]["median"] > 0
 
     page = client.get(f"/jobs/{job_id}/results")
     assert page.status_code == 200
-    assert "Polygenic overlap" in page.text
+    assert "polygenic overlap" in page.text.lower()
     assert "QC and harmonization" in page.text
     for kind in ("result", "munge", "weights1", "weights2"):
         assert client.get(f"/jobs/{job_id}/download/{kind}").status_code == 200
 
 
+@pytest.mark.slow
+@pytest.mark.integration
 def test_upload_job_end_to_end(web):
     client, root = web
     with _demo_upload(root, 1)[1] as f1, _demo_upload(root, 2)[1] as f2:
@@ -119,7 +127,7 @@ def test_upload_job_end_to_end(web):
                    "sumstats2": ("t2.tsv", f2, "text/tab-separated-values")},
             data={"label1": "upload 1", "label2": "upload 2",
                   "n_eff1": "100000", "n_eff2": "100000",
-                  "cache_key": "demo"},
+                  "cache_key": "TEST", "screen": "1"},
             follow_redirects=False)
     assert response.status_code == 303
     job_id = response.headers["location"].rsplit("/", 1)[-1]
@@ -130,13 +138,15 @@ def test_upload_job_end_to_end(web):
     assert -1.0 <= result["joint"]["rg"] <= 1.0
 
 
+@pytest.mark.slow
+@pytest.mark.integration
 def test_unreadable_columns_fail_the_job(web):
     client, root = web
     response = client.post(
         "/jobs",
         files={"sumstats1": ("bad.tsv", b"foo\tbar\n1\t2\n", "text/tsv"),
                "sumstats2": _demo_upload(root, 2)},
-        data={"n_eff1": "100000", "n_eff2": "100000", "cache_key": "demo"},
+        data={"n_eff1": "100000", "n_eff2": "100000", "cache_key": "TEST"},
         follow_redirects=False)
     assert response.status_code == 303
     job_id = response.headers["location"].rsplit("/", 1)[-1]
@@ -145,15 +155,16 @@ def test_unreadable_columns_fail_the_job(web):
     assert "column" in job["error"]
 
 
-def test_missing_sample_size_rejected(web):
+def test_incomplete_case_control_rejected(web):
     client, root = web
     response = client.post(
         "/jobs",
         files={"sumstats1": _demo_upload(root, 1),
                "sumstats2": _demo_upload(root, 2)},
-        data={"cache_key": "demo", "label1": "MyTrait"})
+        data={"cache_key": "TEST", "label1": "MyTrait",
+              "n_cases1": "100", "n_eff2": "100000"})
     assert response.status_code == 400
-    assert "effective N" in response.text
+    assert "both cases and controls" in response.text
     # The upload form is re-rendered inline with entries preserved, not the
     # bare error page.
     assert 'name="sumstats1"' in response.text
@@ -162,6 +173,8 @@ def test_missing_sample_size_rejected(web):
     assert "Something needs fixing" not in response.text
 
 
+@pytest.mark.slow
+@pytest.mark.integration
 def test_status_endpoint(web):
     client, root = web
     assert client.get("/jobs/nope/status").status_code == 404
@@ -195,12 +208,13 @@ def _fake_catalog_file(src_tsv, dest):
             out, fieldnames=["rsid", "chromosome", "base_pair_location",
                              "effect_allele", "other_allele", "beta",
                              "standard_error", "effect_allele_frequency",
-                             "p_value"],
+                             "p_value", "n"],
             delimiter="\t", lineterminator="\n")
         writer.writeheader()
         for row in reader:
             out_row = {new: row[old] for old, new in rename.items()}
             out_row["p_value"] = "0.5"
+            out_row["n"] = "100000"
             writer.writerow(out_row)
     return dest
 
@@ -231,7 +245,7 @@ def test_catalog_lookup(web, monkeypatch, tmp_path):
 
 def test_submit_needs_file_or_accession(web):
     client, _ = web
-    response = client.post("/jobs", data={"cache_key": "demo"})
+    response = client.post("/jobs", data={"cache_key": "TEST"})
     assert response.status_code == 400
     assert "file or give a GWAS Catalog accession" in response.text
 
@@ -241,11 +255,34 @@ def test_submit_rejects_file_plus_accession(web):
     response = client.post(
         "/jobs",
         files={"sumstats1": _demo_upload(root, 1)},
-        data={"gcst1": "GCST000001", "cache_key": "demo"})
+        data={"gcst1": "GCST000001", "cache_key": "TEST"})
     assert response.status_code == 400
     assert "not both" in response.text
 
 
+def test_catalog_autofill_marker_updates_stale_n(web, monkeypatch):
+    client, _ = web
+
+    def resolve(accession, _root):
+        return {"accession": accession, "trait": "New catalog trait",
+                "title": "", "pmid": "", "n_eff": 222222.0,
+                "n_basis": "fixture", "url": "unused", "remote_bytes": 0}
+
+    monkeypatch.setattr("webapp.gwascat.resolve", resolve)
+    response = client.post(
+        "/jobs", data={"gcst1": "GCST000777", "n_eff1": "111111",
+                       "catalog_auto_n1": "1",
+                       "label1": "Old catalog trait",
+                       "catalog_auto_label1": "1",
+                       "cache_key": "TEST"})
+    assert response.status_code == 400       # trait 2 intentionally absent
+    assert 'name="n_eff1"' in response.text
+    assert 'value="222222.0"' in response.text
+    assert 'value="New catalog trait"' in response.text
+
+
+@pytest.mark.slow
+@pytest.mark.integration
 def test_catalog_job_end_to_end(web, monkeypatch, tmp_path):
     client, root = web
     for trait, acc in ((1, "GCST000001"), (2, "GCST000002")):
@@ -257,7 +294,7 @@ def test_catalog_job_end_to_end(web, monkeypatch, tmp_path):
     response = client.post(
         "/jobs",
         data={"gcst1": "GCST000001", "gcst2": "GCST000002",
-              "cache_key": "demo"},          # N auto-filled from "metadata"
+              "cache_key": "TEST"},          # N auto-filled from "metadata"
         follow_redirects=False)
     assert response.status_code == 303, response.text
     job_id = response.headers["location"].rsplit("/", 1)[-1]
@@ -271,6 +308,9 @@ def test_catalog_job_end_to_end(web, monkeypatch, tmp_path):
     catalog = result["provenance"]["catalog"]
     assert catalog["trait1"]["accession"] == "GCST000001"
     assert catalog["trait1"]["kept"] == catalog["trait1"]["seen"] > 0
+    assert catalog["trait1"]["has_per_variant_n"] is True
+    assert result["provenance"]["sample_size"]["trait1"]["basis"].startswith(
+        "per-variant n column")
     # The supervisor records the success in the accession registry on reap.
     from webapp import gwascat
     deadline = time.time() + 15
@@ -284,11 +324,14 @@ def test_catalog_job_end_to_end(web, monkeypatch, tmp_path):
 
 
 def test_catalog_page_lists_track_record(web):
-    client, _ = web
+    from webapp import gwascat
+    client, root = web
+    gwascat.record_accession(root, "GCST000001", True,
+                             trait="Independent fixture", kept=5)
     page = client.get("/catalog")
     assert page.status_code == 200
-    assert "Known to work" in page.text
-    assert "GCST000001" in page.text      # recorded by the end-to-end test
+    assert "Compatible inputs" in page.text
+    assert "GCST000001" in page.text
 
 
 def test_failed_resolution_recorded(web, monkeypatch):
@@ -300,7 +343,7 @@ def test_failed_resolution_recorded(web, monkeypatch):
                          "file in the GWAS Catalog")
     monkeypatch.setattr("webapp.gwascat.resolve", boom)
     response = client.post(
-        "/jobs", data={"gcst1": "GCST000009", "cache_key": "demo"})
+        "/jobs", data={"gcst1": "GCST000009", "cache_key": "TEST"})
     assert response.status_code == 400
     entry = gwascat.accession_registry(root)["GCST000009"]
     assert entry["works"] is False
@@ -315,7 +358,7 @@ def test_transient_resolution_error_not_recorded(web, monkeypatch):
         raise ValueError(f"{accession}: catalog lookup failed (timed out)")
     monkeypatch.setattr("webapp.gwascat.resolve", boom)
     response = client.post(
-        "/jobs", data={"gcst1": "GCST000010", "cache_key": "demo"})
+        "/jobs", data={"gcst1": "GCST000010", "cache_key": "TEST"})
     assert response.status_code == 400
     assert "GCST000010" not in gwascat.accession_registry(root)
 
@@ -401,6 +444,20 @@ def test_stream_filter_reports_progress(tmp_path):
     assert len(seen_calls) >= 1
 
 
+def test_stream_filter_reports_usable_per_variant_n(tmp_path):
+    from webapp import gwascat
+    src = tmp_path / "with-n.h.tsv.gz"
+    with gzip.open(src, "wt", newline="") as fh:
+        fh.write("rsid\teffect_allele\tother_allele\tbeta\tstandard_error\tn\n")
+        fh.write("rs1\tA\tG\t0.01\t0.02\t100000\n")
+        fh.write("rs2\tC\tT\t0.02\t0.03\t120000\n")
+    info = gwascat.stream_filter(
+        str(src), {"rs1", "rs2"}, tmp_path / "with-n.out.tsv.gz")
+    assert info["has_per_variant_n"] is True
+    assert info["per_variant_n_usable_frac"] == 1.0
+    assert len(info["sha256"]) == 64
+
+
 def test_accession_format_checked(tmp_path):
     from webapp import gwascat
     with pytest.raises(ValueError, match="GCST"):
@@ -424,6 +481,34 @@ def test_purge_removes_only_expired_jobs(web):
     assert running["id"] not in removed        # never purge a live job
 
 
+def test_staging_jobs_are_not_launched(tmp_path):
+    from webapp import jobs
+    from webapp.app import _sweep_once, create_app
+    app = create_app()
+    app.state.root = tmp_path
+    (tmp_path / "jobs").mkdir()
+    app.state.config = {"concurrency": 1, "ttl_days": 7}
+    app.state.procs = {}
+    app.state.last_purge = time.time()
+    staged = jobs.create_job(
+        tmp_path, options={}, labels={}, status="staging")
+    _sweep_once(app)
+    assert jobs.load_job(tmp_path, staged["id"])["status"] == "staging"
+    assert app.state.procs == {}
+
+
+def test_restart_reconciles_interrupted_but_not_queued_jobs(tmp_path):
+    from webapp import jobs
+    (tmp_path / "jobs").mkdir()
+    running = jobs.create_job(tmp_path, options={}, labels={}, status="running")
+    queued = jobs.create_job(tmp_path, options={}, labels={}, status="queued")
+    recovered = jobs.recover_interrupted_jobs(tmp_path)
+    assert recovered == [running["id"]]
+    assert jobs.load_job(tmp_path, running["id"])["status"] == "failed"
+    assert "server restarted" in jobs.load_job(tmp_path, running["id"])["error"]
+    assert jobs.load_job(tmp_path, queued["id"])["status"] == "queued"
+
+
 def test_parse_columns():
     from webapp.app import parse_columns
     assert parse_columns("id=RSID, ea=ALLELE1") == {"id": "RSID",
@@ -433,9 +518,79 @@ def test_parse_columns():
         parse_columns("idRSID")
 
 
+def test_numeric_validation_and_optional_n():
+    from webapp.app import (_bounded_int, _cross_corr,
+                            _sample_size_options)
+    assert _sample_size_options({}, 1) == (None, None, None)
+    assert _cross_corr("-0.25") == -0.25
+    with pytest.raises(ValueError, match="strictly between"):
+        _cross_corr("1")
+    with pytest.raises(ValueError, match="between"):
+        _bounded_int("100001", 200, "iterations", 1, 100000)
+
+
+def test_fit_warning_classifier_quarantines_do_not_interpret():
+    from webapp.runner import _warnings_are_critical
+    assert _warnings_are_critical([
+        {"message": "Do not interpret h2 or rg from this fit."}])
+    assert not _warnings_are_critical([
+        {"message": "posterior weights use an HWE SD approximation"}])
+
+
+def test_normal_submit_rejects_demo_cache(web):
+    client, root = web
+    with _demo_upload(root, 1)[1] as f1, _demo_upload(root, 2)[1] as f2:
+        response = client.post(
+            "/jobs",
+            files={"sumstats1": ("t1.tsv", f1, "text/tsv"),
+                   "sumstats2": ("t2.tsv", f2, "text/tsv")},
+            data={"n_eff1": "1000", "n_eff2": "1000",
+                  "cache_key": "demo"})
+    assert response.status_code == 400
+    assert "synthetic demo LD reference" in response.text
+
+
+def test_ldpred3_catalog_evidence_loader(tmp_path, monkeypatch):
+    import hashlib
+    from webapp import catalog_evidence
+    table = tmp_path / "real_gwas_pipeline_catalog.csv"
+    table.write_text(
+        "trait,status,note,source,accession,pmid,n_eff_value,n_final,total_s,"
+        "driver_peak_gb,n_chains,n_chains_kept,infer_burn_in,infer_num_iter,"
+        "ncores,ldpred3_version,cohort_id\n"
+        "good_trait,ok,,paper,GCST1,1,1000,500,2.0,0.1,8,8,200,200,8,v,c\n"
+        "failed_trait,failed,all GWAS variants were removed by sumstats QC,"
+        "paper,GCST2,2,,,,,,,,,,,c\n")
+    digest = hashlib.sha256(table.read_bytes()).hexdigest()
+    (tmp_path / "real_gwas_pipeline_catalog.manifest.json").write_text(
+        json.dumps({"table_sha256": digest,
+                    "row_source": {"good_trait": "catalog-current-profile"},
+                    "settings": {}, "known_limits": []}))
+    (tmp_path / "gwas_catalog_traits.toml").write_text(
+        "[traits.bad]\naccession='GCST3'\ntrait='Bad deposit'\n"
+        "usable=false\nunusable_reason='hits-only deposit'\n")
+    monkeypatch.setenv("BIPRED_WEB_LDPRED3_BENCHMARKS", str(tmp_path))
+    evidence = catalog_evidence.load()
+    assert evidence["table_hash_verified"] is True
+    assert evidence["counts"] == {"good": 1, "bad": 2,
+                                  "preflight_bad": 1, "failed_fit": 1}
+    assert evidence["good"][0]["profile"] == "current"
+
+
 def test_registry_demo_last_and_default(tmp_path):
     from webapp import caches
     reg = caches.registry(tmp_path)
     assert reg[-1]["key"] == "demo"            # real caches precede the demo
     assert caches.default_key(tmp_path) == reg[0]["key"]
     assert caches.cache_path(reg[0]["key"], tmp_path).name.endswith(".npz")
+
+
+def test_cache_hash_sidecar_invalidates_after_mutation(tmp_path):
+    from webapp import caches
+    path = tmp_path / "cache.npz"
+    path.write_bytes(b"before")
+    first = caches.sha256_cached(path)
+    time.sleep(0.002)                 # distinct nanosecond mtime on coarse FSes
+    path.write_bytes(b"after")
+    second = caches.sha256_cached(path)
+    assert first != second

@@ -156,13 +156,15 @@ def _meta_dir(root: Path) -> Path:
 
 REGISTRY_NAME = "accessions.json"
 
-_STRUCTURAL = ("no such study", "no harmonised", "harmonised file "
-               "unavailable")
+_STRUCTURAL = ("no such study", "no harmonised", "harmonised file not found",
+               "no variants overlap", "unmappable columns",
+               "all gwas variants were removed")
 
 
 def worth_recording(message: str) -> bool:
     """Is this resolve() failure a property of the accession, not the network?"""
-    return any(s in str(message) for s in _STRUCTURAL)
+    message = str(message).lower()
+    return any(s in message for s in _STRUCTURAL)
 
 
 def accession_registry(root: Path) -> dict:
@@ -226,6 +228,8 @@ def _study_metadata(accession: str, root: Path) -> dict:
         if exc.code == 404:
             raise ValueError(f"{accession}: no such study in the GWAS Catalog")
         raise ValueError(f"{accession}: catalog lookup failed ({exc})")
+    except (urllib.error.URLError, OSError) as exc:
+        raise ValueError(f"{accession}: catalog lookup failed ({exc})")
     sample = (payload.get("initialSampleSize") or "").strip()
     trait = ((payload.get("diseaseTrait") or {}).get("trait")
              or payload.get("reportedTrait") or accession)
@@ -275,7 +279,10 @@ def resolve(accession: str, root: Path) -> dict:
     if not ACCESSION.match(accession):
         raise ValueError(f"{accession!r}: expected a GCST accession like "
                          "GCST90446168")
-    path = _harmonised_paths(root).get(accession)
+    try:
+        path = _harmonised_paths(root).get(accession)
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError) as exc:
+        raise ValueError(f"{accession}: catalog index lookup failed ({exc})")
     if path is None:
         raise ValueError(f"{accession}: no harmonised summary-statistics "
                          "file in the GWAS Catalog")
@@ -284,8 +291,12 @@ def resolve(accession: str, root: Path) -> dict:
         req = urllib.request.Request(url, method="HEAD")
         with urllib.request.urlopen(req, timeout=60) as resp:
             remote_bytes = int(resp.headers.get("Content-Length", 0))
-    except (urllib.error.HTTPError, urllib.error.URLError, OSError) as exc:
-        raise ValueError(f"{accession}: harmonised file unavailable ({exc})")
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            raise ValueError(f"{accession}: harmonised file not found (404)")
+        raise ValueError(f"{accession}: harmonised-file check failed ({exc})")
+    except (urllib.error.URLError, OSError) as exc:
+        raise ValueError(f"{accession}: harmonised-file check failed ({exc})")
     meta = _study_metadata(accession, root)
     meta["url"] = url
     meta["remote_bytes"] = remote_bytes
@@ -316,7 +327,7 @@ def stream_filter(url_or_path: str, keep_ids: set, dest: Path,
         raw = open(url_or_path, "rb")
     else:
         raw = urllib.request.urlopen(url_or_path, timeout=900)
-    seen = kept = 0
+    seen = kept = n_usable = 0
     with raw:
         stream = _HashingReader(raw, digest, on_bytes)
         with gzip.open(stream, "rt", encoding="utf-8",
@@ -355,6 +366,9 @@ def stream_filter(url_or_path: str, keep_ids: set, dest: Path,
                     out_row["beta"] = _effect_from_row(row, None, se_col,
                                                        odds) \
                         or _effect_from_row(row, zscore, se_col, None)
+                if _is_number(out_row.get("n")) \
+                        and float(out_row["n"]) > 0:
+                    n_usable += 1
                 writer.writerow(out_row)
                 kept += 1
     if kept == 0:
@@ -362,5 +376,8 @@ def stream_filter(url_or_path: str, keep_ids: set, dest: Path,
         raise ValueError("no variants overlap the LD reference — wrong "
                          "genome build or a hits-only deposition?")
     os.replace(tmp, dest)
-    info.update(seen=seen, kept=kept, sha256=digest.hexdigest())
+    n_frac = n_usable / kept
+    info.update(seen=seen, kept=kept, sha256=digest.hexdigest(),
+                per_variant_n_usable_frac=n_frac,
+                has_per_variant_n=bool(info["has_n"] and n_frac >= 0.99))
     return info

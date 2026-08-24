@@ -11,9 +11,15 @@ from __future__ import annotations
 import json
 import math
 import numbers
+import os
+import platform
+import hashlib
+import subprocess
 import sys
 import time
 import traceback
+import warnings
+from datetime import datetime, timezone
 from pathlib import Path
 
 from . import caches, jobs
@@ -62,7 +68,113 @@ def _json_safe(value):
     return value
 
 
+def _sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _ids_sha256(values):
+    """Order-sensitive digest of the fitted variant identifiers."""
+    digest = hashlib.sha256()
+    for value in values:
+        digest.update(str(value).encode("utf-8"))
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _cpu_model():
+    if sys.platform == "darwin":
+        try:
+            return subprocess.check_output(
+                ["sysctl", "-n", "machdep.cpu.brand_string"], text=True,
+                timeout=5).strip()
+        except (OSError, subprocess.SubprocessError):
+            pass
+    if sys.platform.startswith("linux"):
+        try:
+            for line in Path("/proc/cpuinfo").read_text().splitlines():
+                if line.lower().startswith("model name"):
+                    return line.split(":", 1)[1].strip()
+        except OSError:
+            pass
+    return platform.processor() or platform.machine() or "unknown"
+
+
+def _total_memory_gb():
+    try:
+        return round(os.sysconf("SC_PAGE_SIZE") *
+                     os.sysconf("SC_PHYS_PAGES") / 2 ** 30, 2)
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
+def _usage():
+    try:
+        import resource
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        peak = float(usage.ru_maxrss)
+        if sys.platform == "darwin":           # bytes on macOS, KiB on Linux
+            peak /= 2 ** 30
+        else:
+            peak /= 2 ** 20
+        return usage.ru_utime, usage.ru_stime, peak
+    except (ImportError, AttributeError):       # pragma: no cover - Windows
+        return 0.0, 0.0, None
+
+
+def _threadpools():
+    try:
+        from threadpoolctl import threadpool_info
+        return [{key: pool.get(key) for key in
+                 ("user_api", "internal_api", "prefix", "version",
+                  "num_threads")}
+                for pool in threadpool_info()]
+    except ImportError:
+        return []
+
+
+def _git_state():
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=Path(__file__).parent.parent,
+            text=True, timeout=5).strip()
+        dirty = bool(subprocess.check_output(
+            ["git", "status", "--porcelain"],
+            cwd=Path(__file__).parent.parent, text=True, timeout=5).strip())
+        return {"commit": commit, "dirty": dirty}
+    except (OSError, subprocess.SubprocessError):
+        return {"commit": None, "dirty": None}
+
+
+def _warning_rows(stage, caught):
+    return [{"stage": stage, "category": item.category.__name__,
+             "message": str(item.message)} for item in caught]
+
+
+def _warnings_are_critical(rows):
+    return any("do not interpret" in item["message"].lower()
+               or "appears to have diverged" in item["message"].lower()
+               for item in rows)
+
+
+def _n_summary(values, basis):
+    import numpy as np
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values) & (values > 0)]
+    return {"basis": basis, "n_variants": int(len(values)),
+            "min": float(values.min()) if len(values) else None,
+            "median": float(np.median(values)) if len(values) else None,
+            "max": float(values.max()) if len(values) else None}
+
+
 def run(job_dir: Path, job: dict) -> None:
+    wall0 = time.perf_counter()
+    user0, system0, _ = _usage()
+    started_utc = datetime.now(timezone.utc).isoformat()
+    captured_warnings = []
     root = job_dir.parent.parent
     opt = job["options"]
     cache = caches.cache_path(opt["cache_key"], root)
@@ -94,7 +206,19 @@ def run(job_dir: Path, job: dict) -> None:
                     f"({meta['accession']}): download failed: {exc}")
             job["files"][f"sumstats{trait}"] = dest.name
             meta.update(kept=info["kept"], seen=info["seen"],
-                        effect_from=info["effect_from"])
+                        effect_from=info["effect_from"],
+                        sha256=info["sha256"],
+                        has_per_variant_n=info["has_per_variant_n"],
+                        per_variant_n_usable_frac=info[
+                            "per_variant_n_usable_frac"])
+            # Catalog metadata is an advisory scalar fallback.  When the
+            # deposited file has an almost-complete positive per-variant N
+            # column, preserve it unless the submitter explicitly overrode N.
+            if info["has_per_variant_n"] and not opt.get(
+                    f"catalog_n_user_supplied{trait}"):
+                opt[f"n_eff{trait}"] = None
+                opt[f"n_cases{trait}"] = None
+                opt[f"n_controls{trait}"] = None
         jobs.save_job(root, job)
         stage.done("download")
 
@@ -114,15 +238,18 @@ def run(job_dir: Path, job: dict) -> None:
 
     stage.start("harmonize")
     from bipred import prepare_bivariate_sumstats
-    prep = prepare_bivariate_sumstats(
-        str(cache), str(ss1), str(ss2),
-        n_eff1=opt["n_eff1"], n_eff2=opt["n_eff2"],
-        n_cases1=opt["n_cases1"], n_controls1=opt["n_controls1"],
-        n_cases2=opt["n_cases2"], n_controls2=opt["n_controls2"],
-        columns1=opt["columns1"], columns2=opt["columns2"],
-        screen=opt["screen"], screen_rounds=4, screen_window=1000,
-        screen_threshold=29.72, screen_eigenvalue_floor=1e-3,
-        screen_seed=opt["seed"], screen_ncores=1)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        prep = prepare_bivariate_sumstats(
+            str(cache), str(ss1), str(ss2),
+            n_eff1=opt["n_eff1"], n_eff2=opt["n_eff2"],
+            n_cases1=opt["n_cases1"], n_controls1=opt["n_controls1"],
+            n_cases2=opt["n_cases2"], n_controls2=opt["n_controls2"],
+            columns1=opt["columns1"], columns2=opt["columns2"],
+            screen=opt["screen"], screen_rounds=4, screen_window=1000,
+            screen_threshold=29.72, screen_eigenvalue_floor=1e-3,
+            screen_seed=opt["seed"], screen_ncores=1)
+    captured_warnings.extend(_warning_rows("harmonize", caught))
     try:
         # Top-level scalar counts drive the status page; the nested per-trait
         # QC and harmonization logs feed the results page's per-step report.
@@ -145,24 +272,32 @@ def run(job_dir: Path, job: dict) -> None:
         from bipred.ldsc import ldsc_rg
         from ldpred3 import ld_scores
         try:
-            ell = ld_scores(prep.blocks)
-            r = ldsc_rg(prep.beta_hat1, prep.beta_hat2, ell,
-                        prep.n_eff1, prep.n_eff2)
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                ell = ld_scores(prep.blocks)
+                r = ldsc_rg(prep.beta_hat1, prep.beta_hat2, ell,
+                            prep.n_eff1, prep.n_eff2)
+            captured_warnings.extend(_warning_rows("ldsc", caught))
             ldsc_out = {"rg": float(r.rg), "rg_se": float(r.rg_se),
                         "gcov": float(r.gcov),
                         "gcov_intercept": float(r.gcov_intercept),
-                        "h2": _to_float_list(r.h2)}
+                        "h2": _to_float_list(r.h2),
+                        "scope": "unfiltered fitted-panel moment diagnostic"}
         except Exception as exc:                # LDSC is a bonus; fit decides
             ldsc_out = {"error": str(exc)}
         stage.done("ldsc")
 
         stage.start("fit")
         from bipred import ldpred3_auto_bivariate_blocks
-        res = ldpred3_auto_bivariate_blocks(
-            prep.blocks, prep.beta_hat1, prep.beta_hat2,
-            prep.n_eff1, prep.n_eff2,
-            seed=opt["seed"], burn_in=opt["burn_in"],
-            num_iter=opt["num_iter"], ncores=1)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res = ldpred3_auto_bivariate_blocks(
+                prep.blocks, prep.beta_hat1, prep.beta_hat2,
+                prep.n_eff1, prep.n_eff2,
+                cross_corr=opt.get("cross_corr", 0.0),
+                seed=opt["seed"], burn_in=opt["burn_in"],
+                num_iter=opt["num_iter"], ncores=1)
+        captured_warnings.extend(_warning_rows("fit", caught))
         mixer = {key: (_to_float_list(value) if isinstance(value, tuple)
                        else float(value))
                  for key, value in res.mixer.items()}
@@ -190,16 +325,20 @@ def run(job_dir: Path, job: dict) -> None:
                     (g[:, 1] / np.sqrt(g[:, 0] * g[:, 2])).std())
         stage.done("fit")
 
+        critical = _warnings_are_critical(captured_warnings)
         written = []
-        if opt["weights"]:
+        if opt["weights"] and not critical:
             stage.start("weights")
             common = dict(id=prep.id, chrom=prep.chrom, pos=prep.pos,
                           effect_allele=prep.effect_allele,
                           other_allele=prep.other_allele)
-            for trait in (1, 2):
-                name = f"weights{trait}.tsv"
-                res.write_weights(job_dir / name, trait=trait, **common)
-                written.append(name)
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                for trait in (1, 2):
+                    name = f"weights{trait}.tsv"
+                    res.write_weights(job_dir / name, trait=trait, **common)
+                    written.append(name)
+            captured_warnings.extend(_warning_rows("weights", caught))
             stage.done("weights")
     finally:
         prep.close()
@@ -207,27 +346,99 @@ def run(job_dir: Path, job: dict) -> None:
     import bipred
     import ldpred3
     import numpy
+    user1, system1, peak_gb = _usage()
+
+    def n_basis(trait):
+        meta = opt.get(f"catalog{trait}") or {}
+        if meta.get("has_per_variant_n") and not opt.get(
+                f"catalog_n_user_supplied{trait}"):
+            return ("per-variant n column in the harmonised GWAS Catalog "
+                    f"file ({meta.get('per_variant_n_usable_frac', 0):.1%} "
+                    "usable among retained rows)")
+        if opt.get(f"n_eff{trait}") is not None:
+            suffix = " (explicit user override)" if opt.get(
+                f"catalog_n_user_supplied{trait}") else ""
+            return f"constant effective N{suffix}"
+        if opt.get(f"n_cases{trait}") is not None:
+            return "4/(1/n_cases + 1/n_controls)"
+        return "per-variant N column detected in the uploaded file"
+
+    n_info = {
+        "trait1": _n_summary(prep.n_eff1, n_basis(1)),
+        "trait2": _n_summary(prep.n_eff2, n_basis(2)),
+    }
+    diagnostics = {
+        "valid_for_interpretation": not critical,
+        "critical": critical,
+        "warnings": captured_warnings,
+        "weights_withheld": bool(opt["weights"] and critical),
+    }
+    thread_vars = ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS",
+                   "MKL_NUM_THREADS", "NUMBA_NUM_THREADS",
+                   "VECLIB_MAXIMUM_THREADS", "NUMEXPR_NUM_THREADS")
     result = {
         "joint": joint,
         "ldsc": ldsc_out,
         "munge": munge,
         "weights": written,
+        "diagnostics": diagnostics,
         "provenance": {
             "bipred": bipred.__version__,
             "ldpred3": ldpred3.__version__,
             "numpy": numpy.__version__,
+            "python": platform.python_version(),
             "cache_key": opt["cache_key"],
             "cache_sha256": caches.sha256_cached(cache),
             "seed": opt["seed"],
             "burn_in": opt["burn_in"],
             "num_iter": opt["num_iter"],
+            "cross_corr": opt.get("cross_corr", 0.0),
             "screen": opt["screen"],
+            "screen_parameters": {
+                "rounds": 4, "window": 1000, "threshold": 29.72,
+                "eigenvalue_floor": 1e-3, "seed": opt["seed"],
+                "ncores": 1,
+            },
+            "fitted_variant_ids_sha256": _ids_sha256(prep.id),
+            "sample_size": n_info,
+            "inputs": {
+                f"trait{trait}": {
+                    "filename": job["files"][f"sumstats{trait}"],
+                    "sha256": _sha256(job_dir / job["files"][
+                        f"sumstats{trait}"]),
+                    "column_overrides": opt.get(f"columns{trait}", {}),
+                } for trait in (1, 2)
+            },
+            "compute": {
+                "cpu_model": _cpu_model(),
+                "logical_cpus": os.cpu_count(),
+                "memory_gb": _total_memory_gb(),
+                "platform": platform.platform(),
+                "machine": platform.machine(),
+                "python_executable": sys.executable,
+                "thread_limits": {key: os.environ.get(key)
+                                  for key in thread_vars},
+                "threadpools": _threadpools(),
+                "runner_processes": 1,
+                "sampler_ncores": 1,
+            },
+            "resources": {
+                "wall_s": round(time.perf_counter() - wall0, 3),
+                "user_cpu_s": round(user1 - user0, 3),
+                "system_cpu_s": round(system1 - system0, 3),
+                "peak_rss_gb": round(peak_gb, 3) if peak_gb is not None else None,
+            },
+            "source": _git_state(),
+            "started_utc": started_utc,
+            "finished_utc": datetime.now(timezone.utc).isoformat(),
             "stages": job["stages"],
         },
     }
     catalog = {f"trait{t}": {k: opt[f"catalog{t}"].get(k) for k in
                              ("accession", "trait", "pmid", "n_basis",
-                              "kept", "seen", "effect_from")}
+                              "kept", "seen", "effect_from", "sha256",
+                              "has_per_variant_n",
+                              "per_variant_n_usable_frac")}
                for t in (1, 2) if opt.get(f"catalog{t}")}
     if catalog:
         result["provenance"]["catalog"] = catalog
@@ -244,6 +455,7 @@ def main(argv=None) -> int:
         return 2
     job["status"] = "running"
     job["started"] = time.time()
+    job["pid"] = os.getpid()
     jobs.save_job(root, job)
     try:
         run(job_dir, job)

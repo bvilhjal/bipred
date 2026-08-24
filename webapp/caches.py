@@ -36,8 +36,8 @@ def demo_cache_dir(root: Path | None = None) -> Path:
     return out
 
 
-def registry(root: Path | None = None) -> list[dict]:
-    """Available caches as ``{key, label, path}`` dicts; real caches first."""
+def real_registry(root: Path | None = None) -> list[dict]:
+    """Real analysis caches, excluding the deliberately synthetic demo."""
     out = []
     if UKB_EUR_PATH.exists():
         out.append({"key": UKB_EUR_KEY, "label": UKB_EUR_LABEL,
@@ -54,6 +54,12 @@ def registry(root: Path | None = None) -> list[dict]:
             raise ValueError(
                 f"BIPRED_WEB_CACHES entry {entry!r}: file does not exist")
         out.append({"key": name, "label": name, "path": path})
+    return out
+
+
+def registry(root: Path | None = None) -> list[dict]:
+    """All caches as ``{key, label, path}``; the demo is always last."""
+    out = real_registry(root)
     out.append({
         "key": "demo",
         "label": "Demo (synthetic, small)",
@@ -75,10 +81,12 @@ def cache_path(key: str, root: Path | None = None) -> Path:
 
 
 def sha256_cached(path: Path) -> str:
-    """Content hash of a cache, memoized in a sidecar (caches are GBs)."""
+    """Content hash, reusing a sidecar only while it is newer than the cache."""
     sidecar = path.with_name(path.name + ".sha256")
-    if sidecar.exists():
-        return sidecar.read_text().strip()
+    if sidecar.exists() and sidecar.stat().st_mtime_ns >= path.stat().st_mtime_ns:
+        value = sidecar.read_text().strip().lower()
+        if len(value) == 64 and all(c in "0123456789abcdef" for c in value):
+            return value
     digest = hashlib.sha256()
     with open(path, "rb") as fh:
         for chunk in iter(lambda: fh.read(1 << 24), b""):

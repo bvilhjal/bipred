@@ -33,7 +33,7 @@ from fastapi.templating import Jinja2Templates
 # preview and the runner's detect_columns can never drift apart.
 from ldpred3.sumstats import _ALIASES as SUMSTATS_ALIASES
 
-from . import caches, demo, gwascat, jobs
+from . import caches, catalog_evidence, demo, gwascat, jobs
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = Path(__file__).parent / "static"
@@ -88,19 +88,36 @@ def _float_or_none(value, name):
         out = float(value)
     except ValueError:
         raise ValueError(f"{name}: expected a number, got {value!r}")
-    if not (out > 0):
+    if not math.isfinite(out) or not (out > 0):
         raise ValueError(f"{name}: must be positive, got {value!r}")
     return out
 
 
-def _int_or_default(value, default, name):
+def _bounded_int(value, default, name, minimum, maximum):
     value = (value or "").strip()
     if not value:
         return default
     try:
-        return int(value)
+        out = int(value)
     except ValueError:
         raise ValueError(f"{name}: expected an integer, got {value!r}")
+    if not minimum <= out <= maximum:
+        raise ValueError(
+            f"{name}: must be between {minimum:,} and {maximum:,}")
+    return out
+
+
+def _cross_corr(value):
+    value = (value or "").strip()
+    if not value:
+        return 0.0
+    try:
+        out = float(value)
+    except ValueError:
+        raise ValueError(f"cross_corr: expected a number, got {value!r}")
+    if not math.isfinite(out) or not -1.0 < out < 1.0:
+        raise ValueError("cross_corr: must be finite and strictly between -1 and 1")
+    return out
 
 
 def parse_columns(text):
@@ -119,7 +136,7 @@ def parse_columns(text):
 
 
 def _sample_size_options(form, trait):
-    """Either an effective N or a case/control split for one trait."""
+    """Effective N, case/control counts, or no scalar (use an N column)."""
     n_eff = _float_or_none(form.get(f"n_eff{trait}"), f"n_eff{trait}")
     n_cases = _float_or_none(form.get(f"n_cases{trait}"), f"n_cases{trait}")
     n_controls = _float_or_none(
@@ -127,9 +144,9 @@ def _sample_size_options(form, trait):
     if n_eff is not None and (n_cases is not None or n_controls is not None):
         raise ValueError(
             f"trait {trait}: give either effective N or cases/controls")
-    if n_eff is None and (n_cases is None or n_controls is None):
+    if n_eff is None and ((n_cases is None) != (n_controls is None)):
         raise ValueError(
-            f"trait {trait}: give an effective N, or cases and controls")
+            f"trait {trait}: give both cases and controls, or leave both blank")
     return n_eff, n_cases, n_controls
 
 
@@ -154,9 +171,12 @@ async def _save_upload(upload: UploadFile, dest: Path, cap: int) -> None:
 
 def _index_context(app, error=None, form=None) -> dict:
     """Template context for the upload form (initial render and re-render)."""
-    return {"caches": caches.registry(app.state.root),
-            "default_key": caches.default_key(app.state.root),
+    real_caches = caches.real_registry(app.state.root)
+    return {"caches": real_caches,
+            "default_key": real_caches[0]["key"] if real_caches else "",
+            "has_real_cache": bool(real_caches),
             "max_mb": app.state.config["max_upload"] // (1024 * 1024),
+            "ttl_days": app.state.config["ttl_days"],
             "aliases": SUMSTATS_ALIASES,
             "error": error,
             "form": form}
@@ -180,13 +200,26 @@ def _shown_stages(job) -> list:
 def _launch(app, job) -> None:
     root = app.state.root
     job_dir = jobs.job_dir(root, job["id"])
+    # Persist the claim before Popen.  Without this transition a second sweep
+    # (or a future multi-worker supervisor) can launch the same queued job.
+    claimed = jobs.update_job(root, job["id"], status="launching",
+                              started=time.time())
+    if claimed is None:
+        return
     env = dict(os.environ)
     env.update(_THREAD_PINS)
     env["PYTHONPATH"] = str(REPO_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
     log = open(job_dir / "runner.log", "ab")
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "webapp.runner", str(job_dir)],
-        stdout=log, stderr=subprocess.STDOUT, cwd=REPO_ROOT, env=env)
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "webapp.runner", str(job_dir)],
+            stdout=log, stderr=subprocess.STDOUT, cwd=REPO_ROOT, env=env)
+    except Exception as exc:
+        jobs.update_job(root, job["id"], status="failed",
+                        finished=time.time(), error=f"could not start fit: {exc}")
+        raise
+    finally:
+        log.close()
     app.state.procs[job["id"]] = proc
 
 
@@ -212,7 +245,7 @@ def _record_catalog_outcome(root, job) -> None:
             gwascat.record_accession(root, accession, True,
                                      kept=meta.get("kept"),
                                      seen=meta.get("seen"), **base)
-        elif accession and accession in error:
+        elif accession and accession in error and gwascat.worth_recording(error):
             gwascat.record_accession(root, accession, False,
                                      reason=error[:300], **base)
 
@@ -225,7 +258,7 @@ def _sweep_once(app) -> None:
             continue
         del app.state.procs[job_id]
         job = jobs.load_job(root, job_id)
-        if job is not None and job["status"] == "running":
+        if job is not None and job["status"] in ("launching", "running"):
             # The runner sets done/failed itself before exiting; reaching this
             # branch means it died without writing (OOM kill, segfault).
             jobs.update_job(root, job_id, status="failed",
@@ -261,14 +294,20 @@ async def _supervisor(app):
 
 @asynccontextmanager
 async def _lifespan(app):
+    jobs.recover_interrupted_jobs(app.state.root)
     demo.ensure_demo(app.state.root)
     task = asyncio.create_task(_supervisor(app))
     try:
         yield
     finally:
         task.cancel()
-        for proc in app.state.procs.values():
+        for proc in list(app.state.procs.values()):
             proc.terminate()
+        for proc in list(app.state.procs.values()):
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
 
 
 def create_app() -> FastAPI:
@@ -296,8 +335,13 @@ def create_app() -> FastAPI:
             cache_key: str = Form(""),
             seed: str = Form("0"), burn_in: str = Form("200"),
             num_iter: str = Form("200"),
+            cross_corr: str = Form("0"),
             columns1: str = Form(""), columns2: str = Form(""),
             gcst1: str = Form(""), gcst2: str = Form(""),
+            catalog_auto_n1: str = Form(""),
+            catalog_auto_n2: str = Form(""),
+            catalog_auto_label1: str = Form(""),
+            catalog_auto_label2: str = Form(""),
             screen: str = Form(""), weights: str = Form("")):
         # Raw values kept for re-rendering the form when validation fails.
         form = {"label1": label1, "label2": label2,
@@ -305,11 +349,21 @@ def create_app() -> FastAPI:
                 "n_cases1": n_cases1, "n_controls1": n_controls1,
                 "n_cases2": n_cases2, "n_controls2": n_controls2,
                 "cache_key": cache_key, "seed": seed, "burn_in": burn_in,
-                "num_iter": num_iter, "columns1": columns1,
+                "num_iter": num_iter, "cross_corr": cross_corr,
+                "columns1": columns1,
                 "columns2": columns2, "gcst1": gcst1, "gcst2": gcst2,
+                "catalog_auto_n1": catalog_auto_n1,
+                "catalog_auto_n2": catalog_auto_n2,
+                "catalog_auto_label1": catalog_auto_label1,
+                "catalog_auto_label2": catalog_auto_label2,
                 "screen": screen, "weights": weights}
         try:
-            cache_key = cache_key or caches.default_key(app.state.root)
+            if not cache_key:
+                raise ValueError("No real LD reference is configured on this server")
+            if cache_key == "demo":
+                raise ValueError(
+                    "The synthetic demo LD reference cannot be used with uploads; "
+                    "use Run demo instead")
             options = {"cache_key": cache_key}
             labels = {}
             for trait, upload, accession in (
@@ -325,6 +379,12 @@ def create_app() -> FastAPI:
                         f"trait {trait}: upload a file or give a GWAS "
                         "Catalog accession (GCST…)")
                 if accession:
+                    n_fields_present = any(
+                        form[f"n_{k}{trait}"].strip()
+                        for k in ("eff", "cases", "controls"))
+                    n_was_autofilled = form.get(
+                        f"catalog_auto_n{trait}") == "1"
+                    n_user_supplied = n_fields_present and not n_was_autofilled
                     try:
                         meta = await asyncio.to_thread(
                             gwascat.resolve, accession, app.state.root)
@@ -337,18 +397,33 @@ def create_app() -> FastAPI:
                     options[f"gcst{trait}"] = accession
                     options[f"catalog{trait}"] = meta
                     default_label = f"Trait {trait}"
-                    if not form[f"label{trait}"].strip() \
-                            or form[f"label{trait}"].strip() == default_label:
+                    if (not form[f"label{trait}"].strip()
+                            or form[f"label{trait}"].strip() == default_label
+                            or form.get(f"catalog_auto_label{trait}") == "1"):
                         form[f"label{trait}"] = meta["trait"]
+                        form[f"catalog_auto_label{trait}"] = "1"
                     # Fill the sample size from catalog metadata only when
                     # the user left every N field for this trait empty.
-                    if not any(form[f"n_{k}{trait}"].strip()
-                               for k in ("eff", "cases", "controls")):
+                    if not n_fields_present or n_was_autofilled:
+                        for key in ("eff", "cases", "controls"):
+                            form[f"n_{key}{trait}"] = ""
                         if meta.get("n_cases") and meta.get("n_controls"):
                             form[f"n_cases{trait}"] = str(meta["n_cases"])
                             form[f"n_controls{trait}"] = str(meta["n_controls"])
                         elif meta.get("n_eff"):
                             form[f"n_eff{trait}"] = str(meta["n_eff"])
+                        form[f"catalog_auto_n{trait}"] = "1"
+                    options[f"catalog_n_user_supplied{trait}"] = n_user_supplied
+                elif form.get(f"catalog_auto_n{trait}") == "1":
+                    # The user switched from a looked-up accession to a file;
+                    # stale advisory Catalog N must not override its N column.
+                    for key in ("eff", "cases", "controls"):
+                        form[f"n_{key}{trait}"] = ""
+                    form[f"catalog_auto_n{trait}"] = ""
+                if not accession and form.get(
+                        f"catalog_auto_label{trait}") == "1":
+                    form[f"label{trait}"] = f"Trait {trait}"
+                    form[f"catalog_auto_label{trait}"] = ""
                 labels[f"trait{trait}"] = form[f"label{trait}"].strip() \
                     or f"Trait {trait}"
             ne1, nc1, nco1 = _sample_size_options(form, 1)
@@ -356,9 +431,12 @@ def create_app() -> FastAPI:
             options.update({
                 "n_eff1": ne1, "n_cases1": nc1, "n_controls1": nco1,
                 "n_eff2": ne2, "n_cases2": nc2, "n_controls2": nco2,
-                "seed": _int_or_default(seed, 0, "seed"),
-                "burn_in": _int_or_default(burn_in, 200, "burn-in"),
-                "num_iter": _int_or_default(num_iter, 200, "iterations"),
+                "seed": _bounded_int(seed, 0, "seed", 0, 2 ** 32 - 1),
+                "burn_in": _bounded_int(
+                    burn_in, 200, "burn-in", 0, 100_000),
+                "num_iter": _bounded_int(
+                    num_iter, 200, "iterations", 1, 100_000),
+                "cross_corr": _cross_corr(cross_corr),
                 "columns1": parse_columns(columns1),
                 "columns2": parse_columns(columns2),
                 "screen": bool(screen),
@@ -372,7 +450,7 @@ def create_app() -> FastAPI:
                 status_code=400)
 
         job = jobs.create_job(
-            app.state.root, options=options, labels=labels)
+            app.state.root, options=options, labels=labels, status="staging")
         job_dir = jobs.job_dir(app.state.root, job["id"])
         try:
             for upload, key, prefix in (
@@ -390,19 +468,39 @@ def create_app() -> FastAPI:
                 request, "index.html",
                 _index_context(app, error=str(exc), form=form),
                 status_code=400)
+        job["status"] = "queued"
         jobs.save_job(app.state.root, job)
         return RedirectResponse(f"/jobs/{job['id']}", status_code=303)
 
     @app.get("/catalog", response_class=HTMLResponse)
     def catalog_track_record(request: Request):
-        """Accessions observed so far: which worked, which did not, why not."""
+        """Canonical LDpred3 evidence plus accessions observed by this app."""
+        evidence = catalog_evidence.load()
         registry = gwascat.accession_registry(app.state.root)
-        entries = sorted(registry.items(),
-                         key=lambda kv: (kv[1].get("trait") or "").lower())
-        works = [(acc, e) for acc, e in entries if e.get("works")]
-        failed = [(acc, e) for acc, e in entries if not e.get("works")]
+        good = {e["accession"]: dict(e) for e in evidence.get("good", [])}
+        bad = {e["accession"]: dict(e) for e in evidence.get("bad", [])}
+        for accession, local in registry.items():
+            canonical_good = accession in good
+            entry = good.get(accession) or bad.get(accession) or {
+                "accession": accession, "profile": "server",
+                "evidence": "observed by this bipred server"}
+            entry.update({key: value for key, value in local.items()
+                          if value is not None})
+            entry["server_observed"] = True
+            if local.get("works"):
+                if not canonical_good:
+                    entry["evidence"] = "completed by this bipred server"
+                    entry["profile"] = "server"
+                    entry.pop("reason", None)
+                bad.pop(accession, None)
+                good[accession] = entry
+            elif accession not in good:
+                bad[accession] = entry
+        works = sorted(good.values(), key=lambda e: (e.get("trait") or "").lower())
+        failed = sorted(bad.values(), key=lambda e: (e.get("trait") or "").lower())
         return TEMPLATES.TemplateResponse(
-            request, "catalog.html", {"works": works, "failed": failed})
+            request, "catalog.html", {"works": works, "failed": failed,
+                                      "evidence": evidence})
 
     @app.get("/catalog/lookup")
     def catalog_lookup(accession: str = ""):
@@ -410,7 +508,8 @@ def create_app() -> FastAPI:
         try:
             meta = gwascat.resolve(accession, app.state.root)
         except ValueError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=404)
+            status = 404 if gwascat.worth_recording(exc) else 503
+            return JSONResponse({"error": str(exc)}, status_code=status)
         return {key: meta.get(key) for key in
                 ("accession", "trait", "title", "pmid", "n_eff",
                  "n_cases", "n_controls", "n_basis", "remote_bytes")}
@@ -424,17 +523,20 @@ def create_app() -> FastAPI:
             "n_eff1": truth["n_eff1"], "n_cases1": None, "n_controls1": None,
             "n_eff2": truth["n_eff2"], "n_cases2": None, "n_controls2": None,
             "seed": 0, "burn_in": 200, "num_iter": 200,
+            "cross_corr": 0.0,
             "columns1": {}, "columns2": {},
             "screen": False, "weights": True,
         }
         job = jobs.create_job(
             app.state.root, options=options,
-            labels={"trait1": "Demo trait 1", "trait2": "Demo trait 2"})
+            labels={"trait1": "Demo trait 1", "trait2": "Demo trait 2"},
+            status="staging")
         job_dir = jobs.job_dir(app.state.root, job["id"])
         for trait in (1, 2):
             shutil.copy(meta / f"trait{trait}.tsv",
                         job_dir / f"trait{trait}.tsv")
             job["files"][f"sumstats{trait}"] = f"trait{trait}.tsv"
+        job["status"] = "queued"
         jobs.save_job(app.state.root, job)
         return RedirectResponse(f"/jobs/{job['id']}", status_code=303)
 
@@ -449,7 +551,7 @@ def create_app() -> FastAPI:
             request, "job.html",
             {"job": job, "munge": _read_munge(app.state.root, job_id),
              "stages": _shown_stages(job),
-             "running": job["status"] in ("queued", "running")})
+             "running": job["status"] in ("queued", "launching", "running")})
 
     @app.get("/jobs/{job_id}/status")
     def job_status_json(job_id: str):

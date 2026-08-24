@@ -3,26 +3,31 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>bipred — two-trait genetic correlation</title>
+<meta name="description" content="bipred two-trait genetic-correlation and polygenic-overlap analysis">
+<title>{% block title %}bipred — two-trait genetic correlation{% endblock %}</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<header>
-  <a class="brand" href="/">bipred</a>
-  <span class="tag">two-trait SNP heritability, genetic correlation and
-  polygenic overlap</span>
-  <nav>
-    <a href="/"{% if request.url.path == "/" %} class="active"{% endif %}>New analysis</a>
-    <a href="/catalog"{% if request.url.path == "/catalog" %} class="active"{% endif %}>Catalog accessions</a>
-    <a href="/demo">Run demo</a>
-  </nav>
+<a class="skip-link" href="#content">Skip to content</a>
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="/" aria-label="bipred home">
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i></span>
+      <span>bipred</span>
+    </a>
+    <span class="tag">two-trait polygenic inference</span>
+    <nav aria-label="Primary navigation">
+      <a href="/"{% if request.url.path == "/" %} class="active" aria-current="page"{% endif %}>New analysis</a>
+      <a href="/catalog"{% if request.url.path == "/catalog" %} class="active" aria-current="page"{% endif %}>Catalog evidence</a>
+      <a href="/demo">Run demo</a>
+    </nav>
+  </div>
 </header>
-<main>{% block content %}{% endblock %}</main>
+<main id="content">{% block content %}{% endblock %}</main>
 <footer>
-Estimates are produced by the bipred/ldpred3 reimplementations, not the
-original LDSC or MiXeR programs; see the benchmark guide in the repository
-for what has and has not been validated. Uploads and results are deleted
-automatically after a retention period.
+  <div class="footer-inner"><strong>bipred</strong> uses the bipred/LDpred3
+  implementations, not the original LDSC or MiXeR programs. Results require
+  diagnostic review; completion is not a scientific validation certificate.</div>
 </footer>
 {% block scripts %}{% endblock %}
 </body>

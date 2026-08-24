@@ -1,8 +1,33 @@
 {% extends "base.html" %}
+{% block title %}{{ job.labels.trait1 }} × {{ job.labels.trait2 }} — bipred{% endblock %}
 {% block content %}
+{% set invalid = res.diagnostics is defined and res.diagnostics.critical %}
 <h1>{{ job.labels.trait1 }} × {{ job.labels.trait2 }}</h1>
 <p class="muted">Job {{ job.id }} — joint bipred fit on
 {{ res.munge.n_kept }} harmonized variants.</p>
+
+{% if invalid %}
+<div class="alert alert-danger" role="alert">
+<strong>Fit validity: do not interpret this fit.</strong>
+<p>bipred emitted a critical convergence or plausibility warning. Headline
+estimates are quarantined below and requested weight files were withheld.</p>
+<ul>{% for warning in res.diagnostics.warnings %}<li><strong>{{ warning.stage }}:</strong>
+{{ warning.message }}</li>{% endfor %}</ul>
+</div>
+<details class="diagnostic-estimates"><summary>Show quarantined diagnostic estimates</summary>
+{% elif res.diagnostics is defined %}
+<div class="alert alert-success"><strong>Fit validity: no critical warning was emitted.</strong>
+<p>This is necessary, not sufficient, evidence. One chain and posterior
+variation across autocorrelated sweeps do not establish convergence.</p>
+{% if res.diagnostics.warnings %}<details><summary>Non-critical runtime warnings ({{ res.diagnostics.warnings|length }})</summary>
+<ul>{% for warning in res.diagnostics.warnings %}<li><strong>{{ warning.stage }}:</strong>
+{{ warning.message }}</li>{% endfor %}</ul></details>{% endif %}</div>
+{% endif %}
+
+<div class="alert alert-info compact-alert"><strong>Sampling-error assumption.</strong>
+<p>cross_corr = {{ res.provenance.cross_corr if res.provenance.cross_corr is defined else 0 }}.
+Zero assumes no correlated sampling error between traits; the fitted-panel
+moment intercept was not substituted automatically.</p></div>
 
 <h2>Genetic correlation and heritability (joint fit)</h2>
 <table>
@@ -13,24 +38,29 @@
     <td class="num">{{ res.joint.h2[0]|f3 }}{% if res.joint.h2_sd is defined and res.joint.h2_sd %} ± {{ res.joint.h2_sd[0]|f3 }}{% endif %}</td></tr>
 <tr><td>SNP heritability, {{ job.labels.trait2 }}</td>
     <td class="num">{{ res.joint.h2[1]|f3 }}{% if res.joint.h2_sd is defined and res.joint.h2_sd %} ± {{ res.joint.h2_sd[1]|f3 }}{% endif %}</td></tr>
-<tr><td>Causal fraction (per-trait average)</td>
+<tr><td>Model-implied union-causal fraction (π10 + π01 + π11)</td>
     <td class="num">{{ "%.4f"|format(res.joint.p) }}</td></tr>
 </table>
 {% if res.joint.rg_sd is defined and res.joint.rg_sd is not none %}
-<p class="muted">± is the posterior SD across the
-{{ res.joint.retained_iterations }} retained sampler sweeps.</p>
+<p class="muted">± is posterior SD across {{ res.joint.retained_iterations }}
+retained, autocorrelated sampler sweeps. It is not a frequentist standard
+error or a convergence certificate.</p>
 {% endif %}
 
-<h2>Polygenic overlap (MiXeR-style)</h2>
+<h2>Model-implied polygenic overlap (MiXeR-style summary)</h2>
+<div class="alert alert-warning compact-alert"><strong>Calibration caveat.</strong>
+<p>These are mixture-model summaries on the fitted variant panel. Absolute
+“causal variant” counts are not identified biological totals and can be
+inflated; interpret ratios and sensitivity across specifications first.</p></div>
 <table>
 <tr><th>Quantity</th><th class="num">Estimate</th></tr>
 <tr><td>Polygenicity, {{ job.labels.trait1 }} / {{ job.labels.trait2 }}</td>
     <td class="num">{{ "%.4f"|format(res.joint.mixer.polygenicity[0]) }} /
         {{ "%.4f"|format(res.joint.mixer.polygenicity[1]) }}</td></tr>
-<tr><td>Causal variants, {{ job.labels.trait1 }} / {{ job.labels.trait2 }}</td>
+<tr><td>Model-implied associated variants, {{ job.labels.trait1 }} / {{ job.labels.trait2 }}</td>
     <td class="num">{{ "%.0f"|format(res.joint.mixer.n_causal[0]) }} /
         {{ "%.0f"|format(res.joint.mixer.n_causal[1]) }}</td></tr>
-<tr><td>Shared causal variants</td>
+<tr><td>Model-implied shared associated variants</td>
     <td class="num">{{ "%.0f"|format(res.joint.mixer.n_shared) }}</td></tr>
 <tr><td>Fraction of the smaller trait shared</td>
     <td class="num">{{ "%.3f"|format(res.joint.mixer.frac_shared) }}</td></tr>
@@ -39,6 +69,7 @@
 <tr><td>r<sub>g</sub> implied by the overlap</td>
     <td class="num">{{ "%.3f"|format(res.joint.mixer.rg_from_overlap) }}</td></tr>
 </table>
+{% if invalid %}</details>{% endif %}
 
 <h2>QC and harmonization</h2>
 {% if res.munge.trait1 is defined and res.munge.trait1 %}
@@ -113,7 +144,11 @@ are available. Run a new job for the full breakdown.</p>
 {% endif %}
 </table>
 
-<h2>Cross-trait LD Score regression (moment estimator)</h2>
+<h2>Unfiltered fitted-panel LDSC-style moment diagnostic</h2>
+<div class="alert alert-warning compact-alert"><strong>Not canonical LDSC.</strong>
+<p>This one-step diagnostic uses LD scores and M from the intersected fitted
+panel, without the standard high-χ² or long-range-LD exclusions. Use it as a
+within-run flag, not a like-for-like external LDSC comparison.</p></div>
 {% if res.ldsc.error %}
 <p class="muted">The LDSC stage did not converge on this panel:
 {{ res.ldsc.error }}</p>
@@ -122,7 +157,7 @@ are available. Run a new job for the full breakdown.</p>
 <tr><th>Quantity</th><th class="num">Estimate</th></tr>
 <tr><td>r<sub>g</sub></td>
     <td class="num">{{ res.ldsc.rg|f3 }} ± {{ res.ldsc.rg_se|f3 }}</td></tr>
-<tr><td>Intercept (sample overlap / confounding)</td>
+<tr><td>Cross-trait intercept (sampling correlation and/or confounding)</td>
     <td class="num">{{ res.ldsc.gcov_intercept|f3 }}</td></tr>
 <tr><td>h², {{ job.labels.trait1 }} / {{ job.labels.trait2 }}</td>
     <td class="num">{{ res.ldsc.h2[0]|f3 }} / {{ res.ldsc.h2[1]|f3 }}</td></tr>
@@ -140,30 +175,66 @@ harmonization counts</li>
 — posterior-mean effects, {{ job.labels["trait" ~ loop.index] }}
 (score with <code>scaling="target"</code>)</li>
 {% endfor %}
+{% if res.diagnostics is defined and res.diagnostics.weights_withheld %}
+<li><strong>Weight files withheld:</strong> the fit emitted a critical warning.</li>
+{% endif %}
 </ul>
 
 <h2>Provenance</h2>
 <table>
-<tr><td>bipred / ldpred3 / numpy</td>
+<tr><th scope="row">bipred / ldpred3 / numpy</th>
 <td>{{ res.provenance.bipred }} / {{ res.provenance.ldpred3 }} /
 {{ res.provenance.numpy }}</td></tr>
-<tr><td>LD reference</td><td>{{ res.provenance.cache_key }}
+<tr><th scope="row">LD reference</th><td>{{ res.provenance.cache_key }}
 (sha256 {{ res.provenance.cache_sha256[:12] }}…)</td></tr>
-<tr><td>Seed / burn-in / iterations</td>
+<tr><th scope="row">Seed / burn-in / iterations</th>
 <td>{{ res.provenance.seed }} / {{ res.provenance.burn_in }} /
 {{ res.provenance.num_iter }}</td></tr>
-<tr><td>LD-consistency screen</td>
-<td>{{ "on" if res.provenance.screen else "off" }}</td></tr>
+<tr><th scope="row">Cross-trait sampling-error correlation</th>
+<td>{{ res.provenance.cross_corr if res.provenance.cross_corr is defined else 0 }}</td></tr>
+<tr><th scope="row">LD-consistency screen</th>
+<td>{{ "on" if res.provenance.screen else "off" }}{% if res.provenance.screen_parameters is defined and res.provenance.screen %}; rounds={{ res.provenance.screen_parameters.rounds }}, window={{ res.provenance.screen_parameters.window }}, threshold={{ res.provenance.screen_parameters.threshold }}, eigenvalue floor={{ res.provenance.screen_parameters.eigenvalue_floor }}{% endif %}{% if res.provenance.fitted_variant_ids_sha256 is defined %}; fitted-ID sha256 <code>{{ res.provenance.fitted_variant_ids_sha256[:12] }}…</code>{% endif %}</td></tr>
+{% if res.provenance.sample_size is defined %}
+<tr><th scope="row">Effective-N basis</th><td>
+{% for key, n in res.provenance.sample_size.items() %}
+{{ job.labels[key] }}: {{ n.basis }}; median {{ "{:,.1f}".format(n.median) }},
+range {{ "{:,.1f}".format(n.min) }}–{{ "{:,.1f}".format(n.max) }}{% if not loop.last %}<br>{% endif %}
+{% endfor %}</td></tr>
+{% endif %}
 {% if res.provenance.catalog %}
-<tr><td>GWAS Catalog</td><td>
+<tr><th scope="row">GWAS Catalog</th><td>
 {% for c in res.provenance.catalog.values() %}
 {{ c.accession }} — {{ c.trait }}{% if c.pmid %} (PMID
 {{ c.pmid }}){% endif %}; {{ c.kept }} of {{ c.seen }} variants kept,
-effect from {{ c.effect_from }}{% if c.n_basis %}; N: {{ c.n_basis }}{% endif %}{% if not loop.last %}<br>{% endif %}
+effect from {{ c.effect_from }}{% if c.sha256 %}; source sha256
+<code>{{ c.sha256[:12] }}…</code>{% endif %}{% if c.n_basis %}; metadata N:
+{{ c.n_basis }}{% endif %}{% if c.has_per_variant_n %}; retained per-variant N
+({{ "{:.1%}".format(c.per_variant_n_usable_frac) }} usable){% endif %}{% if not loop.last %}<br>{% endif %}
 {% endfor %}
 </td></tr>
 {% endif %}
-<tr><td>Stage seconds</td>
+{% if res.provenance.inputs is defined %}
+<tr><th scope="row">Input files</th><td>{% for key, item in res.provenance.inputs.items() %}
+{{ job.labels[key] }}: {{ item.filename }}, sha256 <code>{{ item.sha256[:12] }}…</code>{% if item.column_overrides %}, overrides {{ item.column_overrides }}{% endif %}{% if not loop.last %}<br>{% endif %}{% endfor %}</td></tr>
+{% endif %}
+{% if res.provenance.compute is defined %}
+<tr><th scope="row">CPU and memory</th><td>{{ res.provenance.compute.cpu_model }};
+{{ res.provenance.compute.logical_cpus }} logical CPUs;
+{{ res.provenance.compute.memory_gb }} GiB RAM</td></tr>
+<tr><th scope="row">Compute environment</th><td>{{ res.provenance.compute.platform }};
+Python {{ res.provenance.python }}; machine {{ res.provenance.compute.machine }};
+1 runner process, sampler ncores={{ res.provenance.compute.sampler_ncores }}</td></tr>
+<tr><th scope="row">Thread limits</th><td>{% for key, value in res.provenance.compute.thread_limits.items() %}{{ key }}={{ value or "unset" }}{% if not loop.last %}, {% endif %}{% endfor %}</td></tr>
+{% if res.provenance.compute.threadpools %}<tr><th scope="row">Loaded numerical backends</th><td>{% for pool in res.provenance.compute.threadpools %}{{ pool.internal_api }} {{ pool.version }} ({{ pool.num_threads }} thread{% if pool.num_threads != 1 %}s{% endif %}){% if not loop.last %}; {% endif %}{% endfor %}</td></tr>{% endif %}
+{% endif %}
+{% if res.provenance.resources is defined %}
+<tr><th scope="row">Resources used</th><td>wall {{ "{:.2f}".format(res.provenance.resources.wall_s) }} s;
+user CPU {{ "{:.2f}".format(res.provenance.resources.user_cpu_s) }} s;
+system CPU {{ "{:.2f}".format(res.provenance.resources.system_cpu_s) }} s;
+peak RSS {% if res.provenance.resources.peak_rss_gb is not none %}{{ "{:.3f}".format(res.provenance.resources.peak_rss_gb) }} GiB{% else %}not available{% endif %}</td></tr>
+{% endif %}
+{% if res.provenance.source is defined %}<tr><th scope="row">Source revision</th><td><code>{{ res.provenance.source.commit or "unknown" }}</code>{% if res.provenance.source.dirty is sameas true %} (dirty checkout){% elif res.provenance.source.dirty is sameas false %} (clean checkout){% else %} (working-tree state unavailable){% endif %}</td></tr>{% endif %}
+<tr><th scope="row">Stage seconds</th>
 <td>{% for k, v in res.provenance.stages.items() %}{{ k }} {{ "%.1f"|format(v) }}s{% if not loop.last %}, {% endif %}{% endfor %}</td></tr>
 </table>
 {% endblock %}

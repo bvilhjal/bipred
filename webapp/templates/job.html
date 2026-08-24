@@ -1,20 +1,21 @@
 {% extends "base.html" %}
+{% block title %}Job {{ job.id }} — bipred{% endblock %}
 {% block content %}
 <h1>Job {{ job.id }} <span class="badge badge-{{ job.status }}"
 id="badge">{{ job.status }}</span></h1>
 <p class="muted">{{ job.labels.trait1 }} × {{ job.labels.trait2 }} —
 submitted {{ "%Y-%m-%d %H:%M:%S"|format_datetime(job.created) }}</p>
 
-<div class="error" id="failure"{% if job.status != "failed" %} hidden{% endif %}>
+<div class="alert alert-danger" role="alert" id="failure"{% if job.status != "failed" %} hidden{% endif %}>
 <strong>Job failed.</strong> <span id="failure-msg">{{ job.error }}</span></div>
 
 {% if job.status == "done" %}
-<div class="ok">Job finished. <a href="/jobs/{{ job.id }}/results">View the
+<div class="alert alert-success">Job finished. <a href="/jobs/{{ job.id }}/results">View the
 results</a>.</div>
 {% endif %}
 
 {% if running %}
-<p id="status-note">Current stage: <strong
+<p id="status-note" aria-live="polite">Current stage: <strong
 id="stage-name">{{ job.stage or "queued" }}</strong>. This page updates
 live.</p>
 <p class="muted" id="progress-line" hidden></p>
@@ -24,7 +25,7 @@ live.</p>
 {% endif %}
 
 <h2>Stages</h2>
-<ul class="stages" id="stages">
+<ul class="stages" id="stages" aria-live="polite">
 {% for name in stages %}
 <li class="{% if name in job.stages %}done{% elif name == job.stage %}active{% else %}pending{% endif %}">
 <span>{{ name }}</span>

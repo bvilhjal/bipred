@@ -1,7 +1,7 @@
 # Changelog
 
 User-visible changes to **bipred** are recorded here. The project is currently
-`0.3.9.dev0`.
+`0.3.10.dev0`.
 
 ## [Unreleased]
 
@@ -43,17 +43,20 @@ User-visible changes to **bipred** are recorded here. The project is currently
   reference and normalizing both catalog layouts (`hm_`-prefixed and
   current; beta / log(OR) / z·se effects) following
   `ldpred3/benchmarks/gwas_catalog_harvest.py`, with download provenance on
-  the results page. A `/catalog` page lists every accession the service has
-  tried — successes recorded on job completion, failures (no harmonised
-  file, dead URL, empty reference overlap) with their reason — persisted in
-  `_meta/gwascat/accessions.json` and updated automatically as jobs run.
+  the results page. A `/catalog` page reads LDpred3's canonical hashed evidence
+  (49 completed inputs; 36 preflight rejections and one fit failure), including
+  row runtime/peak RSS and current-profile compute environment, and merges
+  every accession this service later tries. Local outcomes persist in
+  `_meta/gwascat/accessions.json`; transient network failures are excluded.
   The catalog `download` stage reports live progress (MB read, percent of
   the resolved file size, MB/s) through the status endpoint to the job page.
-  The results page reports per-step QC counts (each load-time filter and
-  each reference-alignment drop, per trait), standard errors where available
-  (LDSC jackknife r_g SE; posterior SD across retained sweeps for the joint
-  r_g and h²), and defaults the DENTIST-inspired LD-consistency screen on.
-  A sticky top nav links the form, the catalog track record, and the demo;
+  The results page reports per-step QC counts, separates the fitted-panel
+  moment-estimator SE from posterior SD across retained joint-fit sweeps,
+  captures fit warnings, quarantines uninterpretable estimates and weights,
+  and records CPU/OS/runtime/threading plus wall/CPU/peak-RSS resources. The
+  DENTIST-inspired LD-consistency sensitivity screen is opt-in, and the form
+  exposes `cross_corr`. A sticky LTpred-vignette-aligned teal/navy interface
+  links the form, the catalog evidence, and the demo;
   results pages from jobs that predate the QC report render with a note
   instead of the breakdown. See `webapp/README.md`.
   Installed via the new `web` optional extra.
@@ -67,6 +70,18 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 ### Fixed
 
+- Web uploads remain in a non-runnable `staging` state until both files and
+  metadata are durable; an atomic `launching` claim prevents duplicate starts,
+  and startup recovery fails interrupted work instead of leaving it stuck.
+- A usable GWAS Catalog per-variant N column is preserved instead of being
+  silently overwritten by an advisory metadata scalar. Uploaded files may also
+  use a detected N column, and result provenance reports its basis and range.
+- Changing a GCST accession no longer leaves the prior accession's autofilled
+  label/N behind or permits a stale lookup response to win. Job polling retries
+  after transient HTTP/network failures instead of freezing.
+- Normal uploads cannot use the synthetic demo LD reference; sampler controls
+  reject non-finite and unbounded values. Web dependencies are installed in CI,
+  so the fast web units and full end-to-end jobs no longer skip silently.
 - CI no longer asserts an exact LDpred3 version. The workflow installed ldpred3
   from `master` and then asserted `__version__` equalled the declared *floor*,
   which held only while master sat on the floor: every `test` leg failed once

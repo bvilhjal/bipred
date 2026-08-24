@@ -1,47 +1,123 @@
 {% extends "base.html" %}
+{% block title %}GWAS Catalog compatibility — bipred{% endblock %}
 {% block content %}
-<h1>GWAS Catalog accessions tried here</h1>
-<p>Every accession this service has resolved or downloaded, recorded
-automatically: successes when a job completes, failures (with the reason)
-when resolution or download fails. Updated as jobs run.</p>
+<p class="eyebrow">Evidence registry</p>
+<h1>GWAS Catalog compatibility</h1>
+<p class="lead">These statuses come from LDpred3's end-to-end GWAS Catalog
+pipeline and this server's later attempts. bipred uses the same LDpred3 input,
+QC, harmonization, and LD contracts, so a completed LDpred3 phenotype is an
+accepted bipred input. This is <strong>input compatibility</strong>, not a
+claim that the phenotype, ancestry, or fitted estimate is scientifically
+appropriate for every analysis.</p>
 
-<h2>Known to work ({{ works|length }})</h2>
+{% if evidence.available %}
+<div class="stat-strip" aria-label="Catalog evidence counts">
+  <div><strong>{{ evidence.counts.good }}</strong><span>completed inputs</span></div>
+  <div><strong>{{ evidence.counts.bad }}</strong><span>documented rejections</span></div>
+  <div><strong>{{ evidence.current_traits }}</strong><span>current-profile fits</span></div>
+  <div><strong>{{ evidence.counts.failed_fit }}</strong><span>fit-stage failure</span></div>
+</div>
+
+<section class="evidence-box">
+  <h2>Run environment and resource contract</h2>
+  {% if evidence.runtime %}
+  <div class="provenance-grid">
+    <dl>
+      <dt>Current-profile host</dt><dd>{{ evidence.runtime.host }}</dd>
+      <dt>Operating system</dt><dd>{{ evidence.runtime.platform }}</dd>
+      <dt>Runtime</dt><dd>Python {{ evidence.runtime.python }};
+      NumPy {{ evidence.runtime.numpy }}; SciPy {{ evidence.runtime.scipy }};
+      Numba {{ evidence.runtime.numba }}</dd>
+    </dl>
+    <dl>
+      <dt>Numerical backend</dt><dd>{{ evidence.runtime.backend }}</dd>
+      <dt>Parallel resources</dt><dd>8 chains, 200 burn-in + 200 retained
+      sweeps; {{ evidence.runtime.outer_workers }}; one sweep thread per chain</dd>
+      <dt>LD cache</dt><dd><code>{{ evidence.runtime.ld_cache_sha256[:12] }}…</code></dd>
+      <dt>Recorded source state</dt><dd><code>{{ evidence.runtime.source_commit[:12] }}…</code>,
+      dirty-diff sha256 <code>{{ evidence.runtime.source_diff_sha256[:12] }}…</code></dd>
+    </dl>
+  </div>
+  {% endif %}
+  <div class="alert alert-warning compact-alert">
+    <strong>Timing comparability.</strong>
+    <p>The 11 current-profile rows share the environment above. The 38 legacy
+    rows were mostly 10 chains with 100/100 inference and retain row runtime,
+    peak RSS, settings, and hashes, but not a complete independent host
+    snapshot. Their seconds are historical evidence, not controlled
+    cross-profile speed comparisons. Downloads overlapped fitting in the
+    current batch.</p>
+  </div>
+  <p class="hash-line">Canonical table SHA-256:
+  <code>{{ evidence.table_sha256 }}</code>
+  {% if evidence.table_hash_verified %}<span class="verified">verified against manifest</span>{% else %}<span class="warn">does not match manifest</span>{% endif %}.
+  Registry SHA-256: <code>{{ evidence.registry_sha256 }}</code>.</p>
+</section>
+{% else %}
+<div class="alert alert-warning" role="alert"><strong>LDpred3 evidence unavailable.</strong>
+<p>Missing {{ evidence.missing|join(', ') }} under
+<code>{{ evidence.path }}</code>. Locally observed server attempts are still
+shown below.</p></div>
+{% endif %}
+
+<div class="catalog-tools">
+  <label for="catalog-search">Filter accessions or phenotypes</label>
+  <input id="catalog-search" type="search" placeholder="e.g. asthma or GCST906…">
+  <span id="catalog-count" class="muted" aria-live="polite"></span>
+</div>
+
+<h2>Compatible inputs ({{ works|length }})</h2>
+<p>Each canonical entry completed an end-to-end LDpred3 fit. Rows tagged
+<em>server</em> were additionally completed by this bipred deployment.</p>
 {% if works %}
-<table>
-<tr><th>Accession</th><th>Trait</th><th class="num">Effective N</th>
-<th class="num">Variants kept</th><th>Last used</th></tr>
-{% for acc, e in works %}
-<tr>
-<td><a href="https://www.ebi.ac.uk/gwas/studies/{{ acc }}">{{ acc }}</a></td>
-<td>{{ e.trait or "—" }}{% if e.pmid %} (PMID {{ e.pmid }}){% endif %}</td>
-<td class="num">{% if e.n_cases and e.n_controls %}
-{{ "{:,}".format(e.n_cases|int) }} / {{ "{:,}".format(e.n_controls|int) }} cc
-{% elif e.n_eff %}{{ "{:,}".format(e.n_eff|int) }}{% else %}—{% endif %}</td>
-<td class="num">{{ "{:,}".format(e.kept|int) if e.kept else "—" }}</td>
-<td class="muted">{{ e.when }}</td>
+<div class="table-scroll"><table class="catalog-table">
+<thead><tr><th>Accession and trait</th><th>Evidence</th>
+<th class="num">Effective N</th><th class="num">Variants fit</th>
+<th class="num">Runtime / peak</th></tr></thead>
+<tbody>
+{% for e in works %}
+<tr data-catalog-row data-search="{{ e.accession }} {{ e.trait }} {{ e.source }} {{ e.profile }}">
+  <th scope="row"><a href="https://www.ebi.ac.uk/gwas/studies/{{ e.accession }}">{{ e.accession }}</a>
+  <span>{{ e.trait or "—" }}</span>{% if e.pmid %}<small>PMID {{ e.pmid }}</small>{% endif %}</th>
+  <td><span class="profile profile-{{ e.profile }}">{{ e.profile }}</span>
+  {{ e.evidence }}{% if e.server_observed %}; completed here{% endif %}
+  {% if e.n_chains %}<small>{{ e.n_chains }} chains ({{ e.n_chains_kept }} kept),
+  {{ e.burn_in }}/{{ e.num_iter }} inference, ncores={{ e.ncores }}</small>{% endif %}</td>
+  <td class="num">{% if e.n_cases and e.n_controls %}{{ "{:,}".format(e.n_cases|int) }} / {{ "{:,}".format(e.n_controls|int) }} cc{% elif e.n_eff %}{{ "{:,.0f}".format(e.n_eff|float) }}{% else %}per-variant{% endif %}</td>
+  <td class="num">{{ "{:,}".format(e.n_final|int) if e.n_final else ("{:,}".format(e.kept|int) if e.kept else "—") }}</td>
+  <td class="num">{% if e.total_s %}{{ "{:.1f}".format(e.total_s|float) }} s{% if e.peak_gb %}<br><small>{{ "{:.2f}".format(e.peak_gb|float) }} GiB</small>{% endif %}{% else %}—{% endif %}</td>
 </tr>
 {% endfor %}
-</table>
-{% else %}
-<p class="muted">None yet — run a job with a GCST accession.</p>
-{% endif %}
+</tbody></table></div>
+{% else %}<p class="muted">No compatible inputs are available.</p>{% endif %}
 
-<h2>Known not to work ({{ failed|length }})</h2>
+<h2>Rejected or failed inputs ({{ failed|length }})</h2>
+<p>“Bad” means unsuitable in the recorded deposit: commonly hits-only,
+truncated, low reference coverage, missing effect direction, or an interaction
+scan. It does not mean the phenotype itself is bad. One full fit failed after
+all variants were removed by summary-statistic QC.</p>
 {% if failed %}
-<table>
-<tr><th>Accession</th><th>Trait</th><th>Reason</th><th>Last tried</th></tr>
-{% for acc, e in failed %}
-<tr>
-<td><a href="https://www.ebi.ac.uk/gwas/studies/{{ acc }}">{{ acc }}</a></td>
-<td>{{ e.trait or "—" }}</td>
-<td>{{ e.reason }}</td>
-<td class="muted">{{ e.when }}</td>
+<div class="table-scroll"><table class="catalog-table">
+<thead><tr><th>Accession and trait</th><th>Where rejected</th><th>Recorded reason</th></tr></thead>
+<tbody>
+{% for e in failed %}
+<tr data-catalog-row data-search="{{ e.accession }} {{ e.trait }} {{ e.reason }} {{ e.profile }}">
+  <th scope="row"><a href="https://www.ebi.ac.uk/gwas/studies/{{ e.accession }}">{{ e.accession }}</a>
+  <span>{{ e.trait or "—" }}</span>{% if e.pmid %}<small>PMID {{ e.pmid }}</small>{% endif %}</th>
+  <td><span class="profile profile-{{ e.profile }}">{{ e.profile }}</span>
+  {{ e.evidence or "observed by this server" }}</td>
+  <td>{{ e.reason or "No reason recorded" }}</td>
 </tr>
 {% endfor %}
-</table>
-{% else %}
-<p class="muted">No failures recorded.</p>
+</tbody></table></div>
+{% else %}<p class="muted">No rejected inputs are recorded.</p>{% endif %}
+
+{% if evidence.known_limits %}
+<details class="evidence-limits"><summary>Canonical evidence limitations</summary>
+<ol>{% for limit in evidence.known_limits %}<li>{{ limit }}</li>{% endfor %}</ol>
+</details>
 {% endif %}
 
-<p><a href="/">Back to the upload form</a></p>
+<p><a href="/">Start an analysis</a></p>
 {% endblock %}
+{% block scripts %}<script src="/static/catalog-table.js" defer></script>{% endblock %}

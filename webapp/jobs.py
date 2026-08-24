@@ -17,7 +17,7 @@ import shutil
 import time
 from pathlib import Path
 
-STATES = ("queued", "running", "done", "failed")
+STATES = ("staging", "queued", "launching", "running", "done", "failed")
 STAGE_ORDER = ("download", "validate", "harmonize", "ldsc", "fit", "weights")
 
 # Files a job directory starts with; the runner adds result.json, munge.json,
@@ -36,14 +36,21 @@ def _now() -> float:
     return time.time()
 
 
-def create_job(root: Path, *, options: dict, labels: dict) -> dict:
-    """Create a queued job with a fresh unguessable id and return it."""
+def create_job(root: Path, *, options: dict, labels: dict,
+               status: str = "queued") -> dict:
+    """Create a job with a fresh unguessable id and return it.
+
+    Upload handlers create ``staging`` jobs and expose them to the supervisor
+    only after every input has been durably written.
+    """
+    if status not in STATES:
+        raise ValueError(f"unknown job status {status!r}")
     job_id = secrets.token_urlsafe(12)
     job_dir = root / "jobs" / job_id
     job_dir.mkdir(parents=True)
     job = {
         "id": job_id,
-        "status": "queued",
+        "status": status,
         "stage": None,
         "stages": {},
         "created": _now(),
@@ -112,9 +119,29 @@ def purge_jobs(root: Path, ttl_days: float) -> list[str]:
     cutoff = _now() - ttl_days * 86400.0
     removed = []
     for job in list_jobs(root):
-        if job["status"] in ("queued", "running"):
+        if job["status"] in ("staging", "queued", "launching", "running"):
             continue
         if (job["finished"] or job["created"]) < cutoff:
             shutil.rmtree(job_dir(root, job["id"]), ignore_errors=True)
             removed.append(job["id"])
     return removed
+
+
+def recover_interrupted_jobs(root: Path) -> list[str]:
+    """Fail jobs whose owning web/runner process vanished on restart.
+
+    Queued jobs are intentionally preserved and will be launched by the new
+    supervisor.  A staging job may have only half an upload, while launching
+    and running jobs belonged to processes that no longer exist.
+    """
+    recovered = []
+    for job in list_jobs(root):
+        if job["status"] not in ("staging", "launching", "running"):
+            continue
+        previous = job["status"]
+        update_job(root, job["id"], status="failed", stage=None,
+                   finished=_now(),
+                   error=(f"server restarted while job was {previous}; "
+                          "submit it again"))
+        recovered.append(job["id"])
+    return recovered

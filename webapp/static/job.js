@@ -3,7 +3,7 @@
 (function () {
   "use strict";
   const cfg = window.BIPRED_JOB;
-  if (!cfg || (cfg.status !== "queued" && cfg.status !== "running")) return;
+  if (!cfg || !["queued", "launching", "running"].includes(cfg.status)) return;
 
   const badge = document.getElementById("badge");
   const stageName = document.getElementById("stage-name");
@@ -61,12 +61,18 @@
     let s;
     try {
       const response = await fetch("/jobs/" + cfg.id + "/status");
-      if (!response.ok) return;               // transient; try again next tick
+      if (!response.ok) {
+        if (note) note.textContent = "Connection lost; retrying…";
+        setTimeout(tick, 2000);
+        return;
+      }
       s = await response.json();
     } catch (err) {
+      if (note) note.textContent = "Connection lost; retrying…";
+      setTimeout(tick, 2000);
       return;
     }
-    if (!s || !s.status) return;
+    if (!s || !s.status) { setTimeout(tick, 2000); return; }
 
     if (badge) {
       badge.textContent = s.status;
@@ -76,6 +82,10 @@
     renderStages(s);
     renderMunge(s.munge);
     renderProgress(s.progress);
+    if (note && !note.hidden) {
+      note.innerHTML = "Current stage: <strong>" +
+                       (s.stage || s.status) + "</strong>. This page updates live.";
+    }
 
     if (s.status === "done") {
       window.location.href = "/jobs/" + cfg.id + "/results";
