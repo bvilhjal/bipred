@@ -11,12 +11,16 @@ claim that the phenotype, ancestry, or fitted estimate is scientifically
 appropriate for every analysis.</p>
 
 {% if evidence.available %}
-<div class="stat-strip" aria-label="Catalog evidence counts">
-  <div><strong>{{ evidence.counts.good }}</strong><span>completed inputs</span></div>
-  <div><strong>{{ evidence.counts.bad }}</strong><span>documented rejections</span></div>
+<div class="stat-strip" aria-label="Catalog compatibility counts">
+  <div><strong>{{ works|length }}</strong><span>completed inputs</span></div>
+  <div><strong>{{ failed|length }}</strong><span>rejected or failed inputs</span></div>
   <div><strong>{{ evidence.current_traits }}</strong><span>current-profile fits</span></div>
   <div><strong>{{ evidence.counts.failed_fit }}</strong><span>fit-stage failure</span></div>
+  {% if server_observed %}<div><strong>{{ server_observed }}</strong><span>also observed by this server</span></div>{% endif %}
 </div>
+<p class="muted">The first two counts cover the merged tables below —
+canonical LDpred3 evidence plus this server's own attempts. Current-profile
+and fit-stage figures describe the canonical runs only.</p>
 
 <section class="evidence-box">
   <h2>Run environment and resource contract</h2>

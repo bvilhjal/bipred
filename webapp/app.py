@@ -189,6 +189,39 @@ def _read_munge(root: Path, job_id: str) -> dict | None:
     return json.loads(path.read_text())
 
 
+def _figure_data(result: dict) -> dict | None:
+    """Counts for the results-page variant figures (Venn + QC attrition).
+
+    Returns None when the munge report lacks per-trait counts (jobs that
+    predate the per-step report), so older result pages render as before.
+    ``usable`` prefers the post-QC finite-effect count (``n_usable``) and
+    falls back to the harmonization match count for jobs from before that
+    key existed.
+    """
+    munge = result.get("munge") or {}
+    kept = munge.get("n_kept")
+    traits = {}
+    for key in ("trait1", "trait2"):
+        tlog = munge.get(key) or {}
+        qc = tlog.get("qc") or {}
+        harmonize = tlog.get("harmonize") or {}
+        usable = tlog.get("n_usable")
+        if usable is None:
+            usable = harmonize.get("n_matched")
+        n_input = qc.get("n_input") or harmonize.get("n_sumstats")
+        if usable is None or not n_input or not kept:
+            return None
+        after_qc = qc.get("n_kept")
+        traits[key] = {
+            "input": int(n_input),
+            "after_qc": int(after_qc) if after_qc is not None else int(n_input),
+            "usable": int(usable),
+            "only": max(int(usable) - int(kept), 0),
+        }
+    return {"traits": traits, "joint": int(kept),
+            "screen_drop": int(munge.get("n_screen_drop") or 0)}
+
+
 def _shown_stages(job) -> list:
     """Stages worth displaying; download/weights only exist when requested."""
     opt = job.get("options", {})
@@ -499,9 +532,12 @@ def create_app() -> FastAPI:
                 bad[accession] = entry
         works = sorted(good.values(), key=lambda e: (e.get("trait") or "").lower())
         failed = sorted(bad.values(), key=lambda e: (e.get("trait") or "").lower())
+        server_observed = sum(1 for e in works + failed
+                              if e.get("server_observed"))
         return TEMPLATES.TemplateResponse(
             request, "catalog.html", {"works": works, "failed": failed,
-                                      "evidence": evidence})
+                                      "evidence": evidence,
+                                      "server_observed": server_observed})
 
     @app.get("/catalog/lookup")
     def catalog_lookup(accession: str = ""):
@@ -577,7 +613,8 @@ def create_app() -> FastAPI:
             return RedirectResponse(f"/jobs/{job_id}", status_code=303)
         result = json.loads(result_path.read_text())
         return TEMPLATES.TemplateResponse(
-            request, "results.html", {"job": job, "res": result})
+            request, "results.html", {"job": job, "res": result,
+                                      "figs": _figure_data(result)})
 
     @app.get("/jobs/{job_id}/download/{kind}")
     def download(job_id: str, kind: str):

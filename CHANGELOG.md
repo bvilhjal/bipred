@@ -58,7 +58,11 @@ User-visible changes to **bipred** are recorded here. The project is currently
   exposes `cross_corr`. A sticky LTpred-vignette-aligned teal/navy interface
   links the form, the catalog evidence, and the demo;
   results pages from jobs that predate the QC report render with a note
-  instead of the breakdown. See `webapp/README.md`.
+  instead of the breakdown. The results page also draws the variant sets: a
+  schematic Venn of each trait's usable variants and the shared fitted panel,
+  plus per-trait QC attrition bars (input → after QC → usable on the LD
+  reference), for jobs whose munge report carries per-trait counts.
+  See `webapp/README.md`.
   Installed via the new `web` optional extra.
 - Registered the workspace marker taxonomy (`slow` / `integration` /
   `external` / `numba`) in `pyproject.toml`, mirroring ldpred3/gwfm.
@@ -70,6 +74,12 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 ### Fixed
 
+- The `/catalog` summary strip counted only the canonical LDpred3 evidence
+  while the tables below merged in this server's own attempts, so the headline
+  numbers disagreed with the lists they summarized whenever the server had
+  observed anything new. The strip now counts the merged tables, carries a
+  separate "observed by this server" figure, and says which figures describe
+  the canonical runs only.
 - The web service's GWAS Catalog track record now also learns from jobs that
   fail *after* a successful download. `prepare_bivariate_sumstats` names the
   trait whose variants were all removed by sumstats QC or reference

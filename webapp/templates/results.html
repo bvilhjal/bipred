@@ -144,6 +144,51 @@ are available. Run a new job for the full breakdown.</p>
 {% endif %}
 </table>
 
+{% if figs %}
+<h2>Variant overlap</h2>
+<div class="figures">
+<div>
+<h3>Shared usable variants</h3>
+<svg class="venn" viewBox="0 0 400 190" role="img"
+     aria-label="Venn diagram of per-trait usable variants and the shared fitted panel">
+<circle class="c1" cx="158" cy="90" r="86"/>
+<circle class="c2" cx="242" cy="90" r="86"/>
+<text class="count" x="114" y="86" text-anchor="middle">{{ "{:,}".format(figs.traits.trait1.only) }}</text>
+<text class="region" x="114" y="104" text-anchor="middle">only</text>
+<text class="count" x="200" y="86" text-anchor="middle">{{ "{:,}".format(figs.joint) }}</text>
+<text class="region" x="200" y="104" text-anchor="middle">shared</text>
+<text class="count" x="286" y="86" text-anchor="middle">{{ "{:,}".format(figs.traits.trait2.only) }}</text>
+<text class="region" x="286" y="104" text-anchor="middle">only</text>
+</svg>
+<ul class="legend">
+<li><span class="swatch t1"></span>{{ job.labels.trait1 }}:
+{{ "{:,}".format(figs.traits.trait1.usable) }} usable on the reference,
+{{ "%.1f"|format(100 * figs.joint / figs.traits.trait1.usable) }}% shared</li>
+<li><span class="swatch t2"></span>{{ job.labels.trait2 }}:
+{{ "{:,}".format(figs.traits.trait2.usable) }} usable on the reference,
+{{ "%.1f"|format(100 * figs.joint / figs.traits.trait2.usable) }}% shared</li>
+</ul>
+</div>
+<div class="attrition">
+{% for key in ("trait1", "trait2") %}
+{% set t = figs.traits[key] %}
+<h3>{{ job.labels[key] }}</h3>
+<div class="arow {{ "t1" if key == "trait1" else "t2" }}">
+<span>Input rows</span><span class="track"><span class="bar" style="width: 100%"></span></span><span class="n">{{ "{:,}".format(t.input) }}</span></div>
+<div class="arow {{ "t1" if key == "trait1" else "t2" }}">
+<span>After QC</span><span class="track"><span class="bar" style="width: {{ "%.1f"|format(100 * t.after_qc / t.input) }}%"></span></span><span class="n">{{ "{:,}".format(t.after_qc) }}</span></div>
+<div class="arow {{ "t1" if key == "trait1" else "t2" }}">
+<span>Usable on the LD reference</span><span class="track"><span class="bar" style="width: {{ "%.1f"|format(100 * t.usable / t.input) }}%"></span></span><span class="n">{{ "{:,}".format(t.usable) }}</span></div>
+{% endfor %}
+</div>
+</div>
+<p class="muted">Circles are schematic, not area-scaled. “Usable” variants
+passed QC and harmonized to the LD reference with finite effect, SE and N;
+the overlap is the joint panel kept for fitting{% if figs.screen_drop %}
+(after the LD-consistency screen dropped {{ "{:,}".format(figs.screen_drop) }}){% endif %}.
+Bar widths are linear in variant count relative to the input.</p>
+{% endif %}
+
 <h2>Unfiltered fitted-panel LDSC-style moment diagnostic</h2>
 <div class="alert alert-warning compact-alert"><strong>Not canonical LDSC.</strong>
 <p>This one-step diagnostic uses LD scores and M from the intersected fitted

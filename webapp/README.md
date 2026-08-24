@@ -9,7 +9,8 @@ The results page
 breaks the harmonization report down per trait — rows in, and the count
 removed by each QC step (non-finite values, duplicates, low per-variant N,
 MAF/INFO floors) and by reference alignment (unmatched, palindromic,
-allele-mismatch). It labels the block-jackknife SE on the moment-estimator
+allele-mismatch) — and draws them: a schematic Venn of each trait's usable
+variants against the shared fitted panel, plus per-trait QC attrition bars. It labels the block-jackknife SE on the moment-estimator
 `r_g` separately from posterior SD across retained, autocorrelated joint-fit
 sweeps; the latter is not a frequentist standard error or convergence test.
 Critical fit warnings are visible and quarantine estimates and weight files.

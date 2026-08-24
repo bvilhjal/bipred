@@ -291,10 +291,14 @@ def run(job_dir: Path, job: dict) -> None:
         munge["af_corr"] = _json_safe(prep.log.get("af_corr") or {})
         for trait in ("trait1", "trait2"):
             tlog = prep.log.get(trait) or {}
+            n_usable = tlog.get("n_matched")
             munge[trait] = {
                 "qc_enabled": bool(tlog.get("qc_enabled")),
                 "qc": _json_safe(tlog.get("qc") or {}),
                 "harmonize": _json_safe(tlog.get("harmonize") or {}),
+                # Variants usable for fitting: QC-passed, on the reference,
+                # with finite effect/SE/N (the ok mask in _align_one).
+                "n_usable": int(n_usable) if n_usable is not None else None,
             }
         (job_dir / "munge.json").write_text(json.dumps(munge, indent=1))
         stage.done("harmonize")

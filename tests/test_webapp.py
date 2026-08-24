@@ -101,6 +101,7 @@ def test_demo_job_end_to_end(web):
     t1 = result["munge"]["trait1"]
     assert t1["qc"]["n_input"] >= t1["qc"]["n_kept"] > 0
     assert t1["harmonize"]["n_matched"] > 0
+    assert t1["n_usable"] > 0
     assert "af_corr" in result["munge"]
     assert result["diagnostics"]["valid_for_interpretation"] in (True, False)
     assert result["provenance"]["compute"]["logical_cpus"] >= 1
@@ -112,6 +113,7 @@ def test_demo_job_end_to_end(web):
     assert page.status_code == 200
     assert "polygenic overlap" in page.text.lower()
     assert "QC and harmonization" in page.text
+    assert "<svg" in page.text and "Variant overlap" in page.text
     for kind in ("result", "munge", "weights1", "weights2"):
         assert client.get(f"/jobs/{job_id}/download/{kind}").status_code == 200
 
@@ -377,6 +379,42 @@ def test_catalog_page_lists_track_record(web):
     assert "GCST000001" in page.text
 
 
+def test_catalog_summary_counts_cover_merged_tables(web, monkeypatch,
+                                                    tmp_path):
+    """The stat strip counts the merged tables, not the canonical rows only."""
+    import hashlib
+    from webapp import gwascat
+    client, root = web
+    table = tmp_path / "real_gwas_pipeline_catalog.csv"
+    table.write_text(
+        "trait,status,note,source,accession,pmid,n_eff_value,n_final,total_s,"
+        "driver_peak_gb,n_chains,n_chains_kept,infer_burn_in,infer_num_iter,"
+        "ncores,ldpred3_version,cohort_id\n"
+        "good_trait,ok,,paper,GCST1,1,1000,500,2.0,0.1,8,8,200,200,8,v,c\n")
+    digest = hashlib.sha256(table.read_bytes()).hexdigest()
+    (tmp_path / "real_gwas_pipeline_catalog.manifest.json").write_text(
+        json.dumps({"table_sha256": digest, "row_source": {},
+                    "settings": {}, "known_limits": []}))
+    (tmp_path / "gwas_catalog_traits.toml").write_text("")
+    monkeypatch.setenv("BIPRED_WEB_LDPRED3_BENCHMARKS", str(tmp_path))
+    gwascat.record_accession(root, "GCST000777", True,
+                             trait="Server-only fixture", kept=5)
+    page = client.get("/catalog")
+    assert page.status_code == 200
+    strip = {label: n for n, label in re.findall(
+        r"<strong>(\d+)</strong><span>([^<]+)</span>", page.text)}
+    # One canonical completed row, plus at least the server-only fixture: the
+    # strip must agree with the tables it summarizes (previously canonical
+    # counts only, which disagreed as soon as this server observed anything).
+    works_n = re.search(r"Compatible inputs \((\d+)\)", page.text).group(1)
+    failed_n = re.search(r"Rejected or failed inputs \((\d+)\)",
+                         page.text).group(1)
+    assert strip["completed inputs"] == works_n
+    assert int(works_n) >= 2
+    assert strip["rejected or failed inputs"] == failed_n
+    assert int(strip["also observed by this server"]) >= 1
+
+
 def test_failed_resolution_recorded(web, monkeypatch):
     from webapp import gwascat
     client, root = web
@@ -433,6 +471,64 @@ def test_results_page_tolerates_pre_qc_report_munge(web):
     page = client.get(f"/jobs/{job['id']}/results")
     assert page.status_code == 200
     assert "predates the per-step QC report" in page.text
+    assert "<svg" not in page.text         # no figures without per-trait counts
+
+
+def _full_munge_result(n_usable=True):
+    munge = {"n_cache": 1000, "n_joint": 700, "n_kept": 690,
+             "n_screen_drop": 10,
+             "trait1": {"qc": {"n_input": 900, "n_kept": 850},
+                        "harmonize": {"n_matched": 800, "n_sumstats": 900}},
+             "trait2": {"qc": {"n_input": 950, "n_kept": 940},
+                        "harmonize": {"n_matched": 910, "n_sumstats": 950}}}
+    if n_usable:
+        munge["trait1"]["n_usable"] = 780
+        munge["trait2"]["n_usable"] = 900
+    return {
+        "joint": {"rg": 0.1, "h2": [0.1, 0.2], "p": 0.01, "pi": None,
+                  "noise_scale": None, "retained_iterations": 1,
+                  "stopped_early": False,
+                  "mixer": {"polygenicity": [0.1, 0.2], "n_causal": [10, 20],
+                            "n_shared": 5, "frac_shared": 0.5,
+                            "rho_beta": 0.3, "rg_from_overlap": 0.1}},
+        "ldsc": {"error": "not run"},
+        "munge": munge,
+        "weights": [],
+        "provenance": {"bipred": "x", "ldpred3": "y", "numpy": "z",
+                       "cache_key": "demo", "cache_sha256": "abc",
+                       "seed": 0, "burn_in": 1, "num_iter": 1,
+                       "screen": True, "stages": {}},
+    }
+
+
+def test_figure_data_from_munge():
+    from webapp.app import _figure_data
+    figs = _figure_data(_full_munge_result())
+    assert figs["joint"] == 690 and figs["screen_drop"] == 10
+    assert figs["traits"]["trait1"] == {"input": 900, "after_qc": 850,
+                                        "usable": 780, "only": 90}
+    assert figs["traits"]["trait2"]["only"] == 210
+    # Jobs from before n_usable existed fall back to harmonization matches.
+    figs = _figure_data(_full_munge_result(n_usable=False))
+    assert figs["traits"]["trait1"]["usable"] == 800
+    # Jobs predating the per-trait report draw nothing.
+    assert _figure_data({"munge": {"n_kept": 5}}) is None
+
+
+def test_results_page_draws_variant_figures(web):
+    """A full munge report renders the Venn and QC-attrition figures."""
+    from webapp import jobs
+    client, root = web
+    job = jobs.create_job(root, options={"weights": False},
+                          labels={"trait1": "A", "trait2": "B"})
+    jobs.update_job(root, job["id"], status="done", finished=time.time())
+    result = _full_munge_result()
+    (root / "jobs" / job["id"] / "result.json").write_text(json.dumps(result))
+    page = client.get(f"/jobs/{job['id']}/results")
+    assert page.status_code == 200
+    assert "<svg" in page.text
+    assert "Variant overlap" in page.text
+    assert ">690<" in page.text            # shared count inside the Venn
 
 
 def test_accession_registry_semantics(tmp_path):

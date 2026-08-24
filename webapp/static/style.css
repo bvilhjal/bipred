@@ -264,7 +264,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-sp
 .stages .active .state { color: var(--warn); }
 .stages .pending { color: var(--muted); }
 
-.stat-strip { display: grid; grid-template-columns: repeat(4, 1fr); margin: 1.3rem 0; border: 1px solid var(--line); border-radius: var(--radius); }
+.stat-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); margin: 1.3rem 0; border: 1px solid var(--line); border-radius: var(--radius); }
 .stat-strip div { padding: 0.8rem 1rem; border-right: 1px solid var(--line); }
 .stat-strip div:last-child { border-right: 0; }
 .stat-strip strong { display: block; color: var(--teal-dark); font-size: 1.6rem; line-height: 1.1; }
@@ -286,6 +286,26 @@ dd { margin: 0.05rem 0; }
 .evidence-limits { margin: 1.4rem 0; }
 .evidence-limits li { margin-bottom: 0.45rem; }
 .diagnostic-estimates { padding: 0.8rem 1rem; border: 1px solid var(--danger); border-radius: var(--radius); }
+
+/* Results-page variant figures (schematic Venn + QC attrition bars). */
+.figures { display: flex; gap: 2rem; align-items: flex-start; flex-wrap: wrap; }
+.figures > div { flex: 1; min-width: 300px; }
+.venn { display: block; width: 100%; max-width: 430px; height: auto; }
+.venn .c1 { fill: var(--teal); fill-opacity: 0.25; stroke: var(--teal-dark); stroke-width: 1.5; }
+.venn .c2 { fill: var(--navy); fill-opacity: 0.22; stroke: var(--navy); stroke-width: 1.5; }
+.venn .count { font-size: 15px; font-weight: 650; fill: var(--ink); }
+.venn .region { font-size: 10.5px; fill: var(--muted); }
+.legend { margin: 0.35rem 0 0; padding: 0; list-style: none; color: var(--muted); font-size: 0.88rem; }
+.legend li { margin: 0.12rem 0; }
+.swatch { display: inline-block; width: 0.75em; height: 0.75em; margin-right: 0.4em; border-radius: 2px; }
+.swatch.t1 { background: var(--teal); }
+.swatch.t2 { background: var(--navy); }
+.attrition .arow { display: grid; grid-template-columns: 10.5em 1fr 5.8em; align-items: center; gap: 0.6rem; margin: 0.22rem 0; font-size: 0.9rem; }
+.attrition .track { display: block; height: 0.9em; background: var(--surface); border: 1px solid var(--line); border-radius: 3px; }
+.attrition .bar { display: block; height: 100%; border-radius: 2px; }
+.attrition .t1 .bar { background: var(--teal); }
+.attrition .t2 .bar { background: var(--navy); }
+.attrition .n { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
 
 footer { color: rgb(255 255 255 / 88%); background: var(--teal-dark); }
 .footer-inner { max-width: var(--content); margin: 0 auto; padding: 1.2rem 1.25rem; font-size: 0.84rem; }
