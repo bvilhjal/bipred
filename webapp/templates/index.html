@@ -117,8 +117,9 @@ build. Limit {{ max_mb }} MB per file.</span>
     </div>
   </div>
   <label><input type="checkbox" name="screen" value="1"
-    {% if f.get('screen') %} checked{% endif %}>
-    LD-consistency sensitivity screen (slower; DENTIST-inspired)</label>
+    {% if f.get('screen') or not f %} checked{% endif %}>
+    LD-consistency screen (DENTIST-inspired; on by default — uncheck for a
+    faster, less conservative run)</label>
   <label><input type="checkbox" name="weights" value="1"
     {% if f.get('weights') or not f %} checked{% endif %}>
     Also write per-trait posterior-mean weight files</label>

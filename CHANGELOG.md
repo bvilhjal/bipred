@@ -49,6 +49,10 @@ User-visible changes to **bipred** are recorded here. The project is currently
   `_meta/gwascat/accessions.json` and updated automatically as jobs run.
   The catalog `download` stage reports live progress (MB read, percent of
   the resolved file size, MB/s) through the status endpoint to the job page.
+  The results page reports per-step QC counts (each load-time filter and
+  each reference-alignment drop, per trait), standard errors where available
+  (LDSC jackknife r_g SE; posterior SD across retained sweeps for the joint
+  r_g and h²), and defaults the DENTIST-inspired LD-consistency screen on.
   See `webapp/README.md`.
   Installed via the new `web` optional extra.
 - Registered the workspace marker taxonomy (`slow` / `integration` /

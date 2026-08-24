@@ -8,14 +8,18 @@
 <table>
 <tr><th>Quantity</th><th class="num">Estimate</th></tr>
 <tr><td>Genetic correlation r<sub>g</sub></td>
-    <td class="num">{{ res.joint.rg|f3 }}</td></tr>
+    <td class="num">{{ res.joint.rg|f3 }}{% if res.joint.rg_sd is defined and res.joint.rg_sd is not none %} ± {{ res.joint.rg_sd|f3 }}{% endif %}</td></tr>
 <tr><td>SNP heritability, {{ job.labels.trait1 }}</td>
-    <td class="num">{{ res.joint.h2[0]|f3 }}</td></tr>
+    <td class="num">{{ res.joint.h2[0]|f3 }}{% if res.joint.h2_sd is defined and res.joint.h2_sd %} ± {{ res.joint.h2_sd[0]|f3 }}{% endif %}</td></tr>
 <tr><td>SNP heritability, {{ job.labels.trait2 }}</td>
-    <td class="num">{{ res.joint.h2[1]|f3 }}</td></tr>
+    <td class="num">{{ res.joint.h2[1]|f3 }}{% if res.joint.h2_sd is defined and res.joint.h2_sd %} ± {{ res.joint.h2_sd[1]|f3 }}{% endif %}</td></tr>
 <tr><td>Causal fraction (per-trait average)</td>
     <td class="num">{{ "%.4f"|format(res.joint.p) }}</td></tr>
 </table>
+{% if res.joint.rg_sd is defined and res.joint.rg_sd is not none %}
+<p class="muted">± is the posterior SD across the
+{{ res.joint.retained_iterations }} retained sampler sweeps.</p>
+{% endif %}
 
 <h2>Polygenic overlap (MiXeR-style)</h2>
 <table>
@@ -34,6 +38,74 @@
     <td class="num">{{ "%.3f"|format(res.joint.mixer.rho_beta) }}</td></tr>
 <tr><td>r<sub>g</sub> implied by the overlap</td>
     <td class="num">{{ "%.3f"|format(res.joint.mixer.rg_from_overlap) }}</td></tr>
+</table>
+
+<h2>QC and harmonization</h2>
+<p class="muted">Per-trait filters applied on load, then alignment to the LD
+reference. Counts are sequential: each row removes variants from what the
+rows above left. Flip counts are informational (alleles were aligned, not
+dropped).</p>
+<div class="row">
+{% for key in ("trait1", "trait2") %}
+{% set t = res.munge[key] %}
+{% set q, h = t.qc, t.harmonize %}
+<div>
+<h3>{{ job.labels[key] }}</h3>
+<table>
+<tr><th>Step</th><th class="num">Variants</th></tr>
+<tr><td>Input rows</td><td class="num">{{ q.get('n_input', h.get('n_sumstats', '—')) }}</td></tr>
+<tr><td>Non-finite effect/SE/N dropped</td>
+    <td class="num">−{{ q.get('n_drop_nonfinite', 0) }}</td></tr>
+{% if q.get('n_drop_nonpositive_n') %}
+<tr><td class="muted">of which non-positive N</td>
+    <td class="num muted">{{ q.n_drop_nonpositive_n }}</td></tr>
+{% endif %}
+<tr><td>Duplicate variants dropped</td>
+    <td class="num">−{{ q.get('n_drop_duplicate', 0) }}</td></tr>
+<tr><td>Low per-variant N dropped (&lt;70% of median)</td>
+    <td class="num">−{{ q.get('n_drop_lowN', 0) }}</td></tr>
+{% if q.get('n_drop_lowMAF') is not none %}
+<tr><td>MAF &lt; 0.01 dropped</td>
+    <td class="num">−{{ q.get('n_drop_lowMAF', 0) }}</td></tr>
+{% endif %}
+{% if q.get('n_drop_lowINFO') is not none %}
+<tr><td>Imputation INFO &lt; 0.7 dropped</td>
+    <td class="num">−{{ q.get('n_drop_lowINFO', 0) }}</td></tr>
+{% endif %}
+<tr><td><strong>After QC</strong></td>
+    <td class="num"><strong>{{ q.get('n_kept', '—') }}</strong></td></tr>
+<tr><td>Matched to the LD reference</td>
+    <td class="num">{{ h.get('n_matched', '—') }}</td></tr>
+<tr><td>Not in the reference</td>
+    <td class="num">−{{ h.get('n_unmatched', 0) }}</td></tr>
+<tr><td>Palindromic (ambiguous strand) dropped</td>
+    <td class="num">−{{ h.get('n_dropped_ambiguous', 0) }}</td></tr>
+<tr><td>Allele mismatch dropped</td>
+    <td class="num">−{{ h.get('n_dropped_mismatch', 0) }}</td></tr>
+<tr><td class="muted">effect-allele flips applied</td>
+    <td class="num muted">{{ h.get('n_flipped', 0) }}</td></tr>
+<tr><td class="muted">strand flips applied</td>
+    <td class="num muted">{{ h.get('n_strand_flipped', 0) }}</td></tr>
+</table>
+</div>
+{% endfor %}
+</div>
+<table>
+<tr><th>Joint panel</th><th class="num">Variants</th></tr>
+<tr><td>In LD reference</td><td class="num">{{ res.munge.n_cache }}</td></tr>
+<tr><td>Observed in both GWAS</td><td class="num">{{ res.munge.n_joint }}</td></tr>
+{% if res.munge.n_screen_drop %}
+<tr><td>Dropped by the LD-consistency screen</td>
+    <td class="num">−{{ res.munge.n_screen_drop }}</td></tr>
+{% endif %}
+<tr><td><strong>Kept for fitting</strong></td>
+    <td class="num"><strong>{{ res.munge.n_kept }}</strong></td></tr>
+{% if res.munge.af_corr %}
+<tr><td>EAF vs reference-AF correlation, {{ job.labels.trait1 }} /
+{{ job.labels.trait2 }}</td>
+<td class="num">{{ res.munge.af_corr.trait1|f3 }} /
+{{ res.munge.af_corr.trait2|f3 }}</td></tr>
+{% endif %}
 </table>
 
 <h2>Cross-trait LD Score regression (moment estimator)</h2>

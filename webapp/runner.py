@@ -124,11 +124,20 @@ def run(job_dir: Path, job: dict) -> None:
         screen_threshold=29.72, screen_eigenvalue_floor=1e-3,
         screen_seed=opt["seed"], screen_ncores=1)
     try:
-        # prep.log carries nested per-trait QC/harmonization dicts; the report
-        # keeps only the top-level scalar counts.
+        # Top-level scalar counts drive the status page; the nested per-trait
+        # QC and harmonization logs feed the results page's per-step report.
         munge = {key: int(value) for key, value in prep.log.items()
                  if isinstance(value, numbers.Integral)
                  and not isinstance(value, bool)}
+        munge["screen"] = bool(prep.log.get("screen"))
+        munge["af_corr"] = _json_safe(prep.log.get("af_corr") or {})
+        for trait in ("trait1", "trait2"):
+            tlog = prep.log.get(trait) or {}
+            munge[trait] = {
+                "qc_enabled": bool(tlog.get("qc_enabled")),
+                "qc": _json_safe(tlog.get("qc") or {}),
+                "harmonize": _json_safe(tlog.get("harmonize") or {}),
+            }
         (job_dir / "munge.json").write_text(json.dumps(munge, indent=1))
         stage.done("harmonize")
 
@@ -168,6 +177,17 @@ def run(job_dir: Path, job: dict) -> None:
             "retained_iterations": res.retained_iterations,
             "stopped_early": bool(res.stopped_early),
         }
+        # Uncertainty for the headline numbers: posterior SD across the
+        # retained (gvar1, gcov, gvar2) sweeps, when the chain kept them.
+        if res.genetic_samples is not None and len(res.genetic_samples):
+            import numpy as np
+            g = np.asarray(res.genetic_samples, dtype=float)
+            ok = np.isfinite(g).all(axis=1) & (g[:, 0] > 0) & (g[:, 2] > 0)
+            if ok.any():
+                g = g[ok]
+                joint["h2_sd"] = [float(g[:, 0].std()), float(g[:, 2].std())]
+                joint["rg_sd"] = float(
+                    (g[:, 1] / np.sqrt(g[:, 0] * g[:, 2])).std())
         stage.done("fit")
 
         written = []

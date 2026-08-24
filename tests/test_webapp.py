@@ -9,6 +9,7 @@ import csv
 import gzip
 import json
 import os
+import re
 import time
 
 import pytest
@@ -62,6 +63,8 @@ def test_index_offers_demo_and_form(web):
     assert "Demo (synthetic" in page.text
     assert 'name="sumstats1"' in page.text
     assert 'name="n_eff1"' in page.text
+    # The LD-consistency screen ships checked.
+    assert re.search(r'name="screen"[^>]*\bchecked\b', page.text)
 
 
 def test_index_carries_preview_assets(web):
@@ -88,10 +91,18 @@ def test_demo_job_end_to_end(web):
     assert result["joint"]["h2"][0] > 0.0
     assert result["munge"]["n_kept"] > 0
     assert result["weights"] == ["weights1.tsv", "weights2.tsv"]
+    # Posterior uncertainty is reported for the headline estimates.
+    assert result["joint"]["rg_sd"] is None or result["joint"]["rg_sd"] >= 0
+    # munge.json carries the per-step QC and harmonization logs.
+    t1 = result["munge"]["trait1"]
+    assert t1["qc"]["n_input"] >= t1["qc"]["n_kept"] > 0
+    assert t1["harmonize"]["n_matched"] > 0
+    assert "af_corr" in result["munge"]
 
     page = client.get(f"/jobs/{job_id}/results")
     assert page.status_code == 200
     assert "Polygenic overlap" in page.text
+    assert "QC and harmonization" in page.text
     for kind in ("result", "munge", "weights1", "weights2"):
         assert client.get(f"/jobs/{job_id}/download/{kind}").status_code == 200
 

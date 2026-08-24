@@ -4,7 +4,13 @@ A small web front end for bipred: upload two GWAS summary-statistics files,
 get back the joint two-trait estimates — genetic correlation with a standard
 error, per-trait SNP heritability, a MiXeR-style polygenic-overlap summary, a
 cross-trait LDSC comparison, and (optionally) per-trait posterior-mean weight
-files — plus a harmonization report and full provenance.
+files — plus a harmonization report and full provenance. The results page
+breaks the harmonization report down per trait — rows in, and the count
+removed by each QC step (non-finite values, duplicates, low per-variant N,
+MAF/INFO floors) and by reference alignment (unmatched, palindromic,
+allele-mismatch) — and shows standard errors where the estimators provide
+them: the block-jackknife SE on the LDSC r_g, and the posterior SD across
+retained sampler sweeps on the joint r_g and heritabilities.
 
 This directory is **not** part of the installed `bipred` package. It is a
 single-VM deployment: one web process, fit jobs as subprocesses, files on
@@ -152,7 +158,8 @@ up as a near-empty harmonization report, not a wrong fit).
 - No accounts: the job URL is the capability. Anyone with the URL can see
   that job until it is purged.
 - The LD-consistency screen and multi-chain fits from the CLI are not
-  exposed yet; the screen checkbox runs the single-fit sensitivity screen.
+  exposed yet; the screen checkbox runs the single-fit sensitivity screen
+  and is on by default.
 - Estimates come from the bipred/ldpred3 reimplementations; see
   `benchmarks/RESULTS.md` for how they compare against the original LDSC and
   MiXeR programs before quoting numbers publicly.
