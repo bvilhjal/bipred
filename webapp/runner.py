@@ -160,6 +160,29 @@ def _warnings_are_critical(rows):
                for item in rows)
 
 
+def _attribute_to_catalog(exc, job):
+    """Name the catalog accession when a stage error blames one trait.
+
+    Post-download stages see plain files, so a per-trait failure carries the
+    runner's trait marker (``trait1`` / ``trait 2``, or the staged
+    ``traitN.gcst.tsv.gz`` file name inside an ldpred3 message), not the
+    accession.  Translate the marker here, mirroring the download stage's
+    ``label (accession): …`` format, so the web process's track-record sweep
+    can attribute the outcome.  Joint failures blame nobody and return None,
+    as does a failure naming a trait that was an upload.
+    """
+    message = str(exc)
+    compact = message.lower().replace(" ", "")
+    marked = [trait for trait in (1, 2) if f"trait{trait}" in compact]
+    if len(marked) != 1:
+        return None
+    meta = job.get("options", {}).get(f"catalog{marked[0]}")
+    if not meta:
+        return None
+    return ValueError(f"{job['labels'][f'trait{marked[0]}']} "
+                      f"({meta['accession']}): {message}")
+
+
 def _n_summary(values, basis):
     import numpy as np
     values = np.asarray(values, dtype=float)
@@ -238,17 +261,25 @@ def run(job_dir: Path, job: dict) -> None:
 
     stage.start("harmonize")
     from bipred import prepare_bivariate_sumstats
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        prep = prepare_bivariate_sumstats(
-            str(cache), str(ss1), str(ss2),
-            n_eff1=opt["n_eff1"], n_eff2=opt["n_eff2"],
-            n_cases1=opt["n_cases1"], n_controls1=opt["n_controls1"],
-            n_cases2=opt["n_cases2"], n_controls2=opt["n_controls2"],
-            columns1=opt["columns1"], columns2=opt["columns2"],
-            screen=opt["screen"], screen_rounds=4, screen_window=1000,
-            screen_threshold=29.72, screen_eigenvalue_floor=1e-3,
-            screen_seed=opt["seed"], screen_ncores=1)
+    try:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            prep = prepare_bivariate_sumstats(
+                str(cache), str(ss1), str(ss2),
+                n_eff1=opt["n_eff1"], n_eff2=opt["n_eff2"],
+                n_cases1=opt["n_cases1"], n_controls1=opt["n_controls1"],
+                n_cases2=opt["n_cases2"], n_controls2=opt["n_controls2"],
+                columns1=opt["columns1"], columns2=opt["columns2"],
+                screen=opt["screen"], screen_rounds=4, screen_window=1000,
+                screen_threshold=29.72, screen_eigenvalue_floor=1e-3,
+                screen_seed=opt["seed"], screen_ncores=1)
+    except Exception as exc:
+        # Let the track record blame the right catalog accession when the
+        # failure is one trait's; joint failures stay unattributed.
+        attributed = _attribute_to_catalog(exc, job)
+        if attributed is not None:
+            raise attributed from exc
+        raise
     captured_warnings.extend(_warning_rows("harmonize", caught))
     try:
         # Top-level scalar counts drive the status page; the nested per-trait

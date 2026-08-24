@@ -195,7 +195,7 @@ def test_status_endpoint(web):
 
 # --- GWAS Catalog support -------------------------------------------------
 
-def _fake_catalog_file(src_tsv, dest):
+def _fake_catalog_file(src_tsv, dest, empty_beta=False):
     """Rewrite a demo trait file into GWAS-Catalog harmonised schema (gz)."""
     rename = {"SNP": "rsid", "CHR": "chromosome", "BP": "base_pair_location",
               "A1": "effect_allele", "A2": "other_allele",
@@ -213,6 +213,8 @@ def _fake_catalog_file(src_tsv, dest):
         writer.writeheader()
         for row in reader:
             out_row = {new: row[old] for old, new in rename.items()}
+            if empty_beta:
+                out_row["beta"] = ""    # a deposit with no usable effects
             out_row["p_value"] = "0.5"
             out_row["n"] = "100000"
             writer.writerow(out_row)
@@ -323,6 +325,47 @@ def test_catalog_job_end_to_end(web, monkeypatch, tmp_path):
     assert entry["kept"] > 0
 
 
+@pytest.mark.slow
+@pytest.mark.integration
+def test_unusable_catalog_deposit_recorded(web, monkeypatch, tmp_path):
+    """A deposit that downloads but loses every variant to QC/harmonization
+    is recorded as not working, and the /catalog page shows it."""
+    from webapp import gwascat
+    client, root = web
+    _FAKE_URLS["GCST000003"] = str(
+        _fake_catalog_file(root / "caches" / "demo" / "trait1.tsv",
+                           tmp_path / "cat3.h.tsv.gz", empty_beta=True))
+    _FAKE_URLS["GCST000004"] = str(
+        _fake_catalog_file(root / "caches" / "demo" / "trait2.tsv",
+                           tmp_path / "cat4.h.tsv.gz"))
+    monkeypatch.setattr("webapp.gwascat.resolve", _fake_resolve)
+    response = client.post(
+        "/jobs",
+        data={"gcst1": "GCST000003", "gcst2": "GCST000004",
+              "cache_key": "TEST"},
+        follow_redirects=False)
+    assert response.status_code == 303, response.text
+    job_id = response.headers["location"].rsplit("/", 1)[-1]
+    job = _wait_for_terminal(root, job_id)
+    assert job["status"] == "failed"
+    assert "GCST000003" in job["error"]
+    assert "all GWAS variants were removed" in job["error"]
+    # The supervisor records the blamed accession on reap; the other trait's
+    # deposit is not blamed for trait 1's failure.
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        if "GCST000003" in gwascat.accession_registry(root):
+            break
+        time.sleep(1)
+    entry = gwascat.accession_registry(root)["GCST000003"]
+    assert entry["works"] is False
+    assert "all GWAS variants were removed" in entry["reason"]
+    assert "GCST000004" not in gwascat.accession_registry(root)
+    page = client.get("/catalog")
+    assert page.status_code == 200
+    assert "GCST000003" in page.text
+
+
 def test_catalog_page_lists_track_record(web):
     from webapp import gwascat
     client, root = web
@@ -401,6 +444,8 @@ def test_accession_registry_semantics(tmp_path):
     assert entry["works"] is True               # never downgraded by a failure
     assert entry["kept"] == 5
     assert gwascat.worth_recording("GCST1: no such study in the GWAS Catalog")
+    assert gwascat.worth_recording(
+        "trait1: all GWAS variants were removed by sumstats QC")
     assert not gwascat.worth_recording("catalog lookup failed (timeout)")
 
 
@@ -535,6 +580,22 @@ def test_fit_warning_classifier_quarantines_do_not_interpret():
         {"message": "Do not interpret h2 or rg from this fit."}])
     assert not _warnings_are_critical([
         {"message": "posterior weights use an HWE SD approximation"}])
+
+
+def test_runner_attributes_per_trait_failure_to_accession():
+    from webapp.runner import _attribute_to_catalog
+    job = {"options": {"catalog1": {"accession": "GCST000001"}},
+           "labels": {"trait1": "Height", "trait2": "BMI"}}
+    out = _attribute_to_catalog(
+        ValueError("trait1: all GWAS variants were removed by sumstats QC"),
+        job)
+    assert "GCST000001" in str(out) and "Height" in str(out)
+    # A joint failure blames nobody.
+    assert _attribute_to_catalog(
+        ValueError("the two GWAS share fewer than two cache variants"),
+        job) is None
+    # The blamed trait is an upload — not the server's to record.
+    assert _attribute_to_catalog(ValueError("trait2: boom"), job) is None
 
 
 def test_normal_submit_rejects_demo_cache(web):

@@ -149,10 +149,10 @@ def _meta_dir(root: Path) -> Path:
 # --- accession track record -------------------------------------------------
 #
 # One JSON dict keyed by accession, updated only by the web process (submit
-# time for resolution failures, job-reap time for download/fit outcomes) so
-# concurrent runner subprocesses never race it. Structural resolution
-# failures (no such study, no harmonised file, dead URL) are recorded;
-# transient network errors are not.
+# time for resolution failures, job-reap time for download and per-trait
+# stage outcomes) so concurrent runner subprocesses never race it. Structural
+# failures (no such study, no harmonised file, dead URL, no usable variants
+# after QC/harmonization) are recorded; transient network errors are not.
 
 REGISTRY_NAME = "accessions.json"
 

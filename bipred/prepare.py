@@ -221,6 +221,16 @@ def prepare_bivariate_sumstats(
         std2, nv2, z2, eaf2, log2 = _align_one(
             sumstats2, variants, n_eff=n2, qc=qc, qc_params=qc_params,
             columns=columns2, label="trait2")
+        # A trait with zero usable variants (QC dropped all, or none matched
+        # the reference) must name itself: the joint "fewer than two cache
+        # variants" error below cannot say which file was unusable, and the
+        # web service attributes catalog outcomes per trait from this label.
+        for label, std in (("trait1", std1), ("trait2", std2)):
+            if not np.isfinite(std).any():
+                raise ValueError(
+                    f"{label}: all GWAS variants were removed by sumstats QC "
+                    "or harmonization against the LD reference (no usable "
+                    "variant remains)")
         keep = np.isfinite(std1) & np.isfinite(std2)
         ref_af = meta.get("reference_af")
         af_corr = {}

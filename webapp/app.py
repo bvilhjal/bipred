@@ -228,8 +228,9 @@ def _record_catalog_outcome(root, job) -> None:
 
     Called once per job, when the supervisor reaps its runner process: a
     *done* job marks its accessions as working; a *failed* job marks only
-    those its error message blames (the runner prefixes download failures
-    with the accession).
+    those its error message blames (the runner prefixes per-trait failures —
+    download, or a harmonization failure naming one trait — with the
+    accession).
     """
     opt = job.get("options", {})
     error = job.get("error") or ""

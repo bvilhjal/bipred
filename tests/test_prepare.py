@@ -109,6 +109,26 @@ def test_prepare_rejects_scalar_n_eff_with_case_controls(tmp_path):
             n_eff2=10_000, qc=False)
 
 
+def test_prepare_names_the_trait_with_no_usable_variants(tmp_path):
+    """A trait that loses every variant names itself, for per-trait blame."""
+    cache, p1, p2, *_ = _cache_and_sumstats(tmp_path)
+    m = 20
+    off = tmp_path / "off-reference.tsv"
+    # Nothing may match: distinct ids, chromosome, positions, and alleles
+    # (harmonize falls back to chrom:pos:alleles when ids do not match).
+    _write_sumstats(off, [f"off{i}" for i in range(m)], ["C"] * m, ["T"] * m,
+                    [0.01] * m, [0.001] * m, 10_000, chrom="2",
+                    pos=np.arange(1000, 1000 + m))
+    with pytest.raises(ValueError,
+                       match="trait1: all GWAS variants were removed"):
+        prepare_bivariate_sumstats(cache, str(off), p2, n_eff1=10_000,
+                                   n_eff2=10_000, qc=False)
+    with pytest.raises(ValueError,
+                       match="trait2: all GWAS variants were removed"):
+        prepare_bivariate_sumstats(cache, p1, str(off), n_eff1=10_000,
+                                   n_eff2=10_000, qc=False)
+
+
 def test_prepare_accepts_distinct_column_mappings_without_mutating_them(tmp_path):
     cache, p1, p2, *_ = _cache_and_sumstats(tmp_path)
     path = tmp_path / "trait1-custom.tsv"

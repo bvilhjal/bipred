@@ -70,6 +70,14 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 ### Fixed
 
+- The web service's GWAS Catalog track record now also learns from jobs that
+  fail *after* a successful download. `prepare_bivariate_sumstats` names the
+  trait whose variants were all removed by sumstats QC or reference
+  harmonization — the joint "fewer than two cache variants" error blamed
+  nobody — and the runner tags that per-trait failure with the catalog
+  accession, so the supervisor's registry sweep, and with it the `/catalog`
+  page, records the deposit as unusable instead of silently dropping the
+  outcome.
 - Web uploads remain in a non-runnable `staging` state until both files and
   metadata are durable; an atomic `launching` claim prevents duplicate starts,
   and startup recovery fails interrupted work instead of leaving it stuck.
