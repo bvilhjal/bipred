@@ -599,6 +599,235 @@ def test_stream_filter_reports_usable_per_variant_n(tmp_path):
     assert len(info["sha256"]) == 64
 
 
+# --- shared download store --------------------------------------------------
+
+def _store_source(tmp_path, name="src.h.tsv.gz", ids=("rs1", "rs2", "rs3")):
+    """A small harmonised-layout file standing in for a catalog deposit."""
+    src = tmp_path / name
+    with gzip.open(src, "wt", newline="") as fh:
+        fh.write("rsid\tchromosome\tbase_pair_location\teffect_allele\t"
+                 "other_allele\tbeta\tstandard_error\tp_value\tn\n")
+        for i, rsid in enumerate(ids):
+            fh.write(f"{rsid}\t1\t{100 + i}\tA\tG\t0.0{i + 1}"
+                     f"\t0.02\t0.5\t100000\n")
+    return src
+
+
+def _rows(path):
+    with gzip.open(path, "rt") as fh:
+        return list(csv.DictReader(fh, delimiter="\t"))
+
+
+def _never_called():
+    raise AssertionError("coverage was computed for a reusable stored copy")
+
+
+def test_store_serves_a_second_reference_without_downloading(tmp_path):
+    """The point of the store: switching LD reference must not re-fetch."""
+    from webapp import gwascat
+    src = _store_source(tmp_path)
+    root = tmp_path / "data"
+    first_ids, second_ids = {"rs1", "rs2"}, {"rs2", "rs3"}
+    first = gwascat.fetch_filtered(
+        str(src), tmp_path / "first.tsv.gz", accession="GCST000001",
+        root=root, keep_ids=first_ids, fingerprint="hash-a",
+        coverage=lambda: (first_ids | second_ids,
+                          {"hash-a": "ref A", "hash-b": "ref B"}))
+    assert first["reused"] is False
+    assert (first["seen"], first["kept"]) == (3, 2)
+    # Deleting the deposit is the assertion: the same URL is passed again,
+    # so any attempt to read it would raise instead of quietly re-fetching.
+    src.unlink()
+    second = gwascat.fetch_filtered(
+        str(src), tmp_path / "second.tsv.gz", accession="GCST000001",
+        root=root, keep_ids=second_ids, fingerprint="hash-b",
+        coverage=_never_called)
+    assert second["reused"] is True
+    assert [row["rsid"] for row in _rows(tmp_path / "second.tsv.gz")] == \
+        ["rs2", "rs3"]
+    # Provenance still describes the remote file, not the stored copy.
+    assert second["seen"] == 3 and second["kept"] == 2
+    assert second["sha256"] == first["sha256"]
+    assert second["effect_from"] == first["effect_from"] == "beta"
+
+
+def test_store_output_matches_a_direct_download(tmp_path):
+    """Filtering the stored copy reproduces stream_filter's own output."""
+    from webapp import gwascat
+    src = _store_source(tmp_path)
+    keep = {"rs2", "rs3"}
+    direct = tmp_path / "direct.tsv.gz"
+    straight = gwascat.stream_filter(str(src), keep, direct)
+    viastore = tmp_path / "viastore.tsv.gz"
+    stored = gwascat.fetch_filtered(
+        str(src), viastore, accession="GCST000002", root=tmp_path / "data",
+        keep_ids=keep, fingerprint="hash-a",
+        coverage=lambda: ({"rs1", "rs2", "rs3"}, {"hash-a": "ref A"}))
+    with gzip.open(direct, "rt") as a, gzip.open(viastore, "rt") as b:
+        assert a.read() == b.read()
+    for field in ("seen", "kept", "sha256", "schema", "effect_from",
+                  "has_n", "has_per_variant_n", "per_variant_n_usable_frac"):
+        assert stored[field] == straight[field], field
+
+
+def test_store_rebuilds_for_an_uncovered_reference(tmp_path):
+    """A reference the stored union never covered is fetched, not faked."""
+    from webapp import gwascat
+    src = _store_source(tmp_path)
+    root = tmp_path / "data"
+    gwascat.fetch_filtered(
+        str(src), tmp_path / "a.tsv.gz", accession="GCST000003", root=root,
+        keep_ids={"rs1"}, fingerprint="hash-a",
+        coverage=lambda: ({"rs1"}, {"hash-a": "ref A"}))
+    again = gwascat.fetch_filtered(
+        str(src), tmp_path / "c.tsv.gz", accession="GCST000003", root=root,
+        keep_ids={"rs3"}, fingerprint="hash-c",
+        coverage=lambda: ({"rs1", "rs3"}, {"hash-c": "ref C"}))
+    assert again["reused"] is False
+    assert [row["rsid"] for row in _rows(tmp_path / "c.tsv.gz")] == ["rs3"]
+    build = json.loads((root / "catalog" / "GCST000003.json").read_text())
+    assert set(build["covers"]) == {"hash-c"}
+
+
+def test_store_ignores_a_copy_of_a_different_url(tmp_path):
+    """Re-deposition under a new path invalidates the stored copy."""
+    from webapp import gwascat
+    root = tmp_path / "data"
+    first = _store_source(tmp_path, "first.h.tsv.gz")
+    gwascat.fetch_filtered(
+        str(first), tmp_path / "a.tsv.gz", accession="GCST000004", root=root,
+        keep_ids={"rs1"}, fingerprint="hash-a",
+        coverage=lambda: ({"rs1"}, {"hash-a": "ref A"}))
+    second = _store_source(tmp_path, "second.h.tsv.gz", ids=("rs1", "rs9"))
+    redeposited = gwascat.fetch_filtered(
+        str(second), tmp_path / "b.tsv.gz", accession="GCST000004", root=root,
+        keep_ids={"rs1"}, fingerprint="hash-a",
+        coverage=lambda: ({"rs1", "rs9"}, {"hash-a": "ref A"}))
+    assert redeposited["reused"] is False
+    assert redeposited["seen"] == 2
+
+
+def test_store_refuses_a_union_that_misses_the_reference(tmp_path):
+    from webapp import gwascat
+    src = _store_source(tmp_path)
+    with pytest.raises(ValueError, match="does not cover"):
+        gwascat.fetch_filtered(
+            str(src), tmp_path / "x.tsv.gz", accession="GCST000005",
+            root=tmp_path / "data", keep_ids={"rs1", "rs2"},
+            fingerprint="hash-a",
+            coverage=lambda: ({"rs1"}, {"hash-a": "ref A"}))
+
+
+def test_store_eviction_spares_recent_copies(tmp_path):
+    """The byte budget evicts least-recently-used copies, not live ones."""
+    from webapp import gwascat
+    root = tmp_path / "data"
+    src = _store_source(tmp_path)
+    for accession in ("GCST000006", "GCST000007"):
+        gwascat.fetch_filtered(
+            str(src), tmp_path / f"{accession}.tsv.gz", accession=accession,
+            root=root, keep_ids={"rs1"}, fingerprint="hash-a",
+            coverage=lambda: ({"rs1"}, {"hash-a": "ref A"}))
+    meta = root / "catalog" / "GCST000006.json"
+    build = json.loads(meta.read_text())
+    build["last_used"] = time.time() - 10 * 86400
+    meta.write_text(json.dumps(build))
+    assert gwascat.purge_store(root, 1e-9) == ["GCST000006"]
+    assert not (root / "catalog" / "GCST000006.tsv.gz").exists()
+    assert (root / "catalog" / "GCST000007.tsv.gz").exists()   # used just now
+    # A budget of zero disables the cap but still clears abandoned partials.
+    stale = root / "catalog" / "GCST000008.tsv.gz.part"
+    stale.write_text("half a download")
+    os.utime(stale, (0, 0))
+    assert gwascat.purge_store(root, 0) == []
+    assert not stale.exists()
+
+
+def test_coverage_covers_every_registered_reference(tmp_path, monkeypatch):
+    """The runner's union must span all registered references, not just the
+    one this job asked for — that is what makes a re-run against a different
+    reference free."""
+    from webapp import caches, demo, gwascat, runner
+    first, second = tmp_path / "ref-a", tmp_path / "ref-b"
+    demo.build_demo(first, m=400, n_samples=200, seed=3)
+    demo.build_demo(second, m=300, n_samples=200, seed=4)
+    a, b = first / "demo.ld.npz", second / "demo.ld.npz"
+    monkeypatch.setenv("BIPRED_WEB_CACHES", f"A={a};B={b}")
+    keep_ids = gwascat.cache_ids(a)
+    coverage = runner._coverage_thunk(tmp_path, a, "A", keep_ids,
+                                      caches.sha256_cached(a))
+    union, covers = coverage()
+    # Any real cache this host happens to have registered is covered too; the
+    # invariant is that no registered reference is left out.
+    assert covers[caches.sha256_cached(a)] == "A"
+    assert covers[caches.sha256_cached(b)] == "B"
+    assert keep_ids <= union and gwascat.cache_ids(b) <= union
+    assert coverage()[0] is union                             # computed once
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+def test_rerunning_an_analysis_reuses_the_download(web, monkeypatch, tmp_path):
+    """A second job for the same accessions must not re-fetch the deposits."""
+    client, root = web
+    monkeypatch.setattr("webapp.gwascat.resolve", _fake_resolve)
+    for trait, accession in ((1, "GCST000010"), (2, "GCST000011")):
+        _FAKE_URLS[accession] = str(_fake_catalog_file(
+            root / "caches" / "demo" / f"trait{trait}.tsv",
+            tmp_path / f"rerun{trait}.h.tsv.gz"))
+
+    def submit():
+        response = client.post(
+            "/jobs", data={"gcst1": "GCST000010", "gcst2": "GCST000011",
+                           "cache_key": "TEST"}, follow_redirects=False)
+        assert response.status_code == 303, response.text
+        return _wait_for_terminal(
+            root, response.headers["location"].rsplit("/", 1)[-1])
+
+    first = submit()
+    assert first["status"] == "done", first.get("error")
+    assert first["options"]["catalog1"]["source"] == "download"
+    assert (root / "catalog" / "GCST000010.tsv.gz").exists()
+    # Deleting the deposits is the assertion: a re-fetch would now fail.
+    for accession in ("GCST000010", "GCST000011"):
+        os.unlink(_FAKE_URLS[accession])
+    second = submit()
+    assert second["status"] == "done", second.get("error")
+    for trait in (1, 2):
+        assert second["options"][f"catalog{trait}"]["source"] == "stored copy"
+        # Reuse must not change what the fit sees.
+        assert second["options"][f"catalog{trait}"]["kept"] == \
+            first["options"][f"catalog{trait}"]["kept"]
+        assert second["options"][f"catalog{trait}"]["sha256"] == \
+            first["options"][f"catalog{trait}"]["sha256"]
+
+
+def test_progress_sink_records_library_events(tmp_path):
+    """Library progress events land in job.json for the status endpoint."""
+    from webapp import jobs, runner
+    job = jobs.create_job(tmp_path, options={}, labels={})
+    stage = runner._Stages(tmp_path, job)
+    stage.start("fit")
+    runner._progress_sink(stage)({"step": "fit", "done": 3, "total": 10,
+                                  "unit": "sweep", "phase": "burn-in"})
+    saved = jobs.load_job(tmp_path, job["id"])
+    assert saved["progress"]["step"] == "fit"
+    assert saved["progress"]["done"] == 3
+    assert saved["progress"]["phase"] == "burn-in"
+
+
+def test_progress_sink_survives_a_failed_status_write():
+    """A fit must not die because its status write did; the library lets the
+    callback's exception propagate, so the swallowing belongs here."""
+    from webapp import runner
+
+    class Failing:
+        def progress(self, **fields):
+            raise OSError("no space left on device")
+
+    runner._progress_sink(Failing())({"step": "fit", "done": 1, "total": 2})
+
+
 def test_accession_format_checked(tmp_path):
     from webapp import gwascat
     with pytest.raises(ValueError, match="GCST"):

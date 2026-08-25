@@ -384,6 +384,7 @@ chains driver, which reserves them for its own dispersal.
 | `tol` | `0` | single | optional stabilization heuristic; chains rejects `tol>0` |
 | `check_every` | `50` | both | retained sweeps between stabilization checks; accepted by chains but inert there, since adaptive stopping is disabled |
 | `seed` | `None` (single) / `0` (chains) | both | random seed. The chains driver requires an integer and rejects `None` |
+| `progress` | `None` | single | optional per-sweep progress callback; see [Progress reporting](#progress-reporting). The chains driver does not accept it: its chains run concurrently, so a single callback could not say which one it spoke for |
 
 With `tol>0`, a single chain checks the relative RMS change in both
 posterior-mean effect vectors and the change in `r_g` every `check_every`
@@ -391,6 +392,48 @@ retained sweeps. Meeting the threshold can stop the run early. This is a
 schedule- and seed-dependent stabilization heuristic, not evidence that the
 Markov chain converged. It is disabled for `rg_decorrelated=True` and unsupported
 by multi-chain inference; use dispersed full-length chains for diagnostics.
+
+## Progress reporting
+
+A genome-scale screen or fit runs for minutes to hours, and a caller driving
+one from a user interface needs to see it move. Three entry points therefore
+accept an optional `progress` callable:
+`prepare_bivariate_sumstats`, `ld_consistency_screen` (and its `dentist`
+alias), and `ldpred3_auto_bivariate_blocks`. Each calls it with one event
+dict:
+
+```python
+{"step": "LD consistency screen, trait 1", "done": 312, "total": 1704,
+ "unit": "block"}
+```
+
+`step` names the work now running, `done` counts units of `total` already
+finished, and `unit` says what those units are. For the coarse sequence of
+steps inside `prepare_bivariate_sumstats` (`unit="step"`), `done` is the
+number finished *before* the named one, so a reader sees what is running.
+The fit adds `phase`, either `"burn-in"` or `"sampling"`.
+
+Three properties are worth relying on.
+
+1. **It cannot change a result.** Reporting draws no random numbers and runs
+   after each unit's updates; a fit with `progress` is bit-identical to one
+   without, and so is a screen's mask. The tests assert this directly.
+2. **It is called from your thread.** Even when the screen settles blocks in
+   a pool, events are emitted as results are collected in the calling
+   thread, so a callback needs no locking.
+3. **Its exceptions propagate.** Reporting that has silently stopped is
+   worse than reporting that fails loudly, so a callback writing somewhere
+   fallible should catch its own errors — a three-hour fit should not die of
+   a full disk in a status file.
+
+With `tol > 0` the fit may stop before `done` reaches `total`; the sweep it
+stops on is still reported.
+
+```python
+prep = prepare_bivariate_sumstats(
+    cache, ss1, ss2, n_eff1=n1, n_eff2=n2, screen=True,
+    progress=lambda e: print(f"{e['step']}: {e['done']}/{e['total']}"))
+```
 
 ## Pitfalls
 

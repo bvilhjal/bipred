@@ -339,3 +339,41 @@ def test_missing_cache_af_writes_safe_target_scaled_weights(tmp_path):
         effect_allele=prep.effect_allele, other_allele=prep.other_allele,
         af=prep.af)
     assert not read_weights(path).has_scale
+
+
+def test_prepare_reports_each_step_and_the_screens_blocks(tmp_path):
+    cache, p1, p2, _b1, _b2, n, _ids, _af = _cache_and_sumstats(tmp_path)
+    events = []
+    prep = prepare_bivariate_sumstats(
+        cache, p1, p2, n_eff1=n, n_eff2=n, qc=False, screen=True,
+        screen_rounds=1, screen_seed=3, progress=events.append)
+    steps = [e["step"] for e in events if e["unit"] == "step"]
+    assert steps == ["load LD reference", "read and QC trait 1",
+                     "read and QC trait 2",
+                     "harmonize against the LD reference",
+                     "LD consistency screen"]
+    assert [e["done"] for e in events if e["unit"] == "step"] == [0, 1, 2, 3, 4]
+    assert {e["total"] for e in events if e["unit"] == "step"} == {5}
+    per_block = [e for e in events if e["unit"] == "block"]
+    assert {e["step"] for e in per_block} == {
+        "LD consistency screen, trait 1", "LD consistency screen, trait 2"}
+    # The reporting controls must not leak into the serialised provenance.
+    import json
+    json.dumps(prep.log["screen_params"])
+    assert "progress" not in prep.log["screen_params"]
+
+
+def test_prepare_without_a_screen_reports_four_steps(tmp_path):
+    cache, p1, p2, _b1, _b2, n, _ids, _af = _cache_and_sumstats(tmp_path)
+    events = []
+    prepare_bivariate_sumstats(cache, p1, p2, n_eff1=n, n_eff2=n, qc=False,
+                               progress=events.append)
+    assert {e["total"] for e in events} == {4}
+    assert [e["step"] for e in events][-1] == "harmonize against the LD reference"
+
+
+def test_prepare_rejects_a_non_callable_progress(tmp_path):
+    cache, p1, p2, _b1, _b2, n, _ids, _af = _cache_and_sumstats(tmp_path)
+    with pytest.raises(TypeError, match="callable"):
+        prepare_bivariate_sumstats(cache, p1, p2, n_eff1=n, n_eff2=n,
+                                   progress=42)

@@ -44,6 +44,8 @@ import warnings
 import numpy as np
 from ldpred3 import LowRankLD
 
+from . import _progress
+
 # Keep the pinned private ldpred3 seam in one compatibility module; LowRankLD
 # itself is public and imported directly above.
 from ._ldpred3_compat import (
@@ -1699,7 +1701,8 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
                                   iw_df=10.0, rg_decorrelated=False,
                                   noise_inflation=False, ni_damp=0.1,
                                   pi_prior=1.0, sample_every=5, ncores=1,
-                                  tol=0.0, check_every=50, seed=None):
+                                  tol=0.0, check_every=50, seed=None,
+                                  progress=None):
     """Genome-wide bivariate LDpred3-auto over dense or low-rank LD blocks.
 
     ``blocks`` is ``[(R, idx), ...]`` with contiguous ``idx`` arrays partitioning
@@ -1810,12 +1813,21 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
     check_every : int, default 50
         Retained sweeps between stabilization checks when ``tol > 0``.
     seed : int or None
+    progress : callable or None
+        Called once per completed sweep with
+        ``{"step": "fit", "done": sweep, "total": burn_in + num_iter,
+        "unit": "sweep", "phase": "burn-in" | "sampling"}``. The total is the full schedule;
+        ``tol > 0`` may stop short of it, so a run can finish without a final
+        event at ``done == total``. Reporting cannot change the chain: it
+        draws nothing and is called after the sweep's updates. See
+        :mod:`bipred._progress`.
 
     Returns
     -------
     BivariateResult
     """
     warn_no_numba()
+    _progress.validate(progress)
     options = _validate_bivariate_options(
         ld_int8=ld_int8,
         h2_init=h2_init,
@@ -1847,16 +1859,19 @@ def ldpred3_auto_bivariate_blocks(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2, 
         sigma_prior_scale=sigma_prior_scale,
         seed=seed,
     )
-    return _ldpred3_auto_bivariate_prepared(prepared, options, start)
+    return _ldpred3_auto_bivariate_prepared(prepared, options, start,
+                                            progress=progress)
 
 
-def _ldpred3_auto_bivariate_prepared(prepared, options, start):
+def _ldpred3_auto_bivariate_prepared(prepared, options, start, progress=None):
     """Run one chain while preserving the caller's Numba thread mask."""
     with _pinned_numba_threads(options.ncores):
-        return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start)
+        return _ldpred3_auto_bivariate_prepared_inner(prepared, options, start,
+                                                      progress=progress)
 
 
-def _ldpred3_auto_bivariate_prepared_inner(prepared, options, start):
+def _ldpred3_auto_bivariate_prepared_inner(prepared, options, start,
+                                           progress=None):
     """Run one chain from canonical shared data and fresh mutable workspaces."""
     bh1 = prepared.beta_hat1
     bh2 = prepared.beta_hat2
@@ -2134,6 +2149,13 @@ def _ldpred3_auto_bivariate_prepared_inner(prepared, options, start):
             s2 = min(s2, h2_cap[1] / max(n2c, 1))
         mab = 0.999 * np.sqrt(s1 * s2)               # PD safety (rarely binds)
         s12 = min(max(s12, -mab), mab)
+
+        # Before the retained-sample bookkeeping below, whose adaptive
+        # stopping can break out of the loop: otherwise the sweep a run
+        # stops on is the one sweep it never reports.
+        _progress.report(progress, "fit", it + 1, burn_in + num_iter,
+                         unit="sweep",
+                         phase="burn-in" if it < burn_in else "sampling")
 
         if it >= burn_in:
             avg1 += rbs1; avg2 += rbs2

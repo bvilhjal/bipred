@@ -14,17 +14,47 @@
   const note = document.getElementById("status-note");
   const progressLine = document.getElementById("progress-line");
 
+  const NUM = new Intl.NumberFormat();
+
+  /* A library progress event: {step, done, total, unit, phase?}. `done`
+   * counts finished units, except for a sequence of named steps, where it
+   * counts the ones before the named one — so that reads as done + 1. */
+  function renderStep(p) {
+    let text = p.phase || p.step;
+    if (!p.total) return text;
+    const stepwise = p.unit === "step";
+    const at = stepwise ? Math.min(p.done + 1, p.total) : p.done;
+    /* Floored, not rounded: 399 of 400 rounds to "100%", which reads as
+     * finished when a sweep is still to come. */
+    const pct = Math.floor(Math.min(100, 100 * (stepwise ? at - 1 : at) /
+                                    p.total));
+    text += " — " + (p.unit ? p.unit + " " : "") + NUM.format(at) + " of " +
+            NUM.format(p.total) + " (" + pct + "%)";
+    return text;
+  }
+
   function renderProgress(p) {
     if (!progressLine) return;
-    if (!p || !p.bytes) { progressLine.hidden = true; return; }
-    const mb = p.bytes / 1048576;
-    let text = "Downloading " + p.accession + " (trait " + p.trait + ") — " +
-               mb.toFixed(0) + " MB read";
-    if (p.total) {
-      text += " of " + (p.total / 1048576).toFixed(0) + " MB (" +
-              Math.min(100, 100 * p.bytes / p.total).toFixed(0) + "%)";
+    const where = p ? p.accession + " (trait " + p.trait + ")" : "";
+    let text = null;
+    if (p && p.step) {
+      text = renderStep(p);
+    } else if (p && p.waiting) {
+      text = "Waiting for another job's download of " + where + " — " +
+             p.waiting + " s";
+    } else if (p && p.filtering) {
+      text = "Reusing the stored copy of " + where +
+             " — filtering it to this LD reference";
+    } else if (p && p.bytes) {
+      text = "Downloading " + where + " — " +
+             (p.bytes / 1048576).toFixed(0) + " MB read";
+      if (p.total) {
+        text += " of " + (p.total / 1048576).toFixed(0) + " MB (" +
+                Math.min(100, 100 * p.bytes / p.total).toFixed(0) + "%)";
+      }
+      if (p.mb_s) text += ", " + p.mb_s + " MB/s";
     }
-    if (p.mb_s) text += ", " + p.mb_s + " MB/s";
+    if (text === null) { progressLine.hidden = true; return; }
     progressLine.textContent = text;
     progressLine.hidden = false;
   }

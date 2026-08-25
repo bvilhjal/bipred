@@ -62,6 +62,20 @@ harmonised-file index for a week and per-study metadata indefinitely under
 and the effect provenance on the results page. Requires network access on
 the host, both at submit time and in the fit subprocess.
 
+Each deposit is fetched **once**. The download stage keeps one normalised
+copy per accession under `<data dir>/catalog/`, filtered to the union of the
+LD references registered at the time it was built, and every job filters
+that copy locally into its own job directory. Re-running an analysis —
+including against a different registered reference, which is exactly what a
+per-reference file could not have served — then touches the network not at
+all; the results page says `(stored copy)` rather than `(download)`, and the
+job page reports the local filter instead of a byte count. Reuse is keyed on
+the accession, the harmonised-file URL, and the *content* hash of the LD
+cache, so a re-deposited file or a registry name re-pointed at different
+bytes fetches again instead of quietly serving the wrong variants. Stored
+copies outlive the jobs that fetched them and are evicted least-recently-used
+past `BIPRED_WEB_STORE_GB`, never within an hour of use.
+
 The `/catalog` page reads LDpred3's canonical, hashed benchmark registry
 directly from the sibling checkout. It currently exposes 49 accessions that
 completed an end-to-end fit and 37 documented rejected/failed deposits (36
@@ -94,12 +108,22 @@ authority):
 
 The job page updates live: a small poller hits `GET /jobs/<id>/status`
 (JSON: `status`, `stage`, per-stage seconds, harmonization counts, `error`)
-every 2 s and redirects to the results on completion. During the catalog
-`download` stage the runner also reports compressed bytes read once a
-second, which the page shows as MB read, percentage of the file size found
-at resolve time, and MB/s. With JavaScript
-disabled the page still renders the last server-side state and offers a
-reload link.
+every 2 s and redirects to the results on completion. **Every stage reports
+what it is doing**, throttled to once a second, so a long one is never a
+blank wait:
+
+| Stage | Reported |
+|---|---|
+| `download` | MB read, percent of the resolved file size, MB/s — or reuse of a stored copy, or a wait on another job's fetch |
+| `harmonize` | the step (load reference, read and QC each trait, harmonize) and then, per block, each trait's LD consistency screen — the long pole at genome scale |
+| `ldsc` | LD scores, then the regression |
+| `fit` | sweep *k* of *burn-in + sampling*, labelled by phase |
+| `weights` | the trait whose file is being written |
+
+Below `harmonize` and `fit` this comes from `bipred`'s own optional
+`progress` callback (see `bipred/_progress.py`), which reports from the
+calling thread and cannot change a result. With JavaScript disabled the page
+still renders the last server-side state and offers a reload link.
 
 ## How it runs
 
@@ -116,7 +140,8 @@ weight files. Results record input/cache hashes, N basis and range, column
 overrides, screen and sampling-error assumptions, source revision, CPU/OS/
 Python/numerical backends and thread limits, wall/user/system CPU seconds,
 peak RSS, and stage timings. Finished jobs are purged after
-`BIPRED_WEB_TTL_DAYS` (default 7).
+`BIPRED_WEB_TTL_DAYS` (default 7); stored catalog downloads are kept
+independently of jobs, under the `BIPRED_WEB_STORE_GB` budget.
 
 ## Configuration (environment variables)
 
@@ -127,6 +152,7 @@ peak RSS, and stage timings. Finished jobs are purged after
 | `BIPRED_WEB_CONCURRENCY` | `2` | simultaneous fit subprocesses |
 | `BIPRED_WEB_MAX_UPLOAD_MB` | `500` | per-file upload cap |
 | `BIPRED_WEB_TTL_DAYS` | `7` | retention of finished jobs |
+| `BIPRED_WEB_STORE_GB` | `20` | byte budget for stored catalog downloads (`0` disables the cap) |
 | `BIPRED_WEB_HOST` / `BIPRED_WEB_PORT` | `127.0.0.1` / `8000` | bind address |
 | `BIPRED_WEB_LDPRED3_BENCHMARKS` | `../ldpred3/benchmarks` | canonical Catalog evidence directory |
 

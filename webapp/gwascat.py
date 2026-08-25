@@ -9,11 +9,17 @@ Two responsibilities, mirroring the two moments they are needed:
   for a week, per-study metadata indefinitely (accessions are immutable).
 
 * :func:`stream_filter` runs at *fit* time (in the runner subprocess): stream
-  the harmonised file, keep only variants present in the job's LD reference,
+  the harmonised file, keep only variants present in a given variant set,
   and write one normalised TSV.GZ that ``ldpred3.sumstats`` reads with no
   overrides. Raw catalog files run to hundreds of MB and are ~90% variants
-  the reference does not contain, so filtering in the stream is what keeps
-  job directories small.
+  no reference contains, so filtering in the stream is what keeps job
+  directories small.
+
+* :func:`fetch_filtered` wraps that for the runner so a file is downloaded
+  at most once: a shared per-accession copy under ``<data root>/catalog/``
+  is kept filtered to the union of the registered LD references, and each
+  job filters that copy locally. Re-running an analysis — including against
+  a different registered reference — then touches the network not at all.
 
 The schema handling — the ``hm_``-prefixed 2015-era layout versus the current
 one, an effect carried as beta / odds ratio / z-score with per-row fallback —
@@ -119,7 +125,10 @@ def _effect_from_row(row, zscore, se_col, odds):
 
 
 class _HashingReader:
-    """Wrap a byte stream: hash bytes as read, count them, report progress."""
+    """Wrap a byte stream: hash bytes as read, count them, report progress.
+
+    ``digest`` may be None when only the byte count is wanted.
+    """
 
     def __init__(self, stream, digest, on_bytes=None):
         self._stream, self._digest = stream, digest
@@ -131,7 +140,8 @@ class _HashingReader:
 
     def read(self, size=-1):
         data = self._stream.read(size)
-        self._digest.update(data)
+        if self._digest is not None:
+            self._digest.update(data)
         self.total += len(data)
         if self._on_bytes is not None:
             self._on_bytes(self.total)      # throttling is the caller's job
@@ -381,3 +391,352 @@ def stream_filter(url_or_path: str, keep_ids: set, dest: Path,
                 per_variant_n_usable_frac=n_frac,
                 has_per_variant_n=bool(info["has_n"] and n_frac >= 0.99))
     return info
+
+
+# --- shared download store (fit-time, runner subprocess) --------------------
+#
+# :func:`stream_filter` writes a file that is specific to one LD reference,
+# because the filter runs *during* the download. Re-running an analysis
+# therefore used to re-fetch hundreds of megabytes already on disk, and a
+# re-run against a different reference could not have reused the old file
+# even in principle: it no longer contains the variants the new reference
+# needs.
+#
+# So keep one normalised copy per accession under ``<data root>/catalog/``,
+# filtered to the *union* of the LD references registered when it was built,
+# and have each job filter that copy locally. Re-running with any covered
+# reference then costs no network at all. The stored copy is roughly an
+# order of magnitude smaller than the raw harmonised file (ten columns, and
+# only variants some reference contains), so this trades much less disk than
+# caching the raw download would.
+#
+# Coverage is keyed on the *content* hash of each LD cache file, not its
+# registry name, so re-pointing a name at different bytes rebuilds instead of
+# silently filtering against a reference the store never covered.
+
+STORE_DIRNAME = "catalog"
+LOCK_STALE = 900.0          # a lock unheartbeaten this long is abandoned
+LOCK_TOUCH = 30.0           # heartbeat interval while downloading
+WAIT_LIMIT = 3600.0         # give up waiting on another job's download
+EVICT_GRACE = 3600.0        # never evict a copy used this recently
+PART_STALE = 3600.0         # abandoned partial downloads older than this go
+
+
+def _write_json(path: Path, payload: dict) -> None:
+    tmp = str(path) + ".part"
+    with open(tmp, "w") as fh:
+        json.dump(payload, fh, indent=1, sort_keys=True)
+    os.replace(tmp, path)
+
+
+def store_dir(root: Path) -> Path:
+    out = Path(root) / STORE_DIRNAME
+    out.mkdir(parents=True, exist_ok=True)
+    return out
+
+
+def _store_paths(root: Path, accession: str) -> tuple:
+    """``(data, meta)`` paths for one accession's stored copy."""
+    accession = (accession or "").strip().upper()
+    if not ACCESSION.match(accession):
+        raise ValueError(f"{accession!r}: not a GCST accession")
+    base = store_dir(root)
+    return base / f"{accession}.tsv.gz", base / f"{accession}.json"
+
+
+def _load_build(meta_path: Path, fingerprint: str | None = None) -> dict | None:
+    """The stored copy's build record, or None when it cannot serve us."""
+    try:
+        build = json.loads(Path(meta_path).read_text())
+    except (OSError, ValueError):
+        return None
+    if fingerprint is not None and fingerprint not in (build.get("covers") or {}):
+        return None
+    return build
+
+
+def _record_use(meta_path: Path) -> None:
+    """Stamp the copy as in use, which also holds eviction off it."""
+    build = _load_build(meta_path)
+    if build is None:
+        return
+    build["last_used"] = time.time()
+    try:
+        _write_json(Path(meta_path), build)
+    except OSError:
+        pass                                # bookkeeping never fails a job
+
+
+class _StoreLock:
+    """Best-effort exclusive lock so two jobs do not fetch the same file.
+
+    Ownership is a file created with ``O_EXCL``; the owner touches it while
+    downloading, and a lock left unheartbeaten for ``LOCK_STALE`` is treated
+    as abandoned by a dead process. Losing the race is never a correctness
+    problem — publishing is an atomic rename — so a waiter that gives up
+    downloads too rather than failing the job.
+    """
+
+    def __init__(self, path):
+        self.path = Path(path)
+        self.fd = None
+        self._touched = 0.0
+
+    def acquire(self) -> bool:
+        for attempt in (0, 1):
+            try:
+                self.fd = os.open(str(self.path),
+                                  os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+                self._touched = time.time()
+                return True
+            except FileExistsError:
+                if attempt or not self.stale():
+                    return False
+                self.steal()
+        return False
+
+    def stale(self) -> bool:
+        try:
+            return time.time() - self.path.stat().st_mtime > LOCK_STALE
+        except OSError:
+            return False                    # gone: the owner released it
+
+    def steal(self) -> None:
+        try:
+            os.unlink(self.path)
+        except OSError:
+            pass
+
+    def touch(self) -> None:
+        now = time.time()
+        if self.fd is None or now - self._touched < LOCK_TOUCH:
+            return
+        self._touched = now
+        try:
+            os.utime(self.path, None)
+        except OSError:
+            pass
+
+    def release(self) -> None:
+        if self.fd is None:
+            return
+        try:
+            os.close(self.fd)
+        finally:
+            self.fd = None
+            self.steal()
+
+
+def _wait_for_build(meta_path: Path, lock: _StoreLock, fingerprint: str,
+                    on_wait=None) -> dict | None:
+    """Wait for whoever holds the lock to publish a copy that covers us."""
+    start = time.time()
+    while time.time() - start < WAIT_LIMIT:
+        time.sleep(2.0)
+        build = _load_build(meta_path, fingerprint)
+        if build is not None:
+            return build
+        if not lock.path.exists():
+            return None                     # released without helping us
+        if lock.stale():
+            lock.steal()
+            return None
+        if on_wait is not None:
+            on_wait(round(time.time() - start))
+    return None
+
+
+def _build_store(url: str, data: Path, meta_path: Path, accession: str,
+                 union_ids: set, covers: dict, fingerprint: str,
+                 on_bytes=None, on_wait=None) -> dict:
+    """Download once into the shared store and record what it covers."""
+    lock = _StoreLock(str(meta_path) + ".lock")
+    if not lock.acquire():
+        build = _wait_for_build(meta_path, lock, fingerprint, on_wait)
+        if build is not None and data.exists():
+            return build
+        lock.acquire()                      # owner died, or built nothing
+    try:
+        def heartbeat(total, _inner=on_bytes):
+            lock.touch()
+            if _inner is not None:
+                _inner(total)
+        info = stream_filter(url, union_ids, data, on_bytes=heartbeat)
+        build = {"accession": accession, "url": url,
+                 "built": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()),
+                 "last_used": time.time(),
+                 "seen": info["seen"], "kept": info["kept"],
+                 "sha256": info["sha256"], "schema": info["schema"],
+                 "effect_from": info["effect_from"], "has_n": info["has_n"],
+                 "covers": covers, "bytes": data.stat().st_size}
+        _write_json(meta_path, build)
+        return build
+    except BaseException:
+        try:
+            os.unlink(str(data) + ".part")
+        except OSError:
+            pass
+        raise
+    finally:
+        lock.release()
+
+
+def _discard(data: Path, meta_path: Path) -> None:
+    for path in (data, meta_path):
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+
+class _StoreLayoutError(Exception):
+    """The stored copy is not in the layout we wrote; rebuild rather than read."""
+
+
+HEADER = "\t".join(OUT_COLS)
+
+
+def _filter_normalised(store: Path, keep_ids: set, dest: Path,
+                       on_bytes=None) -> tuple:
+    """Copy the stored copy's ``keep_ids`` rows verbatim; return (kept, n_usable).
+
+    Rows are written byte-for-byte, so the result is exactly what a download
+    filtered to ``keep_ids`` would have produced. Do not be tempted to route
+    this through :func:`stream_filter` instead: ``_resolve_schema`` maps the
+    *deposit* aliases, and three of our own column names (``chrom``, ``pos``,
+    ``pval``) are not among them, so a round trip would silently drop them.
+    """
+    n_col = OUT_COLS.index("n")
+    tmp = str(dest) + ".part"
+    kept = n_usable = 0
+    with open(store, "rb") as raw:
+        counted = _HashingReader(raw, None, on_bytes)
+        with gzip.open(counted, "rt", encoding="utf-8",
+                       errors="replace") as src, \
+                gzip.open(tmp, "wt", encoding="utf-8", newline="") as dst:
+            header = src.readline().rstrip("\n")
+            if header != HEADER:
+                os.unlink(tmp)
+                raise _StoreLayoutError(header)
+            dst.write(header + "\n")
+            for line in src:
+                fields = line.rstrip("\n").split("\t")
+                if fields[0] not in keep_ids:
+                    continue
+                dst.write(line if line.endswith("\n") else line + "\n")
+                kept += 1
+                if len(fields) > n_col and _is_number(fields[n_col]) \
+                        and float(fields[n_col]) > 0:
+                    n_usable += 1
+    if kept == 0:
+        os.unlink(tmp)
+        raise ValueError("no variants overlap the LD reference — wrong "
+                         "genome build or a hits-only deposition?")
+    os.replace(tmp, dest)
+    return kept, n_usable
+
+
+def fetch_filtered(url: str, dest: Path, *, accession: str, root: Path,
+                   keep_ids: set, fingerprint: str, coverage=None,
+                   on_bytes=None, on_filter=None, on_wait=None) -> dict:
+    """One accession's variants, filtered to ``keep_ids``, without re-downloading.
+
+    Writes the same normalised TSV.GZ :func:`stream_filter` would have
+    written for ``keep_ids``, but reads a stored copy whenever one covers
+    this reference. ``coverage()`` is called only when a download is actually
+    needed and must return ``(union_ids, covers)``: the variants to keep in
+    the stored copy, and ``{cache content hash: label}`` for every reference
+    that union covers.
+
+    The returned dict has :func:`stream_filter`'s fields — with ``seen``,
+    ``sha256``, ``schema``, ``effect_from`` and ``has_n`` describing the
+    *remote* file rather than the stored copy — plus ``reused`` and
+    ``store_kept``.
+    """
+    data, meta_path = _store_paths(root, accession)
+    for attempt in (0, 1):
+        build = _load_build(meta_path, fingerprint) if data.exists() else None
+        if build is not None and build.get("url") != url:
+            # An accession is immutable, but the harmonised file it points at
+            # can be re-deposited under a new path. Then the copy is of a file
+            # we are no longer being asked for, and reuse would be a lie.
+            build = None
+        if build is not None:
+            _record_use(meta_path)          # holds eviction off before we read
+        reused = build is not None and data.exists()
+        if not reused:
+            union_ids, covers = coverage() if coverage else (set(keep_ids), {})
+            covers = dict(covers)
+            covers.setdefault(fingerprint, "requested LD reference")
+            if not keep_ids <= union_ids:
+                raise ValueError(
+                    "stored-copy variant union does not cover this job's LD "
+                    "reference; refusing to filter against it")
+            build = _build_store(url, data, meta_path, accession, union_ids,
+                                 covers, fingerprint, on_bytes=on_bytes,
+                                 on_wait=on_wait)
+        try:
+            kept, n_usable = _filter_normalised(data, keep_ids, dest,
+                                                on_filter)
+            break
+        except _StoreLayoutError as exc:
+            if attempt:                     # we just wrote it: give up loudly
+                raise ValueError(
+                    f"{accession}: stored copy has an unreadable header "
+                    f"({exc})")
+            _discard(data, meta_path)       # an older layout: fetch it again
+    n_frac = n_usable / kept
+    return {"schema": build["schema"], "effect_from": build["effect_from"],
+            "has_n": build["has_n"], "seen": build["seen"],
+            "sha256": build["sha256"], "kept": kept,
+            "per_variant_n_usable_frac": n_frac,
+            "has_per_variant_n": bool(build["has_n"] and n_frac >= 0.99),
+            "reused": reused, "store_kept": build["kept"]}
+
+
+def purge_store(root: Path, budget_gb: float) -> list:
+    """Evict least-recently-used stored copies down to a byte budget.
+
+    Copies used within the last hour are never evicted, so a running job
+    cannot have the file pulled out from under it. Abandoned partial
+    downloads are removed regardless.
+    """
+    base = store_dir(root)
+    now = time.time()
+    for part in base.glob("*.tsv.gz.part"):
+        try:
+            if now - part.stat().st_mtime > PART_STALE:
+                part.unlink()
+        except OSError:
+            pass
+    if not budget_gb or budget_gb <= 0:
+        return []
+    total, candidates = 0, []
+    for meta_path in sorted(base.glob("GCST*.json")):
+        try:
+            data, _ = _store_paths(root, meta_path.stem)
+        except ValueError:
+            continue                        # not one of ours; leave it alone
+        build = _load_build(meta_path)
+        try:
+            size = data.stat().st_size
+        except OSError:
+            _discard(data, meta_path)       # orphaned record of a gone copy
+            continue
+        total += size
+        if build is None or now - float(build.get("last_used") or 0) > EVICT_GRACE:
+            candidates.append((float((build or {}).get("last_used") or 0),
+                               meta_path.stem, data, meta_path, size))
+    budget = budget_gb * 2 ** 30
+    removed = []
+    for _, accession, data, meta_path, size in sorted(candidates):
+        if total <= budget:
+            break
+        for path in (data, meta_path):
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        total -= size
+        removed.append(accession)
+    return removed

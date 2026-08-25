@@ -77,6 +77,7 @@ def _config() -> dict:
         "max_upload": int(os.environ.get("BIPRED_WEB_MAX_UPLOAD_MB", "500"))
         * 1024 * 1024,
         "ttl_days": float(os.environ.get("BIPRED_WEB_TTL_DAYS", "7")),
+        "store_gb": float(os.environ.get("BIPRED_WEB_STORE_GB", "20")),
     }
 
 
@@ -315,6 +316,9 @@ def _sweep_once(app) -> None:
     if time.time() - app.state.last_purge > 3600:
         app.state.last_purge = time.time()
         jobs.purge_jobs(root, app.state.config["ttl_days"])
+        # Downloaded catalog files outlive the jobs that fetched them — that
+        # is the point — so they get their own byte budget instead.
+        gwascat.purge_store(root, app.state.config["store_gb"])
 
 
 async def _supervisor(app):

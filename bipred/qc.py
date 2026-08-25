@@ -57,6 +57,7 @@ import numpy as np
 
 from ldpred3 import LowRankLD
 
+from . import _progress
 from ._ldpred3_compat import (
     _Q8,
     _finite_control,
@@ -306,7 +307,7 @@ def ld_consistency_screen(
         blocks, z, *, rounds=DEFAULT_ROUNDS, window=DEFAULT_WINDOW,
         threshold=DEFAULT_THRESHOLD,
         eigenvalue_floor=DEFAULT_EIGENVALUE_FLOOR, seed=0, ncores=1,
-        verbose=False):
+        verbose=False, progress=None, progress_label="LD consistency screen"):
     """DENTIST-inspired keep-mask over the variants ``blocks`` spans.
 
     This uses DENTIST's split-half statistic, but it is not the complete
@@ -345,6 +346,18 @@ def ld_consistency_screen(
         chunks; the last window is slid so a short remainder is tested in a
         full neighbourhood rather than skipped.
 
+    progress : callable or None
+        Called with one event dict per finished block --
+        ``{"step": progress_label, "done": blocks_done, "total": n_blocks,
+        "unit": "block"}``
+        -- from this thread, never from a pool worker. Blocks are the natural
+        unit: each settles all of its rounds together, and at genome scale
+        there are thousands of them, so the count moves steadily. Reporting
+        cannot change the mask. See :mod:`bipred._progress`.
+    progress_label : str
+        The ``step`` name in those events. A caller screening two traits
+        wants to say which one is running.
+
     Returns
     -------
     ndarray of bool
@@ -367,6 +380,7 @@ def ld_consistency_screen(
         raise ValueError("z contains non-finite values; filter them first")
     blocks = _validate_blocks(blocks, total)
     _validate_boolean_controls(verbose=verbose)
+    _progress.validate(progress)
     seed = _validate_seed(seed)
     rounds = _integer_at_least("rounds", rounds, 1)
     window = _integer_at_least("window", window, MIN_WINDOW)
@@ -394,12 +408,23 @@ def ld_consistency_screen(
         _settle_block, z=z, window=window, threshold=threshold,
         eigenvalue_floor=eigenvalue_floor)
 
+    # ``executor.map`` yields in submission order, so consuming it here
+    # reports a monotone count from this thread; a callback handed to the
+    # workers instead would need the caller to lock.
+    def _settled(source):
+        out = []
+        for done, item in enumerate(source, 1):
+            out.append(item)
+            _progress.report(progress, progress_label, done, len(tasks),
+                             unit="block")
+        return out
+
     if _pool_is_worthwhile(ncores, len(tasks)):
         from concurrent.futures import ThreadPoolExecutor
         # Each task materialises only its own window at a time, so at most
         # ``ncores`` dense windows are live -- not ``ncores`` whole blocks.
         with ThreadPoolExecutor(max_workers=ncores) as executor:
-            results = list(executor.map(settle, tasks))
+            results = _settled(executor.map(settle, tasks))
     else:
         if ncores > 1 and len(tasks) > 1:
             # The gate can only have blocked on the BLAS conditions; say which
@@ -421,7 +446,7 @@ def ld_consistency_screen(
                 "OPENBLAS_NUM_THREADS=1, OMP_NUM_THREADS=1) and install "
                 "threadpoolctl to enable the block pool.", RuntimeWarning,
                 stacklevel=2)
-        results = [settle(task) for task in tasks]
+        results = _settled(settle(task) for task in tasks)
 
     keep = np.ones(total, dtype=bool)
     per_round = np.zeros(rounds, dtype=np.int64)
@@ -442,7 +467,8 @@ def ld_consistency_screen(
 def dentist(blocks, z, *, rounds=DEFAULT_ROUNDS, window=DEFAULT_WINDOW,
             threshold=DEFAULT_THRESHOLD,
             eigenvalue_floor=DEFAULT_EIGENVALUE_FLOOR, seed=0, ncores=1,
-            verbose=False):
+            verbose=False, progress=None,
+            progress_label="LD consistency screen"):
     """Compatibility name for :func:`ld_consistency_screen`.
 
     No warning is emitted: existing pipelines keep working, while new code can
@@ -451,7 +477,7 @@ def dentist(blocks, z, *, rounds=DEFAULT_ROUNDS, window=DEFAULT_WINDOW,
     return ld_consistency_screen(
         blocks, z, rounds=rounds, window=window, threshold=threshold,
         eigenvalue_floor=eigenvalue_floor, seed=seed, ncores=ncores,
-        verbose=verbose)
+        verbose=verbose, progress=progress, progress_label=progress_label)
 
 
 def in_long_range_ld(chrom, pos, *, include_apoe=True, regions=None):

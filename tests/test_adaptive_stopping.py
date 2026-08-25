@@ -62,6 +62,20 @@ class TestAdaptiveStopping:
         assert r.stopped_early is True
         assert 0 < r.retained_iterations < 400
 
+    def test_progress_reports_the_sweep_it_stops_on(self, well_conditioned):
+        """The break happens mid-sweep bookkeeping; that sweep still counts."""
+        blocks, m, b1, b2 = well_conditioned
+        events = []
+        r = ldpred3_auto_bivariate_blocks(blocks, b1, b2, 2e5, 2e5,
+                                          num_iter=400, burn_in=20,
+                                          tol=1e-2, check_every=25, seed=3,
+                                          progress=events.append)
+        assert r.stopped_early is True
+        assert events[-1]["done"] == 20 + r.retained_iterations
+        assert events[-1]["done"] < events[-1]["total"]      # stopped short
+        assert [e["done"] for e in events] == list(
+            range(1, len(events) + 1))
+
     def test_early_stop_tracks_the_full_run(self, well_conditioned):
         """A stopped fit must agree with the full one on the headline outputs."""
         blocks, m, b1, b2 = well_conditioned

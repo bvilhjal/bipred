@@ -23,6 +23,8 @@ from ldpred3.interop import (
     subset_ld_blocks,
 )
 
+from . import _progress
+
 
 __all__ = ["PreparedBivariate", "prepare_bivariate_sumstats", "subset_blocks"]
 
@@ -187,7 +189,7 @@ def prepare_bivariate_sumstats(
         columns1=None, columns2=None, qc=True, qc_params=None, screen=False,
         screen_rounds=4, screen_window=1000, screen_threshold=29.72,
         screen_eigenvalue_floor=1e-3, screen_seed=0, screen_ncores=1,
-        screen_verbose=False, min_af_corr=None):
+        screen_verbose=False, min_af_corr=None, progress=None):
     """Load an ldpred3 cache and two GWAS files; return a joint-fit panel.
 
     Both files are QC'd (optional), harmonized to the cache's counted allele,
@@ -208,6 +210,12 @@ def prepare_bivariate_sumstats(
     ``min_af_corr`` is a lower bound on ``corr(GWAS EAF, cache AF)`` after
     allele alignment; near −1 means the frequency column is inverted.
 
+    ``progress``, if given, is called with one event dict per step of the
+    work -- loading the reference, reading each trait, harmonizing, and, when
+    ``screen=True``, once per block of each trait's LD consistency screen,
+    which at genome scale dominates everything else here. It cannot change
+    the result; see :mod:`bipred._progress`.
+
     A path-loaded memory-mapped cache remains owned by the returned object. Use
     ``with prepare_bivariate_sumstats(...) as prep:`` or call ``prep.close()``
     after fitting. A caller-supplied :class:`ldpred3.interop.PreparedLDCache`
@@ -215,6 +223,11 @@ def prepare_bivariate_sumstats(
     """
     n1 = _resolve_n_eff(n_eff1, n_cases1, n_controls1, "trait 1")
     n2 = _resolve_n_eff(n_eff2, n_cases2, n_controls2, "trait 2")
+    _progress.validate(progress)
+    # The screen is one coarse step here, but reports per block of its own.
+    n_steps = 5 if screen else 4
+    _progress.report(progress, "load LD reference", 0, n_steps,
+                     unit="step")
     shared_cache = isinstance(ld_cache, PreparedLDCache)
     if shared_cache:
         if ld_cache.closed:
@@ -227,12 +240,18 @@ def prepare_bivariate_sumstats(
         owner = blocks if getattr(blocks, "close", None) is not None else None
     try:
         variants = _cache_variants(ids, meta)
+        _progress.report(progress, "read and QC trait 1", 1, n_steps,
+                         unit="step")
         std1, nv1, z1, eaf1, log1 = _align_one(
             sumstats1, variants, n_eff=n1, qc=qc, qc_params=qc_params,
             columns=columns1, label="trait1")
+        _progress.report(progress, "read and QC trait 2", 2, n_steps,
+                         unit="step")
         std2, nv2, z2, eaf2, log2 = _align_one(
             sumstats2, variants, n_eff=n2, qc=qc, qc_params=qc_params,
             columns=columns2, label="trait2")
+        _progress.report(progress, "harmonize against the LD reference",
+                         3, n_steps, unit="step")
         # A trait with zero usable variants (QC dropped all, or none matched
         # the reference) must name itself: the joint "fewer than two cache
         # variants" error below cannot say which file was unusable, and the
@@ -297,11 +316,21 @@ def prepare_bivariate_sumstats(
                 threshold=screen_threshold,
                 eigenvalue_floor=screen_eigenvalue_floor, seed=screen_seed,
                 ncores=screen_ncores, verbose=screen_verbose)
+            # Copied before the reporting controls join it: ``screen_log``
+            # is provenance that callers serialise, and a callable is not
+            # JSON.
             screen_log = dict(screen_options)
+            _progress.report(progress, "LD consistency screen", 4,
+                             n_steps, unit="step")
             screen_keep = (
-                ld_consistency_screen(tiled, z1[joint_indices], **screen_options)
+                ld_consistency_screen(
+                    tiled, z1[joint_indices], **screen_options,
+                    progress=progress,
+                    progress_label="LD consistency screen, trait 1")
                 & ld_consistency_screen(
-                    tiled, z2[joint_indices], **screen_options))
+                    tiled, z2[joint_indices], **screen_options,
+                    progress=progress,
+                    progress_label="LD consistency screen, trait 2"))
             n_screen_drop = n_joint - int(screen_keep.sum())
             if int(screen_keep.sum()) < 2:
                 raise ValueError(

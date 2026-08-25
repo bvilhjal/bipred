@@ -251,7 +251,7 @@ range {{ "{:,.1f}".format(n.min) }}–{{ "{:,.1f}".format(n.max) }}{% if not loo
 {% for c in res.provenance.catalog.values() %}
 {{ c.accession }} — {{ c.trait }}{% if c.pmid %} (PMID
 {{ c.pmid }}){% endif %}; {{ c.kept }} of {{ c.seen }} variants kept,
-effect from {{ c.effect_from }}{% if c.sha256 %}; source sha256
+effect from {{ c.effect_from }}{% if c.source %} ({{ c.source }}){% endif %}{% if c.sha256 %}; source sha256
 <code>{{ c.sha256[:12] }}…</code>{% endif %}{% if c.n_basis %}; metadata N:
 {{ c.n_basis }}{% endif %}{% if c.has_per_variant_n %}; retained per-variant N
 ({{ "{:.1%}".format(c.per_variant_n_usable_frac) }} usable){% endif %}{% if not loop.last %}<br>{% endif %}

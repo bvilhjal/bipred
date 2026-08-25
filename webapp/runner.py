@@ -193,6 +193,56 @@ def _n_summary(values, basis):
             "max": float(values.max()) if len(values) else None}
 
 
+def _progress_sink(stage):
+    """Turn library progress events into job-status updates.
+
+    ``bipred._progress`` deliberately lets a callback's exception propagate,
+    which is the right default for a library. Here it must not cost an
+    otherwise healthy fit: a status write that fails is dropped, and the
+    stage carries on unreported rather than dying. ``_Stages.progress``
+    throttles to 1 Hz, so a per-sweep or per-block event stream costs one
+    clock read until the second is up.
+    """
+    def sink(event):
+        try:
+            stage.progress(**event)
+        except OSError:
+            pass
+    return sink
+
+
+def _coverage_thunk(root, cache, cache_key, keep_ids, fingerprint):
+    """What the shared catalog store should cover, computed only if needed.
+
+    The job's own LD reference plus every other registered real one, so that
+    re-running the analysis against a different reference re-filters the
+    stored copy instead of downloading the file again. Loading the other
+    references costs a second or two, hence the thunk: a job that reuses a
+    stored copy never pays it.
+    """
+    computed = {}
+
+    def coverage():
+        if not computed:
+            from . import gwascat
+            union = set(keep_ids)
+            covers = {fingerprint: cache_key}
+            for entry in caches.real_registry(root):
+                path = Path(entry["path"])
+                try:
+                    other = caches.sha256_cached(path)
+                    if other in covers:
+                        continue
+                    union |= gwascat.cache_ids(path)
+                except (OSError, ValueError):
+                    continue    # an unreadable extra reference is not fatal
+                covers[other] = entry["key"]
+            computed["value"] = (union, covers)
+        return computed["value"]
+
+    return coverage
+
+
 def run(job_dir: Path, job: dict) -> None:
     wall0 = time.perf_counter()
     user0, system0, _ = _usage()
@@ -207,6 +257,9 @@ def run(job_dir: Path, job: dict) -> None:
         stage.start("download")
         from . import gwascat
         keep_ids = gwascat.cache_ids(cache)
+        fingerprint = caches.sha256_cached(cache)
+        coverage = _coverage_thunk(root, cache, opt["cache_key"], keep_ids,
+                                   fingerprint)
         for trait in (1, 2):
             meta = opt.get(f"catalog{trait}")
             if not meta:
@@ -220,9 +273,20 @@ def run(job_dir: Path, job: dict) -> None:
                     trait=trait, accession=meta["accession"], bytes=n,
                     total=meta.get("remote_bytes") or 0,
                     mb_s=round(n / elapsed / 1048576, 1) if elapsed else None)
+
+            def on_filter(n, meta=meta, trait=trait):
+                stage.progress(trait=trait, accession=meta["accession"],
+                               filtering=n)
+
+            def on_wait(seconds, meta=meta, trait=trait):
+                stage.progress(trait=trait, accession=meta["accession"],
+                               waiting=seconds)
             try:
-                info = gwascat.stream_filter(meta["url"], keep_ids, dest,
-                                             on_bytes=on_bytes)
+                info = gwascat.fetch_filtered(
+                    meta["url"], dest, accession=meta["accession"], root=root,
+                    keep_ids=keep_ids, fingerprint=fingerprint,
+                    coverage=coverage, on_bytes=on_bytes,
+                    on_filter=on_filter, on_wait=on_wait)
             except Exception as exc:
                 raise ValueError(
                     f"{job['labels'][f'trait{trait}']} "
@@ -231,6 +295,7 @@ def run(job_dir: Path, job: dict) -> None:
             meta.update(kept=info["kept"], seen=info["seen"],
                         effect_from=info["effect_from"],
                         sha256=info["sha256"],
+                        source="stored copy" if info["reused"] else "download",
                         has_per_variant_n=info["has_per_variant_n"],
                         per_variant_n_usable_frac=info[
                             "per_variant_n_usable_frac"])
@@ -272,7 +337,8 @@ def run(job_dir: Path, job: dict) -> None:
                 columns1=opt["columns1"], columns2=opt["columns2"],
                 screen=opt["screen"], screen_rounds=4, screen_window=1000,
                 screen_threshold=29.72, screen_eigenvalue_floor=1e-3,
-                screen_seed=opt["seed"], screen_ncores=1)
+                screen_seed=opt["seed"], screen_ncores=1,
+                progress=_progress_sink(stage))
     except Exception as exc:
         # Let the track record blame the right catalog accession when the
         # failure is one trait's; joint failures stay unattributed.
@@ -307,9 +373,15 @@ def run(job_dir: Path, job: dict) -> None:
         from bipred.ldsc import ldsc_rg
         from ldpred3 import ld_scores
         try:
+            report = _progress_sink(stage)
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter("always")
+                # Neither call reports from inside, so name the two steps.
+                report({"step": "LD scores", "done": 0, "total": 2,
+                        "unit": "step"})
                 ell = ld_scores(prep.blocks)
+                report({"step": "LDSC regression", "done": 1, "total": 2,
+                        "unit": "step"})
                 r = ldsc_rg(prep.beta_hat1, prep.beta_hat2, ell,
                             prep.n_eff1, prep.n_eff2)
             captured_warnings.extend(_warning_rows("ldsc", caught))
@@ -331,7 +403,8 @@ def run(job_dir: Path, job: dict) -> None:
                 prep.n_eff1, prep.n_eff2,
                 cross_corr=opt.get("cross_corr", 0.0),
                 seed=opt["seed"], burn_in=opt["burn_in"],
-                num_iter=opt["num_iter"], ncores=1)
+                num_iter=opt["num_iter"], ncores=1,
+                progress=_progress_sink(stage))
         captured_warnings.extend(_warning_rows("fit", caught))
         mixer = {key: (_to_float_list(value) if isinstance(value, tuple)
                        else float(value))
@@ -367,9 +440,12 @@ def run(job_dir: Path, job: dict) -> None:
             common = dict(id=prep.id, chrom=prep.chrom, pos=prep.pos,
                           effect_allele=prep.effect_allele,
                           other_allele=prep.other_allele)
+            report = _progress_sink(stage)
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter("always")
                 for trait in (1, 2):
+                    report({"step": f"writing weights for trait {trait}",
+                            "done": trait - 1, "total": 2, "unit": "step"})
                     name = f"weights{trait}.tsv"
                     res.write_weights(job_dir / name, trait=trait, **common)
                     written.append(name)

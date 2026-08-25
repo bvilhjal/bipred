@@ -1644,3 +1644,38 @@ def test_divergence_warning_is_silent_on_small_panels():
             beta1=np.full(m, np.sqrt(171.8 / m)), beta2=np.zeros(m),
             raw_h2=(0.6732, 0.0706), sigma_diag=(1e-6, 1.0),
             genetic_samples=None, m=m)
+
+
+def test_fit_reports_every_sweep_and_changes_nothing():
+    """Progress is a side channel: the chain must come out bit-identical."""
+    blocks, chols, idxs = _blocks(4, 100, seed=3)
+    m, k, n = 400, 100, 20_000
+    rng = np.random.default_rng(5)
+    b1, b2 = _sim(blocks, chols, idxs, m, p=0.05, h2=(0.4, 0.4), rg=0.5, rng=rng)
+    bh1 = _sumstats(blocks, chols, idxs, b1, n, k, rng)
+    bh2 = _sumstats(blocks, chols, idxs, b2, n, k, rng)
+    kw = dict(burn_in=8, num_iter=12, seed=4)
+    events = []
+    loud = ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, n, n,
+                                         progress=events.append, **kw)
+    quiet = ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, n, n, **kw)
+    assert [e["done"] for e in events] == list(range(1, 21))
+    assert [e["phase"] for e in events] == ["burn-in"] * 8 + ["sampling"] * 12
+    assert {e["total"] for e in events} == {20}
+    assert {e["unit"] for e in events} == {"sweep"}
+    assert (loud.rg, loud.p) == (quiet.rg, quiet.p)
+    assert loud.h2 == quiet.h2
+    assert np.array_equal(loud.beta1_est, quiet.beta1_est)
+    assert np.array_equal(loud.beta2_est, quiet.beta2_est)
+
+
+def test_fit_rejects_a_non_callable_progress():
+    blocks, chols, idxs = _blocks(2, 60, seed=0)
+    m, k, n = 120, 60, 10_000
+    rng = np.random.default_rng(0)
+    b1, b2 = _sim(blocks, chols, idxs, m, p=0.1, h2=(0.3, 0.3), rg=0.3, rng=rng)
+    bh1 = _sumstats(blocks, chols, idxs, b1, n, k, rng)
+    bh2 = _sumstats(blocks, chols, idxs, b2, n, k, rng)
+    with pytest.raises(TypeError, match="callable"):
+        ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, n, n, burn_in=2,
+                                      num_iter=2, progress=object())

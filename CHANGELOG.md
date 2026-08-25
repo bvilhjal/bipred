@@ -7,6 +7,31 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 ### Added
 
+- **Optional progress reporting for the long-running steps.**
+  `prepare_bivariate_sumstats`, `ld_consistency_screen` (with its `dentist`
+  alias), and `ldpred3_auto_bivariate_blocks` take a `progress` callable,
+  invoked with one event dict — `{"step", "done", "total", "unit"}`, plus
+  `phase` for the fit — per finished unit: each coarse preparation step, each
+  block of a trait's LD consistency screen, each Gibbs sweep. Reporting draws
+  no random numbers and runs after each unit's updates, so a fit or screen
+  with `progress` is bit-identical to one without; events are emitted from the
+  calling thread even when the screen settles blocks in a pool, so a callback
+  needs no locking; and a callback's exception propagates rather than being
+  swallowed, since reporting that has stopped silently is worse than reporting
+  that fails loudly. `ldpred3_auto_bivariate_chains` refuses the option: its
+  chains run concurrently, so one callback could not say which chain it spoke
+  for. With `tol > 0` the fit may stop before `done` reaches `total`, and the
+  sweep it stops on is still reported. See `docs/guide.md`, *Progress
+  reporting*.
+- **The web service reports what every stage is doing**, not just the catalog
+  download, throttled to once a second: the preparation step and then each
+  trait's LD consistency screen block by block under `harmonize` (the long
+  pole at genome scale, which previously sat silent for as long as it ran),
+  LD scores and then the regression under `ldsc`, sweep *k* of the burn-in or
+  sampling schedule under `fit`, and the trait being written under `weights`.
+  The runner swallows a failed status write rather than losing an otherwise
+  healthy fit to a full disk.
+
 - Webapp auto-registers the UK Biobank European **HapMap3+** LD cache
   (`ukb-eur-hm3plus`, 1.44M variants) from the sibling ldpred3 work dir when
   present, and prefers it over HapMap3 as the form default.
@@ -78,6 +103,29 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 ### Fixed
 
+- **The web service re-downloaded GWAS Catalog deposits it already had.**
+  The `download` stage filtered each harmonised file to the job's LD
+  reference *while* streaming it, so the file it left in the job directory
+  was usable only by jobs with that same reference — and nothing looked for
+  it anyway. Re-running an analysis re-fetched hundreds of megabytes from
+  EBI, and a re-run against a different reference could not have reused the
+  old file even in principle, since it no longer contained the variants the
+  new reference needs. The stage now keeps one normalised copy per accession
+  under `<data dir>/catalog/`, filtered to the union of the LD references
+  registered when it was built, and each job filters that copy locally into
+  its own job directory. Re-running with any covered reference does no
+  network I/O; the stored copy is about an order of magnitude smaller than
+  the raw deposit, so this costs far less disk than caching the raw file
+  would. Reuse is keyed on accession, harmonised-file URL, and the *content*
+  hash of the LD cache, so a re-deposited file or a registry name re-pointed
+  at different bytes fetches again rather than silently serving variants the
+  copy never covered; two jobs racing on one accession share a single fetch
+  through a heartbeated lock; and copies are evicted least-recently-used past
+  `BIPRED_WEB_STORE_GB` (default 20), never within an hour of use. The
+  results page reports `(stored copy)` or `(download)` per trait, and the job
+  page distinguishes downloading, filtering a stored copy, and waiting on
+  another job's fetch. Download provenance (`seen`, `sha256`, schema, effect
+  route) continues to describe the remote file, not the local copy.
 - The `/catalog` summary strip counted only the canonical LDpred3 evidence
   while the tables below merged in this server's own attempts, so the headline
   numbers disagreed with the lists they summarized whenever the server had

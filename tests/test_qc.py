@@ -545,3 +545,57 @@ def test_blocked_screen_parallelism_explains_itself(monkeypatch):
     with warnings_module.catch_warnings():
         warnings_module.simplefilter("error")
         ld_consistency_screen(blocks, z, rounds=1, seed=3)
+
+
+# --- progress reporting -----------------------------------------------------
+
+def test_screen_reports_one_event_per_block_and_changes_nothing():
+    blocks, z = _clean_panel(k=200, blocks=5)
+    events = []
+    keep = ld_consistency_screen(blocks, z, rounds=2, progress=events.append)
+    assert [e["done"] for e in events] == [1, 2, 3, 4, 5]
+    assert {e["total"] for e in events} == {5}
+    assert {e["unit"] for e in events} == {"block"}
+    assert {e["step"] for e in events} == {"LD consistency screen"}
+    quiet = ld_consistency_screen(blocks, z, rounds=2)
+    assert np.array_equal(keep, quiet)
+
+
+def test_screen_reports_from_the_calling_thread_when_pooled(monkeypatch):
+    """A callback handed to pool workers would make the caller lock; don't."""
+    import threading
+
+    from bipred import qc
+    monkeypatch.setattr(qc, "_pool_is_worthwhile", lambda *args: True)
+    blocks, z = _clean_panel(k=200, blocks=6)
+    callers, events = set(), []
+
+    def spy(event):
+        callers.add(threading.get_ident())
+        events.append(event)
+
+    keep = ld_consistency_screen(blocks, z, rounds=2, ncores=3, progress=spy)
+    assert callers == {threading.get_ident()}
+    assert [e["done"] for e in events] == [1, 2, 3, 4, 5, 6]
+    assert np.array_equal(keep, ld_consistency_screen(blocks, z, rounds=2))
+
+
+def test_screen_progress_carries_the_callers_label():
+    blocks, z = _clean_panel(k=100, blocks=2)
+    events = []
+    ld_consistency_screen(blocks, z, rounds=1, progress=events.append,
+                          progress_label="screen, trait 2")
+    assert {e["step"] for e in events} == {"screen, trait 2"}
+
+
+def test_screen_rejects_a_non_callable_progress():
+    blocks, z = _clean_panel(k=100, blocks=2)
+    with pytest.raises(TypeError, match="callable"):
+        ld_consistency_screen(blocks, z, rounds=1, progress="please")
+
+
+def test_dentist_alias_forwards_progress():
+    blocks, z = _clean_panel(k=100, blocks=2)
+    events = []
+    dentist(blocks, z, rounds=1, progress=events.append)
+    assert [e["done"] for e in events] == [1, 2]

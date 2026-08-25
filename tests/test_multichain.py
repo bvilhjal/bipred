@@ -657,3 +657,13 @@ def test_basic_split_rhat_formula_and_degeneracy_metadata():
     assert diagnostic.n_chains == 2
     assert diagnostic.half_length == 2
     assert not hasattr(diagnostic, "converged")
+
+
+def test_chains_reject_a_progress_callback():
+    """Chains run concurrently, so one callback could not say which chain it
+    spoke for; the option must be refused rather than silently forwarded."""
+    blocks, beta1, beta2 = _inputs()
+    with pytest.raises(TypeError, match="unexpected keyword argument"
+                                        " 'progress'"):
+        multichain.ldpred3_auto_bivariate_chains(
+            blocks, beta1, beta2, 1e4, 1e4, progress=print)
