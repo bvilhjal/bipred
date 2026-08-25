@@ -53,3 +53,6 @@ benchmarks/_*.stdout
 benchmarks/_run_all.sh
 benchmarks/_*.csv
 benchmarks/_*.provenance.json
+
+# macOS Finder metadata
+.DS_Store
