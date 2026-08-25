@@ -132,13 +132,18 @@ peak RSS, and stage timings. Finished jobs are purged after
 
 ## Real LD references
 
-The default reference is the **UK Biobank European HapMap3** cache (the bigsnpr
-Figshare LD reference converted to ldpred3 format, 1.05M variants from
-362k samples), picked up automatically when present at its conventional
-workspace location
-`../ldpred3/benchmarks/.work/ldref-hm3/ldpred3_ldref_hm3.npz` — the same file
-the real-data benchmarks use. The synthetic demo cache is accepted only by
-`/demo`; normal uploads can never silently run against it.
+Real UK Biobank European caches are picked up automatically from the sibling
+ldpred3 checkout when present:
+
+- **HapMap3+** (LDpred2's default SNP set, 1.44M variants) at
+  `../ldpred3/benchmarks/.work/ldref-hm3-plus/ldpred3_ldref_hm3_plus.npz`
+- **HapMap3** (1.05M variants) at
+  `../ldpred3/benchmarks/.work/ldref-hm3/ldpred3_ldref_hm3.npz`
+
+HapMap3+ is the form default when both exist. Convert them with
+`ldpred3/benchmarks/convert_bigsnpr_ldref.py` (`--panel hm3plus` for the
+larger set). The synthetic demo cache is accepted only by `/demo`; normal
+uploads can never silently run against it.
 
 To build further ancestries, use ldpred3 and register each through
 `BIPRED_WEB_CACHES`:

@@ -7,6 +7,10 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 ### Added
 
+- Webapp auto-registers the UK Biobank European **HapMap3+** LD cache
+  (`ukb-eur-hm3plus`, 1.44M variants) from the sibling ldpred3 work dir when
+  present, and prefers it over HapMap3 as the form default.
+
 - **External-tool validation benchmarks.** `benchmarks/external_overlap.py`
   runs bipred, the original MiXeR (gsa-mixer v2.2.1, built from source under
   `benchmarks/.mixer/`), and the original LDSC (CBIIT Python-3 port, in

@@ -1,9 +1,9 @@
 """LD-cache registry for the bipred web service.
 
-The default is the **UK Biobank European HapMap3** reference when it is present
-at its conventional workspace location (the bigsnpr Figshare LD reference,
-converted by ``ldpred3/benchmarks/convert_bigsnpr_ldref.py``; the real-data
-benchmarks use the same file). More real caches can be registered through the
+The default is the **UK Biobank European HapMap3+** reference when present
+(LDpred2's SNP set, 1.44M variants), else HapMap3 (1.05M), both converted by
+``ldpred3/benchmarks/convert_bigsnpr_ldref.py``. More real caches can be
+registered through the
 ``BIPRED_WEB_CACHES`` environment variable as ``name=/path/cache.ld.npz``
 entries separated by ``;`` — build them once with
 ``ldpred3.compute_ld_blocks(..., quantize=True)`` + ``ldpred3.save_ld_blocks``
@@ -21,12 +21,21 @@ from . import jobs
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# Conventional location of the converted UKB European HapMap3 cache in this
-# workspace (sibling ldpred3 checkout's benchmark work dir).
+# Conventional locations of converted UKB European caches in this workspace
+# (sibling ldpred3 checkout's benchmark work dir). HapMap3+ is LDpred2's
+# default SNP set; list it first so it is the form default when both exist.
+_LDPRED3_WORK = REPO_ROOT.parent / "ldpred3" / "benchmarks" / ".work"
+_REAL_CACHES = (
+    ("ukb-eur-hm3plus",
+     _LDPRED3_WORK / "ldref-hm3-plus" / "ldpred3_ldref_hm3_plus.npz",
+     "UK Biobank European (HapMap3+, 1.44M variants, n=362k)"),
+    ("ukb-eur-hm3",
+     _LDPRED3_WORK / "ldref-hm3" / "ldpred3_ldref_hm3.npz",
+     "UK Biobank European (HapMap3, 1.05M variants, n=362k)"),
+)
 UKB_EUR_KEY = "ukb-eur-hm3"
-UKB_EUR_PATH = (REPO_ROOT.parent / "ldpred3" / "benchmarks" / ".work"
-                / "ldref-hm3" / "ldpred3_ldref_hm3.npz")
-UKB_EUR_LABEL = "UK Biobank European (HapMap3, 1.05M variants, n=362k)"
+UKB_EUR_PATH = _REAL_CACHES[1][1]
+UKB_EUR_LABEL = _REAL_CACHES[1][2]
 
 
 def demo_cache_dir(root: Path | None = None) -> Path:
@@ -39,9 +48,9 @@ def demo_cache_dir(root: Path | None = None) -> Path:
 def real_registry(root: Path | None = None) -> list[dict]:
     """Real analysis caches, excluding the deliberately synthetic demo."""
     out = []
-    if UKB_EUR_PATH.exists():
-        out.append({"key": UKB_EUR_KEY, "label": UKB_EUR_LABEL,
-                    "path": str(UKB_EUR_PATH)})
+    for key, path, label in _REAL_CACHES:
+        if path.exists():
+            out.append({"key": key, "label": label, "path": str(path)})
     for entry in os.environ.get("BIPRED_WEB_CACHES", "").split(";"):
         entry = entry.strip()
         if not entry:
