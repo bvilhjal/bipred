@@ -202,6 +202,27 @@ def test_lowrank_float_factor_matches_the_fit_d32_values():
     np.testing.assert_allclose(got.gvar2, expected[:, 2], rtol=1e-14)
 
 
+def test_dense_float64_block_matches_the_fit_d32_values():
+    # A dense float64 block must be evaluated at the contiguous-D32 values the
+    # default fit normalises it to, like the floating low-rank factor above.
+    rng = np.random.default_rng(91)
+    k = 12
+    base = _ar1(0.4, k).astype(np.float64)
+    jitter = rng.normal(scale=1e-8, size=(k, k))
+    R64 = base + (jitter + jitter.T) / 2.0
+    normalized = np.ascontiguousarray(R64, dtype=np.float32)
+    assert not np.array_equal(R64, normalized.astype(np.float64))
+    b1, b2 = rng.normal(size=(2, k))
+    labels = np.repeat([0, 1], k // 2)
+
+    got = regional_rg(b1, b2, [(R64, np.arange(k))], labels)
+    ref = regional_rg(b1, b2, [(normalized, np.arange(k))], labels)
+    np.testing.assert_array_equal(got.gvar1, ref.gvar1)
+    np.testing.assert_array_equal(got.gcov, ref.gcov)
+    np.testing.assert_array_equal(got.gvar2, ref.gvar2)
+    np.testing.assert_array_equal(got.rg, ref.rg)
+
+
 def test_lr8_factor_scale_is_applied_twice_in_quadratics():
     rng = np.random.default_rng(72)
     k, rank = 40, 5

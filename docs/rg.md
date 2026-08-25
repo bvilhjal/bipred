@@ -208,11 +208,10 @@ summed under the block-diagonal LD assumption.
 `regional_rg` evaluates the representation encoded by the LD objects passed to
 it. The default fit preserves D8/D32 values (copying non-contiguous storage when
 needed) but normalises other dense floats and floating low-rank factors to D32;
-`regional_rg` makes the same low-rank normalisation. Exact dense alignment
-therefore requires D8/D32 inputs or passing the same normalised representation
-to both calls. In-fit quantization (`ld_int8=True` or `None`) evaluates a
-private Q8 copy for float blocks; pre-quantize and pass those blocks to both
-calls instead.
+`regional_rg` makes the same dense and low-rank normalisation, so passing the
+same logical blocks to both calls evaluates the same values. In-fit quantization
+(`ld_int8=True` or `None`) evaluates a private Q8 copy for float blocks;
+pre-quantize and pass those blocks to both calls instead.
 
 **Table 2. `RegionalRgResult` fields.**
 

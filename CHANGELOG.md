@@ -192,6 +192,14 @@ User-visible changes to **bipred** are recorded here. The project is currently
   reported-N shape checks and medians are unchanged.
 - `bipred --help` documents that `--screen-seed` defaults to `--seed`, so
   changing the fit seed also changes the screen's random LD splits.
+- An integer `columns1`/`columns2` `n_eff` entry is a zero-based column
+  index, not a constant sample size silently forced on every variant;
+  non-string non-integer values are rejected with a clear error. String
+  names and digit strings are unchanged.
+- `regional_rg` replays the fitter's dense float32 normalisation on non-int8,
+  non-float32 dense blocks (previously only low-rank float factors were
+  normalised), so a float64 block passed to both calls evaluates the same
+  values.
 
 ## [0.3.8] - 2026-08-13
 - Principal subsetting validates masks and indices, retains singleton blocks,

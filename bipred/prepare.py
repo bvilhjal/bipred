@@ -128,6 +128,18 @@ def _align_one(path, variants, *, n_eff, qc, qc_params, columns, label):
     if column_n is not None and n_eff is not None:
         raise ValueError(
             f"{label}: pass either a scalar n_eff or an n_eff column, not both")
+    if column_n is not None and not isinstance(column_n, str):
+        # read_sumstats treats only a *string* n_eff as a column override; any
+        # other n_eff= value becomes a forced per-variant scalar (and an
+        # "n_eff" key in **columns binds that same parameter). An integer
+        # index therefore goes in as its digit string, which _build_colmap
+        # resolves by position; anything else is rejected rather than
+        # silently coerced.
+        if not isinstance(column_n, (int, np.integer)):
+            raise ValueError(
+                f"{label}: columns['n_eff'] must be a column name or a "
+                f"zero-based integer index, not {column_n!r}")
+        column_n = str(int(column_n))
     ss = read_sumstats(
         path, n_eff=column_n if column_n is not None else n_eff, **columns)
     qc_log = {}

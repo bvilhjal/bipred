@@ -147,6 +147,29 @@ def test_prepare_accepts_distinct_column_mappings_without_mutating_them(tmp_path
             columns1=columns, qc=False)
 
 
+def test_prepare_reads_an_n_eff_column_by_index_name_and_digit_string(tmp_path):
+    """columns={"n_eff": 7} must read column 7, not force n_eff=7.0."""
+    cache, _, p2, *_ = _cache_and_sumstats(tmp_path)
+    m = 20
+    n_col = 5_000 + 100 * np.arange(m)          # distinct per variant
+    path = tmp_path / "t1-neff-column.tsv"
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("SNP\tCHR\tBP\tA1\tA2\tBETA\tSE\tSAMPLES\n")
+        for i in range(m):
+            fh.write(f"rs{i}\t1\t{i + 1}\tA\tG\t0.01\t0.001\t{n_col[i]}\n")
+    for override in (7, "7", "SAMPLES", np.int64(7)):
+        prep = prepare_bivariate_sumstats(
+            cache, str(path), p2, n_eff2=10_000,
+            columns1={"n_eff": override}, qc=False)
+        # The per-variant column comes through; a forced scalar would make
+        # every entry equal.
+        np.testing.assert_array_equal(prep.n_eff1, n_col)
+    with pytest.raises(ValueError, match="column name or a zero-based"):
+        prepare_bivariate_sumstats(
+            cache, str(path), p2, n_eff2=10_000,
+            columns1={"n_eff": 7.5}, qc=False)
+
+
 def test_write_weights_uses_hwe_sd_from_cache_af(tmp_path):
     cache, p1, p2, *_ = _cache_and_sumstats(tmp_path, m=16)
     prep = prepare_bivariate_sumstats(cache, p1, p2, n_eff1=10_000,

@@ -18,10 +18,9 @@ The calculation uses the LD representation supplied to :func:`regional_rg`; it
 does not replay the fit's ``ld_int8`` policy. Under the default ``ld_int8=False``
 a fit preserves D8/D32 values, copying non-contiguous storage when needed, and
 normalises other dense floats and floating low-rank factors to D32. This
-function makes the same low-rank normalisation; exact dense alignment requires
-D8/D32 inputs or passing the same normalised representation to both calls.
-In-fit quantisation (``ld_int8=True`` or ``None``) creates a private copy for
-float blocks.
+function makes the same dense and low-rank normalisation, so passing the same
+logical blocks to both calls evaluates the same values. In-fit quantisation
+(``ld_int8=True`` or ``None``) creates a private copy for float blocks.
 
 Posterior-mean effects are used deliberately rather than the sampled-quadratic
 ratio that the genome-wide `rg` uses. The sampled ratio inflates its denominator
@@ -154,10 +153,11 @@ def regional_rg(beta1, beta2, blocks, regions, *, min_variants=1, clip=True):
         default ``ld_int8=False``, the fit preserves D8/D32 values, copying
         non-contiguous storage when needed, but normalises other dense floats
         and floating low-rank factors to D32. This function makes the same
-        low-rank normalisation; exact dense alignment requires supplying D8/D32
-        to both calls. In-fit quantisation (``ld_int8=True`` or ``None``)
-        creates a private copy for float blocks; quantise the blocks yourself
-        and pass those to both calls instead.
+        dense and low-rank normalisation, so passing the same logical blocks
+        to both calls evaluates the same values. In-fit quantisation
+        (``ld_int8=True`` or ``None``) creates a private copy for float
+        blocks; quantise the blocks yourself and pass those to both calls
+        instead.
     regions : array_like
         One-dimensional length-``m`` region label per variant. Labels may be
         integers or strings; variants sharing a label form one region, and
@@ -201,8 +201,7 @@ def regional_rg(beta1, beta2, blocks, regions, *, min_variants=1, clip=True):
     m = b1.size
 
     # D8 and D32 match the default fitter's numeric representation. Other dense
-    # inputs are accepted for exploration, but the fit first normalises them to
-    # D32.
+    # inputs are replayed through that same D32 normalisation below.
 
     if (isinstance(min_variants, (bool, np.bool_))
             or not isinstance(min_variants, (int, np.integer))):
@@ -254,6 +253,11 @@ def regional_rg(beta1, beta2, blocks, regions, *, min_variants=1, clip=True):
             dense = None
         else:
             arr = np.asarray(R)
+            if arr.dtype != np.int8 and arr.dtype != np.float32:
+                # The default fit normalises every other dense block to
+                # contiguous D32 once; replay that here so both calls
+                # evaluate the same values.
+                arr = np.ascontiguousarray(arr, dtype=np.float32)
             scale = _Q8_SCALE if arr.dtype == np.int8 else 1.0
             dense = (arr, scale)
             U = residual = None
