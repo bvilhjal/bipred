@@ -92,6 +92,11 @@ def run(m):
             "msg": (err.strip().splitlines()[-1:] or [""])[0]}
 
 
+def _measured(rows):
+    """Rows carrying a real measurement rather than a FAIL/OOM marker."""
+    return [r for r in rows if isinstance(r[2], (int, float))]
+
+
 def write_csv(rows):
     with open(os.path.join(HERE, "rg_scaling.csv"), "w", newline="") as fh:
         w = csv.writer(fh)
@@ -115,6 +120,7 @@ def main():
           f"{'realized':>8} | {'rg LDSC':>8} | {'rg LDpred3':>10}")
     print("-" * 83)
     rows = []
+    first_msg = None
     for m in sizes:
         res = run(m)
         if res["ok"]:
@@ -130,9 +136,20 @@ def main():
                          round(res["abs_error_ldpred3_realized"], 4)])
         else:
             tag = "OOM" if res["killed"] else "FAIL"
+            if first_msg is None:
+                first_msg = res["msg"]
             print(f"{m:>8,} | {tag}  ({res['msg'][:70]})", flush=True)
             rows.append([m, m // K, tag, tag, tag, tag, tag, RG, "", "", ""])
-        write_csv(rows)
+        # A size that OOMs is evidence and belongs in the table. A sweep in
+        # which *nothing* ran measured nothing, so it must not overwrite the
+        # committed artifact -- and must not report success, or run_all.sh
+        # records the whole regeneration as "ok" over a file of FAIL rows.
+        if _measured(rows):
+            write_csv(rows)
+    if not _measured(rows):
+        raise SystemExit(
+            f"every one of the {len(rows)} sizes failed; rg_scaling.csv left "
+            f"unchanged. First failure:\n  {first_msg}")
     make_figure(rows)
     print("\nwrote rg_scaling.csv and rg_scaling.png")
 

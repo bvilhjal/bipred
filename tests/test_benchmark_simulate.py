@@ -859,3 +859,65 @@ def test_real_data_timing_artifact_covers_each_leaf_step():
     total = float(next(row["seconds"] for row in rows
                        if row["section"] == "run"))
     assert all(total >= value for value in seconds)
+
+
+def test_rg_scaling_refuses_to_publish_a_sweep_that_measured_nothing(
+        monkeypatch, tmp_path):
+    """A sweep where every size failed must not overwrite the artifact.
+
+    It did once: run_all.sh reported rg_scaling "ok" over a CSV whose every
+    row was FAIL, and the committed record was silently replaced.
+    """
+    import pathlib as _pathlib
+    import shutil
+    import sys
+
+    import pytest
+
+    from benchmarks import rg_scaling
+
+    committed = _pathlib.Path(rg_scaling.HERE) / "rg_scaling.csv"
+    before = committed.read_bytes()
+    shutil.copy(committed, tmp_path / "backup.csv")
+    monkeypatch.setattr(
+        rg_scaling, "run",
+        lambda m: {"ok": False, "killed": False, "msg": "boom"})
+    monkeypatch.setattr(sys, "argv", ["rg_scaling.py", "5000", "10000"])
+    try:
+        with pytest.raises(SystemExit) as excinfo:
+            rg_scaling.main()
+        assert "every one of the 2 sizes failed" in str(excinfo.value)
+        assert "boom" in str(excinfo.value)
+        assert committed.read_bytes() == before, "artifact was overwritten"
+    finally:
+        shutil.copy(tmp_path / "backup.csv", committed)
+
+
+def test_rg_scaling_still_records_a_size_that_ran_out_of_memory(
+        monkeypatch, tmp_path):
+    """A partial failure is evidence, not an abort: keep publishing it."""
+    import csv as _csv
+    import pathlib as _pathlib
+    import shutil
+    import sys
+
+    from benchmarks import rg_scaling
+
+    committed = _pathlib.Path(rg_scaling.HERE) / "rg_scaling.csv"
+    shutil.copy(committed, tmp_path / "backup.csv")
+    ok = {"ok": True, "t_ldsc": 0.1, "t_ldpred3": 0.2, "mem_gb": 0.3,
+          "rg_ldsc": 0.5, "rg_ldpred3": 0.5, "rg_realized": 0.5,
+          "abs_error_ldsc_realized": 0.0, "abs_error_ldpred3_realized": 0.0}
+    monkeypatch.setattr(
+        rg_scaling, "run",
+        lambda m: ok if m == 5000 else {"ok": False, "killed": True,
+                                        "msg": "killed"})
+    monkeypatch.setattr(rg_scaling, "make_figure", lambda rows: None)
+    monkeypatch.setattr(sys, "argv", ["rg_scaling.py", "5000", "10000"])
+    try:
+        rg_scaling.main()
+        rows = list(_csv.reader(open(committed)))[1:]
+        assert [r[0] for r in rows] == ["5000", "10000"]
+        assert rows[1][2] == "OOM"
+    finally:
+        shutil.copy(tmp_path / "backup.csv", committed)
