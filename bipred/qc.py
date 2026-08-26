@@ -258,6 +258,29 @@ def _pool_is_worthwhile(ncores, n_blocks):
     return _blas_pool_safe(True)
 
 
+def _selected_window_ld(block, source_rows, local, dense_lowrank):
+    """Window from selected source rows without forming their full panel.
+
+    ``subset_ld_blocks`` normally keeps a low-rank representation.  Its one
+    exception is a partial subset with fewer rows than factor columns, which it
+    converts to D32.  Replaying that conversion at window scale preserves the
+    representation screened by the established subset-then-screen path while
+    bounding the dense allocation by ``window ** 2``.
+    """
+    rows = source_rows[local]
+    if not dense_lowrank:
+        return _window_ld(block, rows)
+
+    raw_factor = np.asarray(block.U)[rows]
+    factor = np.asarray(raw_factor, dtype=np.float32)
+    if block.is_int8:
+        factor = factor * np.float32(block.scale)
+    out = factor @ factor.T
+    out[np.diag_indices(rows.size)] += np.asarray(
+        block.residual_diag)[rows].astype(np.float32, copy=False)
+    return np.asarray(out, dtype=np.float32).astype(np.float64)
+
+
 def _settle_block(task, *, z, window, threshold, eigenvalue_floor):
     """Screen one block through every round, and return its own keep-mask.
 
@@ -268,7 +291,7 @@ def _settle_block(task, *, z, window, threshold, eigenvalue_floor):
     a shared one keeps the serial and pooled paths identical by construction
     rather than by argument.
     """
-    block, idx, round_seeds = task
+    block, idx, source_rows, dense_lowrank, round_seeds = task
     keep = np.ones(idx.size, dtype=bool)
     zb = z[idx]
     dropped = np.zeros(len(round_seeds), dtype=np.int64)
@@ -288,7 +311,11 @@ def _settle_block(task, *, z, window, threshold, eigenvalue_floor):
             local = live[start:start + window]
             if local.size < MIN_WINDOW:
                 continue
-            ld = _window_ld(block, local)
+            if source_rows is None:
+                ld = _window_ld(block, local)
+            else:
+                ld = _selected_window_ld(
+                    block, source_rows, local, dense_lowrank)
             zw = zb[local]
             order = rng.permutation(local.size)
             half = local.size // 2
@@ -301,6 +328,173 @@ def _settle_block(task, *, z, window, threshold, eigenvalue_floor):
                     keep[local[bad]] = False
                     dropped[round_no] += int(bad.size)
     return keep, dropped
+
+
+def _run_consistency_screen(
+        specs, z, total, *, rounds, window, threshold, eigenvalue_floor,
+        seed, ncores, verbose, progress, progress_label,
+        warning_stacklevel):
+    """Validate controls and run already validated logical block specs."""
+    _validate_boolean_controls(verbose=verbose)
+    _progress.validate(progress)
+    seed = _validate_seed(seed)
+    rounds = _integer_at_least("rounds", rounds, 1)
+    window = _integer_at_least("window", window, MIN_WINDOW)
+    threshold = _finite_control("threshold", threshold)
+    if threshold <= 0:
+        raise ValueError("threshold must be > 0")
+    eigenvalue_floor = _finite_control(
+        "eigenvalue_floor", eigenvalue_floor, lower=0.0)
+    if eigenvalue_floor >= 1:
+        raise ValueError("eigenvalue_floor must be < 1")
+    ncores = _integer_at_least("ncores", ncores, 1)
+
+    # One independent stream per (logical block, round), derived in a fixed
+    # order. A selected-row logical block is exactly the nonempty block that
+    # ``subset_ld_blocks`` would have emitted, so it receives the same child.
+    root = np.random.SeedSequence(seed)
+    tasks = [(*spec, child.spawn(rounds))
+             for spec, child in zip(specs, root.spawn(len(specs)))]
+    settle = functools.partial(
+        _settle_block, z=z, window=window, threshold=threshold,
+        eigenvalue_floor=eigenvalue_floor)
+
+    # ``executor.map`` yields in submission order, so consuming it here
+    # reports a monotone count from this thread; a callback handed to the
+    # workers instead would need the caller to lock.
+    def _settled(source):
+        out = []
+        for done, item in enumerate(source, 1):
+            out.append(item)
+            _progress.report(progress, progress_label, done, len(tasks),
+                             unit="block")
+        return out
+
+    if _pool_is_worthwhile(ncores, len(tasks)):
+        from concurrent.futures import ThreadPoolExecutor
+        # Each task materialises only its own window at a time, so at most
+        # ``ncores`` dense windows are live -- not ``ncores`` whole blocks.
+        with ThreadPoolExecutor(max_workers=ncores) as executor:
+            results = _settled(executor.map(settle, tasks))
+    else:
+        if ncores > 1 and len(tasks) > 1:
+            # The gate can only have blocked on the BLAS conditions; say which
+            # one, because "ncores=8 requested, ran serial anyway" otherwise
+            # reads as a no-op flag.
+            from ._ldpred3_compat import _blas_runtime_info
+            threads, nested_safe = _blas_runtime_info()
+            if threads is None:
+                reason = ("threadpoolctl is not installed, so BLAS "
+                          "reentrancy cannot be confirmed")
+            elif threads != 1:
+                reason = (f"the loaded BLAS is using {threads} threads "
+                          "(the pool would oversubscribe them)")
+            else:
+                reason = "the loaded BLAS is not reentrant"
+            warnings.warn(
+                f"screen ncores={ncores} requested but the screen is running "
+                f"serial: {reason}. Pin one BLAS thread (e.g. "
+                "OPENBLAS_NUM_THREADS=1, OMP_NUM_THREADS=1) and install "
+                "threadpoolctl to enable the block pool.", RuntimeWarning,
+                stacklevel=warning_stacklevel)
+        results = _settled(settle(task) for task in tasks)
+
+    keep = np.ones(total, dtype=bool)
+    per_round = np.zeros(rounds, dtype=np.int64)
+    for (block_keep, dropped), (_block, idx, _rows, _dense) in zip(
+            results, specs):
+        keep[idx] = block_keep
+        per_round += dropped
+    if verbose:
+        # A variant is dropped at most once -- an earlier round's casualties are
+        # never in a later round's ``live`` -- so the running total is exact.
+        remaining = total
+        for round_no, count in enumerate(per_round):
+            remaining -= int(count)
+            print(f"  LD screen round {round_no + 1}: dropped {count:,}, "
+                  f"{remaining:,} remain", flush=True)
+    return keep
+
+
+def _ld_consistency_screen_selected(
+        blocks, selection, z, *, rounds=DEFAULT_ROUNDS, window=DEFAULT_WINDOW,
+        threshold=DEFAULT_THRESHOLD,
+        eigenvalue_floor=DEFAULT_EIGENVALUE_FLOOR, seed=0, ncores=1,
+        verbose=False, progress=None,
+        progress_label="LD consistency screen"):
+    """Screen a sparse principal panel without materialising that panel.
+
+    ``selection`` is a strictly increasing vector in the full cache's index
+    space, while ``z`` is already aligned to it.  Every task retains its source
+    LD block plus only local row indices.  Dense work is consequently limited
+    to the same window-sized matrices as :func:`ld_consistency_screen`; mmap
+    views remain owned by the caller for the duration of this synchronous call.
+
+    This is an internal preparation seam, not a second public screening API.
+    Its output, seed streams, progress events, and verbose counts match first
+    taking ``subset_ld_blocks(blocks, selection)`` and screening that result.
+    """
+    try:
+        source = list(blocks)
+        source_total = sum(len(idx) for _block, idx in source)
+    except (TypeError, ValueError):
+        raise ValueError(
+            "blocks must be a sequence of (LD, index) pairs") from None
+    source = _validate_blocks(source, source_total, contiguous=True)
+    expected = 0
+    for _block, idx in source:
+        if int(idx[0]) != expected:
+            raise ValueError("LD blocks must tile contiguous indices 0..m-1")
+        expected += int(idx.size)
+
+    values = np.asarray(selection)
+    if (values.ndim != 1
+            or not np.issubdtype(values.dtype, np.integer)
+            or np.issubdtype(values.dtype, np.bool_)):
+        raise ValueError("selection must be a one-dimensional integer array")
+    selection = values.astype(np.int64, copy=False)
+    if selection.size == 0:
+        raise ValueError("selection contains no variants")
+    if selection[0] < 0 or selection[-1] >= source_total:
+        raise IndexError(
+            f"selection indices must lie in [0, {source_total})")
+    if selection.size > 1 and np.any(np.diff(selection) <= 0):
+        raise ValueError("selection must be strictly increasing and unique")
+
+    z = np.asarray(z, dtype=np.float64)
+    if z.shape != (selection.size,):
+        raise ValueError(
+            f"z has shape {z.shape}, but selection spans "
+            f"{selection.size} variants")
+    if not np.all(np.isfinite(z)):
+        raise ValueError("z contains non-finite values; filter them first")
+
+    specs = []
+    out_start = 0
+    for block, idx in source:
+        start = int(idx[0])
+        stop = int(idx[-1]) + 1
+        left = int(np.searchsorted(selection, start, side="left"))
+        right = int(np.searchsorted(selection, stop, side="left"))
+        if left == right:
+            continue
+        source_rows = selection[left:right] - start
+        count = int(source_rows.size)
+        logical = np.arange(out_start, out_start + count, dtype=np.int64)
+        full = (count == idx.size and source_rows[0] == 0
+                and source_rows[-1] == idx.size - 1)
+        dense_lowrank = (isinstance(block, LowRankLD) and not full
+                         and np.asarray(block.U).shape[1] > count)
+        specs.append((block, logical, source_rows, dense_lowrank))
+        out_start += count
+    if out_start != selection.size:
+        raise ValueError("LD blocks do not cover every selected variant")
+
+    return _run_consistency_screen(
+        specs, z, int(selection.size), rounds=rounds, window=window,
+        threshold=threshold, eigenvalue_floor=eigenvalue_floor, seed=seed,
+        ncores=ncores, verbose=verbose, progress=progress,
+        progress_label=progress_label, warning_stacklevel=4)
 
 
 def ld_consistency_screen(
@@ -379,89 +573,12 @@ def ld_consistency_screen(
     if not np.all(np.isfinite(z)):
         raise ValueError("z contains non-finite values; filter them first")
     blocks = _validate_blocks(blocks, total)
-    _validate_boolean_controls(verbose=verbose)
-    _progress.validate(progress)
-    seed = _validate_seed(seed)
-    rounds = _integer_at_least("rounds", rounds, 1)
-    window = _integer_at_least("window", window, MIN_WINDOW)
-    threshold = _finite_control("threshold", threshold)
-    if threshold <= 0:
-        raise ValueError("threshold must be > 0")
-    eigenvalue_floor = _finite_control(
-        "eigenvalue_floor", eigenvalue_floor, lower=0.0)
-    if eigenvalue_floor >= 1:
-        raise ValueError("eigenvalue_floor must be < 1")
-    ncores = _integer_at_least("ncores", ncores, 1)
-
-    # One independent stream per (block, round), derived here in a fixed order.
-    # A single stream consumed in block order could not be pooled: which draws
-    # a block saw depended on how many the blocks before it had made, so the
-    # splits -- and the mask -- would follow whatever order the workers
-    # happened to finish in. Keying each block's splits to its own position
-    # instead makes the result a function of the seed alone, identical at every
-    # ``ncores``. It does mean a given seed no longer reproduces the masks of
-    # bipred <= 0.3.5.
-    root = np.random.SeedSequence(seed)
-    tasks = [(block, idx, child.spawn(rounds))
-             for (block, idx), child in zip(blocks, root.spawn(len(blocks)))]
-    settle = functools.partial(
-        _settle_block, z=z, window=window, threshold=threshold,
-        eigenvalue_floor=eigenvalue_floor)
-
-    # ``executor.map`` yields in submission order, so consuming it here
-    # reports a monotone count from this thread; a callback handed to the
-    # workers instead would need the caller to lock.
-    def _settled(source):
-        out = []
-        for done, item in enumerate(source, 1):
-            out.append(item)
-            _progress.report(progress, progress_label, done, len(tasks),
-                             unit="block")
-        return out
-
-    if _pool_is_worthwhile(ncores, len(tasks)):
-        from concurrent.futures import ThreadPoolExecutor
-        # Each task materialises only its own window at a time, so at most
-        # ``ncores`` dense windows are live -- not ``ncores`` whole blocks.
-        with ThreadPoolExecutor(max_workers=ncores) as executor:
-            results = _settled(executor.map(settle, tasks))
-    else:
-        if ncores > 1 and len(tasks) > 1:
-            # The gate can only have blocked on the BLAS conditions; say which
-            # one, because "ncores=8 requested, ran serial anyway" otherwise
-            # reads as a no-op flag.
-            from ._ldpred3_compat import _blas_runtime_info
-            threads, nested_safe = _blas_runtime_info()
-            if threads is None:
-                reason = ("threadpoolctl is not installed, so BLAS "
-                          "reentrancy cannot be confirmed")
-            elif threads != 1:
-                reason = (f"the loaded BLAS is using {threads} threads "
-                          "(the pool would oversubscribe them)")
-            else:
-                reason = "the loaded BLAS is not reentrant"
-            warnings.warn(
-                f"screen ncores={ncores} requested but the screen is running "
-                f"serial: {reason}. Pin one BLAS thread (e.g. "
-                "OPENBLAS_NUM_THREADS=1, OMP_NUM_THREADS=1) and install "
-                "threadpoolctl to enable the block pool.", RuntimeWarning,
-                stacklevel=2)
-        results = _settled(settle(task) for task in tasks)
-
-    keep = np.ones(total, dtype=bool)
-    per_round = np.zeros(rounds, dtype=np.int64)
-    for (block_keep, dropped), (_block, idx) in zip(results, blocks):
-        keep[idx] = block_keep
-        per_round += dropped
-    if verbose:
-        # A variant is dropped at most once -- an earlier round's casualties are
-        # never in a later round's ``live`` -- so the running total is exact.
-        remaining = total
-        for round_no, count in enumerate(per_round):
-            remaining -= int(count)
-            print(f"  LD screen round {round_no + 1}: dropped {count:,}, "
-                  f"{remaining:,} remain", flush=True)
-    return keep
+    specs = [(block, idx, None, False) for block, idx in blocks]
+    return _run_consistency_screen(
+        specs, z, total, rounds=rounds, window=window,
+        threshold=threshold, eigenvalue_floor=eigenvalue_floor, seed=seed,
+        ncores=ncores, verbose=verbose, progress=progress,
+        progress_label=progress_label, warning_stacklevel=3)
 
 
 def dentist(blocks, z, *, rounds=DEFAULT_ROUNDS, window=DEFAULT_WINDOW,

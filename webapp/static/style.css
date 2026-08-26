@@ -256,13 +256,21 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-sp
 .profile-preflight { color: var(--danger); background: var(--danger-bg); }
 .profile-server { color: var(--link); background: #edf4ff; }
 
-.stages { max-width: 34rem; margin: 0.6rem 0; padding: 0; list-style: none; }
-.stages li { display: flex; justify-content: space-between; padding: 0.4rem 0; border-bottom: 1px solid var(--line); }
+.stages { max-width: 48rem; margin: 0.6rem 0; padding: 0; list-style: none; }
+.stages li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1rem; align-items: start; padding: 0.65rem 0; border-bottom: 1px solid var(--line); }
+.stages .stage-copy { display: grid; gap: 0.12rem; }
+.stages .stage-label { color: var(--navy); font-weight: 700; }
+.stages .stage-description { color: var(--muted); font-size: 0.88rem; font-weight: 400; }
+.stages .stage-detail { color: var(--teal-dark); font-size: 0.88rem; font-weight: 600; }
 .stages .state { color: var(--muted); font-variant-numeric: tabular-nums; }
 .stages .done .state { color: var(--ok); }
-.stages .active { font-weight: 700; }
 .stages .active .state { color: var(--warn); }
-.stages .pending { color: var(--muted); }
+.stages .failed .state { color: var(--danger); font-weight: 700; }
+.stages .failed .stage-label { color: var(--danger); }
+.stages .pending .stage-label { color: var(--muted); }
+.progress-lines { display: grid; gap: 0.2rem; margin: 0.5rem 0; }
+.progress-lines[hidden] { display: none; }
+.progress-lines p { margin: 0; color: var(--muted); }
 
 .stat-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); margin: 1.3rem 0; border: 1px solid var(--line); border-radius: var(--radius); }
 .stat-strip div { padding: 0.8rem 1rem; border-right: 1px solid var(--line); }

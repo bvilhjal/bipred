@@ -33,7 +33,7 @@ from fastapi.templating import Jinja2Templates
 # preview and the runner's detect_columns can never drift apart.
 from ldpred3.sumstats import _ALIASES as SUMSTATS_ALIASES
 
-from . import caches, catalog_evidence, demo, gwascat, jobs
+from . import caches, catalog_evidence, demo, gwascat, jobs, prepared_store
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = Path(__file__).parent / "static"
@@ -42,16 +42,27 @@ TEMPLATES.env.filters["format_datetime"] = (
     lambda fmt, ts: time.strftime(fmt, time.localtime(ts)))
 
 
-def _f3(value):
-    """Three-decimal formatting that tolerates None/NaN (e.g. failed LDSC)."""
+def _number(value, spec=".3g"):
+    """Format one finite number; JSON null and non-finite values become an em dash."""
     try:
         out = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return "—"
+    if not math.isfinite(out):
+        return "—"
+    try:
+        return format(out, spec)
     except (TypeError, ValueError):
         return "—"
-    return f"{out:.3f}" if math.isfinite(out) else "—"
+
+
+def _f3(value):
+    """Three-decimal compatibility formatter used throughout results pages."""
+    return _number(value, ".3f")
 
 
 TEMPLATES.env.filters["f3"] = _f3
+TEMPLATES.env.filters["number"] = _number
 
 # One numerical thread per runner: deterministic numerics, and N concurrent
 # jobs never oversubscribe the host (same pins as the benchmark suite).
@@ -72,12 +83,23 @@ _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 def _config() -> dict:
+    try:
+        ttl_days = float(os.environ.get("BIPRED_WEB_TTL_DAYS", "7"))
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError(
+            "BIPRED_WEB_TTL_DAYS must be a finite number greater than zero"
+        ) from None
+    if not math.isfinite(ttl_days) or ttl_days <= 0:
+        raise ValueError(
+            "BIPRED_WEB_TTL_DAYS must be a finite number greater than zero")
     return {
-        "concurrency": int(os.environ.get("BIPRED_WEB_CONCURRENCY", "2")),
+        "concurrency": int(os.environ.get("BIPRED_WEB_CONCURRENCY", "1")),
         "max_upload": int(os.environ.get("BIPRED_WEB_MAX_UPLOAD_MB", "500"))
         * 1024 * 1024,
-        "ttl_days": float(os.environ.get("BIPRED_WEB_TTL_DAYS", "7")),
+        "ttl_days": ttl_days,
         "store_gb": float(os.environ.get("BIPRED_WEB_STORE_GB", "20")),
+        "prepared_gb": float(os.environ.get(
+            "BIPRED_WEB_PREPARED_GB", "20")),
     }
 
 
@@ -153,21 +175,28 @@ def _sample_size_options(form, trait):
 
 async def _save_upload(upload: UploadFile, dest: Path, cap: int) -> None:
     n = 0
-    with open(dest, "wb") as fh:
-        while True:
-            chunk = await upload.read(1 << 20)
-            if not chunk:
-                break
-            n += len(chunk)
-            if n > cap:
-                fh.close()
-                dest.unlink(missing_ok=True)
-                raise ValueError(
-                    f"{upload.filename}: over the {cap // (1024 * 1024)} MB "
-                    "per-file limit")
-            fh.write(chunk)
-    if n == 0:
-        raise ValueError(f"{upload.filename or dest.name}: empty file")
+    try:
+        with open(dest, "wb") as fh:
+            while True:
+                chunk = await upload.read(1 << 20)
+                if not chunk:
+                    break
+                n += len(chunk)
+                if n > cap:
+                    raise ValueError(
+                        f"{upload.filename}: over the "
+                        f"{cap // (1024 * 1024)} MB per-file limit")
+                fh.write(chunk)
+        if n == 0:
+            raise ValueError(f"{upload.filename or dest.name}: empty file")
+    except BaseException:
+        # CancelledError is a BaseException.  Remove private partial data, but
+        # re-raise cancellation, shutdown signals, and I/O failures unchanged.
+        try:
+            dest.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
 
 def _index_context(app, error=None, form=None) -> dict:
@@ -190,45 +219,61 @@ def _read_munge(root: Path, job_id: str) -> dict | None:
     return json.loads(path.read_text())
 
 
-def _figure_data(result: dict) -> dict | None:
+def _figure_data(result: dict, stage_schema: int | None = None) -> dict | None:
     """Counts for the results-page variant figures (Venn + QC attrition).
 
     Returns None when the munge report lacks per-trait counts (jobs that
     predate the per-step report), so older result pages render as before.
-    ``usable`` prefers the post-QC finite-effect count (``n_usable``) and
-    falls back to the harmonization match count for jobs from before that
-    key existed.
+    Schema-3 circles use each trait's post-screen count. Earlier jobs retain
+    their historical post-QC/reference-aligned definition of ``usable``.
     """
     munge = result.get("munge") or {}
     kept = munge.get("n_kept")
+    if stage_schema is None:
+        stage_schema = int(
+            (result.get("provenance") or {}).get("stage_schema") or 1)
+    current = int(stage_schema) >= 3
     traits = {}
     for key in ("trait1", "trait2"):
         tlog = munge.get(key) or {}
         qc = tlog.get("qc") or {}
         harmonize = tlog.get("harmonize") or {}
-        usable = tlog.get("n_usable")
-        if usable is None:
-            usable = harmonize.get("n_matched")
+        screen = tlog.get("ld_consistency_screen") or {}
+        if current:
+            on_reference = screen.get("n_input")
+            after_screen = screen.get("n_kept")
+        else:
+            on_reference = tlog.get("n_usable")
+            if on_reference is None:
+                on_reference = harmonize.get("n_matched")
+            after_screen = None
+        usable = after_screen if current else on_reference
         n_input = qc.get("n_input") or harmonize.get("n_sumstats")
-        if usable is None or not n_input or not kept:
+        if usable is None or on_reference is None or not n_input or not kept:
             return None
         after_qc = qc.get("n_kept")
         traits[key] = {
             "input": int(n_input),
             "after_qc": int(after_qc) if after_qc is not None else int(n_input),
+            "on_reference": int(on_reference),
+            "after_screen": (
+                int(after_screen) if after_screen is not None else None),
             "usable": int(usable),
             "only": max(int(usable) - int(kept), 0),
         }
-    return {"traits": traits, "joint": int(kept),
-            "screen_drop": int(munge.get("n_screen_drop") or 0)}
+    return {
+        "traits": traits,
+        "joint": int(kept),
+        "current_screen": current,
+        # Schema 3 has two trait-local screens, not one joint drop.
+        "screen_drop": (
+            0 if current else int(munge.get("n_screen_drop") or 0)),
+    }
 
 
 def _shown_stages(job) -> list:
-    """Stages worth displaying; download/weights only exist when requested."""
-    opt = job.get("options", {})
-    return [s for s in jobs.STAGE_ORDER
-            if (s != "weights" or opt.get("weights"))
-            and (s != "download" or opt.get("gcst1") or opt.get("gcst2"))]
+    """User-facing stage definitions for a current or historical job."""
+    return jobs.stage_definitions(job)
 
 
 def _launch(app, job) -> None:
@@ -319,6 +364,7 @@ def _sweep_once(app) -> None:
         # Downloaded catalog files outlive the jobs that fetched them — that
         # is the point — so they get their own byte budget instead.
         gwascat.purge_store(root, app.state.config["store_gb"])
+        prepared_store.purge(root, app.state.config["prepared_gb"])
 
 
 async def _supervisor(app):
@@ -380,7 +426,7 @@ def create_app() -> FastAPI:
             catalog_auto_n2: str = Form(""),
             catalog_auto_label1: str = Form(""),
             catalog_auto_label2: str = Form(""),
-            screen: str = Form(""), weights: str = Form("")):
+            weights: str = Form("")):
         # Raw values kept for re-rendering the form when validation fails.
         form = {"label1": label1, "label2": label2,
                 "n_eff1": n_eff1, "n_eff2": n_eff2,
@@ -394,7 +440,7 @@ def create_app() -> FastAPI:
                 "catalog_auto_n2": catalog_auto_n2,
                 "catalog_auto_label1": catalog_auto_label1,
                 "catalog_auto_label2": catalog_auto_label2,
-                "screen": screen, "weights": weights}
+                "weights": weights}
         try:
             if not cache_key:
                 raise ValueError("No real LD reference is configured on this server")
@@ -477,7 +523,7 @@ def create_app() -> FastAPI:
                 "cross_corr": _cross_corr(cross_corr),
                 "columns1": parse_columns(columns1),
                 "columns2": parse_columns(columns2),
-                "screen": bool(screen),
+                "screen": True,
                 "weights": bool(weights),
             })
             caches.cache_path(cache_key, app.state.root)
@@ -500,14 +546,20 @@ def create_app() -> FastAPI:
                 dest = job_dir / f"{prefix}_{name}"
                 await _save_upload(upload, dest, app.state.config["max_upload"])
                 job["files"][key] = dest.name
+            # Publishing the queued state is the atomic handoff to the
+            # supervisor.  Until this replace succeeds, every file is private
+            # staging data and is removed if the request fails or is cancelled.
+            job["status"] = "queued"
+            jobs.save_job(app.state.root, job)
         except ValueError as exc:
             shutil.rmtree(job_dir, ignore_errors=True)
             return TEMPLATES.TemplateResponse(
                 request, "index.html",
                 _index_context(app, error=str(exc), form=form),
                 status_code=400)
-        job["status"] = "queued"
-        jobs.save_job(app.state.root, job)
+        except BaseException:
+            shutil.rmtree(job_dir, ignore_errors=True)
+            raise
         return RedirectResponse(f"/jobs/{job['id']}", status_code=303)
 
     @app.get("/catalog", response_class=HTMLResponse)
@@ -566,7 +618,7 @@ def create_app() -> FastAPI:
             "seed": 0, "burn_in": 200, "num_iter": 200,
             "cross_corr": 0.0,
             "columns1": {}, "columns2": {},
-            "screen": False, "weights": True,
+            "screen": True, "weights": True,
         }
         job = jobs.create_job(
             app.state.root, options=options,
@@ -601,7 +653,9 @@ def create_app() -> FastAPI:
         if job is None:
             return JSONResponse({"error": "unknown job"}, status_code=404)
         return {"id": job_id, "status": job["status"], "stage": job["stage"],
+                "stage_schema": job.get("stage_schema", 1),
                 "stages": job["stages"], "error": job["error"],
+                "stage_details": job.get("stage_details", {}),
                 "progress": job.get("progress"),
                 "munge": _read_munge(app.state.root, job_id)}
 
@@ -618,7 +672,8 @@ def create_app() -> FastAPI:
         result = json.loads(result_path.read_text())
         return TEMPLATES.TemplateResponse(
             request, "results.html", {"job": job, "res": result,
-                                      "figs": _figure_data(result)})
+                                      "figs": _figure_data(
+                                          result, job.get("stage_schema", 1))})
 
     @app.get("/jobs/{job_id}/download/{kind}")
     def download(job_id: str, kind: str):

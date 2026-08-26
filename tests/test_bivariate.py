@@ -1591,7 +1591,29 @@ def _diverged_args(**over):
 def test_no_divergence_warning_on_a_healthy_fit():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        bivariate._warn_if_fit_diverged(**_diverged_args())
+        diagnostic = bivariate._warn_if_fit_diverged(
+            **_diverged_args(largest_block=12_169))
+    assert diagnostic["evaluated"] is True
+    assert diagnostic["flagged"] is False
+    assert diagnostic["largest_block_variants"] == 12_169
+    assert diagnostic["trace_iterations"] == 80
+    assert diagnostic["trace_evaluated"] is True
+    assert diagnostic["thresholds"] == {
+        "minimum_variants": 1000,
+        "minimum_trace_iterations": 40,
+        "effect_energy_ratio": 10.0,
+        "max_effect_slab_sd": 25.0,
+        "trace_drift_fold": 1.25,
+    }
+    trait = diagnostic["traits"]["trait1"]
+    assert trait["sum_beta_squared"] == pytest.approx(0.0573)
+    assert trait["raw_genetic_variance"] == pytest.approx(0.0882)
+    assert trait["effect_energy_ratio"] == pytest.approx(0.0573 / 0.0882)
+    assert trait["max_effect_slab_sd"] == pytest.approx(4.1)
+    assert trait["trace_first_quarter_mean"] == pytest.approx(0.0882)
+    assert trait["trace_last_quarter_mean"] == pytest.approx(0.0882)
+    assert trait["trace_drift_fold"] == pytest.approx(1.0)
+    assert not any(trait["flags"].values())
 
 
 def test_divergence_warning_catches_cancelling_effects():
@@ -1604,8 +1626,33 @@ def test_divergence_warning_catches_cancelling_effects():
     m = bivariate._DIAGNOSTIC_MIN_VARIANTS
     beta1 = np.full(m, np.sqrt(171.8 / m))
     with pytest.warns(RuntimeWarning, match="cancelling through LD"):
-        bivariate._warn_if_fit_diverged(**_diverged_args(
-            beta1=beta1, raw_h2=(0.6732, 0.0706)))
+        diagnostic = bivariate._warn_if_fit_diverged(**_diverged_args(
+            beta1=beta1, raw_h2=(0.6732, 0.0706), sigma_diag=(1.0, 1.0)))
+    assert diagnostic["flagged"] is True
+    assert diagnostic["traits"]["trait1"]["flags"] == {
+        "nonpositive_genetic_variance": False,
+        "effect_energy_ratio": True,
+        "max_effect_slab_sd": False,
+        "trace_drift": False,
+    }
+
+
+def test_divergence_warning_structures_nonpositive_genetic_variance():
+    beta1 = np.zeros(bivariate._DIAGNOSTIC_MIN_VARIANTS)
+    with pytest.warns(RuntimeWarning, match=(
+            "non-positive sampled genetic variance.*h2 and rg.*not valid")):
+        diagnostic = bivariate._warn_if_fit_diverged(**_diverged_args(
+            beta1=beta1, raw_h2=(-0.01, 0.0706)))
+    trait = diagnostic["traits"]["trait1"]
+    assert diagnostic["flagged"] is True
+    assert trait["raw_genetic_variance"] == pytest.approx(-0.01)
+    assert trait["effect_energy_ratio"] is None
+    assert trait["flags"] == {
+        "nonpositive_genetic_variance": True,
+        "effect_energy_ratio": False,
+        "max_effect_slab_sd": False,
+        "trace_drift": False,
+    }
 
 
 def test_divergence_warning_catches_effects_beyond_the_fitted_slab():
@@ -1613,9 +1660,11 @@ def test_divergence_warning_catches_effects_beyond_the_fitted_slab():
     beta1 = np.zeros(bivariate._DIAGNOSTIC_MIN_VARIANTS)
     beta1[0] = 3.1929
     with pytest.warns(RuntimeWarning, match="times the per-causal effect SD"):
-        bivariate._warn_if_fit_diverged(**_diverged_args(
+        diagnostic = bivariate._warn_if_fit_diverged(**_diverged_args(
             beta1=beta1, raw_h2=(1e6, 0.0706),    # keep the ratio arm quiet
             sigma_diag=((3.1929 / 103.0) ** 2, 1.0)))
+    assert diagnostic["traits"]["trait1"]["flags"][
+        "max_effect_slab_sd"] is True
 
 
 def test_divergence_warning_catches_a_trace_that_never_settled():
@@ -1623,16 +1672,28 @@ def test_divergence_warning_catches_a_trace_that_never_settled():
     rising = np.column_stack([np.linspace(0.42, 0.82, 80),
                               np.full(80, 0.01), np.full(80, 0.0706)])
     with pytest.warns(RuntimeWarning, match="rose .* had not settled"):
-        bivariate._warn_if_fit_diverged(**_diverged_args(
+        diagnostic = bivariate._warn_if_fit_diverged(**_diverged_args(
             genetic_samples=rising))
+    trait = diagnostic["traits"]["trait1"]
+    assert trait["flags"]["trace_drift"] is True
+    assert trait["trace_direction"] == "rising"
+    assert trait["trace_drift_fold"] == pytest.approx(
+        trait["trace_last_quarter_mean"]
+        / trait["trace_first_quarter_mean"])
 
 
 def test_divergence_warning_catches_a_collapsing_trace():
     falling = np.column_stack([np.linspace(0.82, 0.42, 80),
                                np.full(80, 0.01), np.full(80, 0.0706)])
     with pytest.warns(RuntimeWarning, match="fell .* had not settled"):
-        bivariate._warn_if_fit_diverged(**_diverged_args(
+        diagnostic = bivariate._warn_if_fit_diverged(**_diverged_args(
             genetic_samples=falling))
+    trait = diagnostic["traits"]["trait1"]
+    assert trait["flags"]["trace_drift"] is True
+    assert trait["trace_direction"] == "falling"
+    assert trait["trace_drift_fold"] == pytest.approx(
+        trait["trace_first_quarter_mean"]
+        / trait["trace_last_quarter_mean"])
 
 
 def test_divergence_warning_is_silent_on_small_panels():
@@ -1640,10 +1701,14 @@ def test_divergence_warning_is_silent_on_small_panels():
     m = bivariate._DIAGNOSTIC_MIN_VARIANTS - 1
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        bivariate._warn_if_fit_diverged(
+        diagnostic = bivariate._warn_if_fit_diverged(
             beta1=np.full(m, np.sqrt(171.8 / m)), beta2=np.zeros(m),
             raw_h2=(0.6732, 0.0706), sigma_diag=(1e-6, 1.0),
             genetic_samples=None, m=m)
+    assert diagnostic["evaluated"] is False
+    assert diagnostic["flagged"] is False
+    assert diagnostic["traits"]["trait1"]["effect_energy_ratio"] > 10
+    assert not any(diagnostic["traits"]["trait1"]["flags"].values())
 
 
 def test_fit_reports_every_sweep_and_changes_nothing():

@@ -1,20 +1,22 @@
 {% extends "base.html" %}
+{% from "_stage_ui.html" import fallback_label %}
 {% block title %}{{ job.labels.trait1 }} × {{ job.labels.trait2 }} — bipred{% endblock %}
 {% block content %}
 {% set invalid = res.diagnostics is defined and res.diagnostics.critical %}
+{% set divergence = res.diagnostics.get('divergence') if res.diagnostics is defined else none %}
+{% set current_schema = job.get('stage_schema', 1)|int >= 3 %}
 <h1>{{ job.labels.trait1 }} × {{ job.labels.trait2 }}</h1>
 <p class="muted">Job {{ job.id }} — joint bipred fit on
-{{ res.munge.n_kept }} harmonized variants.</p>
+{{ res.munge.n_kept }} {% if current_schema %}QC'd, harmonized, and screened{% else %}harmonized{% endif %} variants.</p>
 
 {% if invalid %}
 <div class="alert alert-danger" role="alert">
 <strong>Fit validity: do not interpret this fit.</strong>
-<p>bipred emitted a critical convergence or plausibility warning. Headline
+<p>bipred emitted a critical fit-validity warning. Headline
 estimates are quarantined below and requested weight files were withheld.</p>
 <ul>{% for warning in res.diagnostics.warnings %}<li><strong>{{ warning.stage }}:</strong>
 {{ warning.message }}</li>{% endfor %}</ul>
 </div>
-<details class="diagnostic-estimates"><summary>Show quarantined diagnostic estimates</summary>
 {% elif res.diagnostics is defined %}
 <div class="alert alert-success"><strong>Fit validity: no critical warning was emitted.</strong>
 <p>This is necessary, not sufficient, evidence. One chain and posterior
@@ -24,11 +26,64 @@ variation across autocorrelated sweeps do not establish convergence.</p>
 {{ warning.message }}</li>{% endfor %}</ul></details>{% endif %}</div>
 {% endif %}
 
+{% if divergence %}
+{% set d1 = divergence.traits.trait1 %}
+{% set d2 = divergence.traits.trait2 %}
+<h2>Fit-stability diagnostics</h2>
+{% if not divergence.evaluated %}
+<div class="alert alert-warning compact-alert"><strong>Thresholds not evaluated.</strong>
+<p>The fitted panel has fewer than {{ "{:,}".format(divergence.thresholds.minimum_variants) }}
+variants. Values are reported, but the genome-scale warning thresholds are not
+applied.</p></div>
+{% elif divergence.flagged %}
+<div class="alert alert-danger compact-alert"><strong>Divergence threshold crossed.</strong>
+<p>At least one trait crossed a numerical fit-validity threshold. The estimates
+remain quarantined even if they look plausible.</p></div>
+{% else %}
+<div class="alert alert-info compact-alert"><strong>No divergence threshold crossed.</strong>
+<p>This is necessary, not sufficient, evidence of a stable fit.</p></div>
+{% endif %}
+<table>
+<tr><th>Diagnostic</th><th class="num">{{ job.labels.trait1 }}</th>
+    <th class="num">{{ job.labels.trait2 }}</th><th>Warning rule</th></tr>
+<tr><td>Sum of squared posterior-mean effects, Σβ²</td>
+    <td class="num">{{ d1.sum_beta_squared|number(".3g") }}</td>
+    <td class="num">{{ d2.sum_beta_squared|number(".3g") }}</td><td>context</td></tr>
+<tr><td>Raw genetic variance, β′Rβ</td>
+    <td class="num">{% if d1.flags.nonpositive_genetic_variance %}<strong>{% endif %}{{ d1.raw_genetic_variance|number(".3g") }}{% if d1.flags.nonpositive_genetic_variance %} (flagged)</strong>{% endif %}</td>
+    <td class="num">{% if d2.flags.nonpositive_genetic_variance %}<strong>{% endif %}{{ d2.raw_genetic_variance|number(".3g") }}{% if d2.flags.nonpositive_genetic_variance %} (flagged)</strong>{% endif %}</td><td>≤ 0</td></tr>
+<tr><td>Σβ² / raw genetic variance</td>
+    <td class="num">{% if d1.effect_energy_ratio is not none %}{% if d1.flags.effect_energy_ratio %}<strong>{% endif %}{{ d1.effect_energy_ratio|number(".3g") }}{% if d1.flags.effect_energy_ratio %} (flagged)</strong>{% endif %}{% else %}—{% endif %}</td>
+    <td class="num">{% if d2.effect_energy_ratio is not none %}{% if d2.flags.effect_energy_ratio %}<strong>{% endif %}{{ d2.effect_energy_ratio|number(".3g") }}{% if d2.flags.effect_energy_ratio %} (flagged)</strong>{% endif %}{% else %}—{% endif %}</td>
+    <td>&gt; {{ divergence.thresholds.effect_energy_ratio }}</td></tr>
+<tr><td>Maximum |posterior-mean β| / fitted effect SD</td>
+    <td class="num">{% if d1.max_effect_slab_sd is not none %}{% if d1.flags.max_effect_slab_sd %}<strong>{% endif %}{{ d1.max_effect_slab_sd|number(".3g") }}{% if d1.flags.max_effect_slab_sd %} (flagged)</strong>{% endif %}{% else %}—{% endif %}</td>
+    <td class="num">{% if d2.max_effect_slab_sd is not none %}{% if d2.flags.max_effect_slab_sd %}<strong>{% endif %}{{ d2.max_effect_slab_sd|number(".3g") }}{% if d2.flags.max_effect_slab_sd %} (flagged)</strong>{% endif %}{% else %}—{% endif %}</td>
+    <td>&gt; {{ divergence.thresholds.max_effect_slab_sd }}</td></tr>
+<tr><td>Retained-sweep genetic variance, first → last quarter</td>
+    <td class="num">{% if d1.trace_first_quarter_mean is not none %}{{ d1.trace_first_quarter_mean|number(".3g") }} → {{ d1.trace_last_quarter_mean|number(".3g") }}{% else %}—{% endif %}</td>
+    <td class="num">{% if d2.trace_first_quarter_mean is not none %}{{ d2.trace_first_quarter_mean|number(".3g") }} → {{ d2.trace_last_quarter_mean|number(".3g") }}{% else %}—{% endif %}</td>
+    <td>at least {{ divergence.thresholds.minimum_trace_iterations }} retained sweeps</td></tr>
+<tr><td>Genetic-variance drift, larger / smaller quarter mean</td>
+    <td class="num">{% if d1.trace_drift_fold is not none %}{% if d1.flags.trace_drift %}<strong>{% endif %}{{ d1.trace_drift_fold|number(".3g") }}×{% if d1.trace_direction %}, {{ d1.trace_direction }}{% endif %}{% if d1.flags.trace_drift %} (flagged)</strong>{% endif %}{% else %}—{% endif %}</td>
+    <td class="num">{% if d2.trace_drift_fold is not none %}{% if d2.flags.trace_drift %}<strong>{% endif %}{{ d2.trace_drift_fold|number(".3g") }}×{% if d2.trace_direction %}, {{ d2.trace_direction }}{% endif %}{% if d2.flags.trace_drift %} (flagged)</strong>{% endif %}{% else %}—{% endif %}</td>
+    <td>&gt; {{ divergence.thresholds.trace_drift_fold }}×</td></tr>
+</table>
+<p class="muted">Heuristic mismatch/runaway checks, not R-hat or effective
+sample size. Largest LD block:
+{% if divergence.largest_block_variants is not none %}{{ "{:,}".format(divergence.largest_block_variants) }} variants{% else %}not recorded{% endif %};
+block size is context, not a failure rule. Full values are in result.json.</p>
+{% elif invalid %}
+<p class="muted">This job predates structured fit-stability diagnostics; the
+critical warning above contains the values retained for that run.</p>
+{% endif %}
+
 <div class="alert alert-info compact-alert"><strong>Sampling-error assumption.</strong>
 <p>cross_corr = {{ res.provenance.cross_corr if res.provenance.cross_corr is defined else 0 }}.
 Zero assumes no correlated sampling error between traits; the fitted-panel
 moment intercept was not substituted automatically.</p></div>
 
+{% if invalid %}<details class="diagnostic-estimates"><summary>Show quarantined diagnostic estimates</summary>{% endif %}
 <h2>Genetic correlation and heritability (joint fit)</h2>
 <table>
 <tr><th>Quantity</th><th class="num">Estimate</th></tr>
@@ -39,7 +94,7 @@ moment intercept was not substituted automatically.</p></div>
 <tr><td>SNP heritability, {{ job.labels.trait2 }}</td>
     <td class="num">{{ res.joint.h2[1]|f3 }}{% if res.joint.h2_sd is defined and res.joint.h2_sd %} ± {{ res.joint.h2_sd[1]|f3 }}{% endif %}</td></tr>
 <tr><td>Model-implied union-causal fraction (π10 + π01 + π11)</td>
-    <td class="num">{{ "%.4f"|format(res.joint.p) }}</td></tr>
+    <td class="num">{{ res.joint.p|number(".4f") }}</td></tr>
 </table>
 {% if res.joint.rg_sd is defined and res.joint.rg_sd is not none %}
 <p class="muted">± is posterior SD across {{ res.joint.retained_iterations }}
@@ -55,32 +110,34 @@ inflated; interpret ratios and sensitivity across specifications first.</p></div
 <table>
 <tr><th>Quantity</th><th class="num">Estimate</th></tr>
 <tr><td>Polygenicity, {{ job.labels.trait1 }} / {{ job.labels.trait2 }}</td>
-    <td class="num">{{ "%.4f"|format(res.joint.mixer.polygenicity[0]) }} /
-        {{ "%.4f"|format(res.joint.mixer.polygenicity[1]) }}</td></tr>
+    <td class="num">{{ res.joint.mixer.polygenicity[0]|number(".4f") }} /
+        {{ res.joint.mixer.polygenicity[1]|number(".4f") }}</td></tr>
 <tr><td>Model-implied associated variants, {{ job.labels.trait1 }} / {{ job.labels.trait2 }}</td>
-    <td class="num">{{ "%.0f"|format(res.joint.mixer.n_causal[0]) }} /
-        {{ "%.0f"|format(res.joint.mixer.n_causal[1]) }}</td></tr>
+    <td class="num">{{ res.joint.mixer.n_causal[0]|number(".0f") }} /
+        {{ res.joint.mixer.n_causal[1]|number(".0f") }}</td></tr>
 <tr><td>Model-implied shared associated variants</td>
-    <td class="num">{{ "%.0f"|format(res.joint.mixer.n_shared) }}</td></tr>
+    <td class="num">{{ res.joint.mixer.n_shared|number(".0f") }}</td></tr>
 <tr><td>Fraction of the smaller trait shared</td>
-    <td class="num">{{ "%.3f"|format(res.joint.mixer.frac_shared) }}</td></tr>
+    <td class="num">{{ res.joint.mixer.frac_shared|number(".3f") }}</td></tr>
 <tr><td>Effect correlation at shared variants (rho_beta)</td>
-    <td class="num">{{ "%.3f"|format(res.joint.mixer.rho_beta) }}</td></tr>
+    <td class="num">{{ res.joint.mixer.rho_beta|number(".3f") }}</td></tr>
 <tr><td>r<sub>g</sub> implied by the overlap</td>
-    <td class="num">{{ "%.3f"|format(res.joint.mixer.rg_from_overlap) }}</td></tr>
+    <td class="num">{{ res.joint.mixer.rg_from_overlap|number(".3f") }}</td></tr>
 </table>
 {% if invalid %}</details>{% endif %}
 
-<h2>QC and harmonization</h2>
+<h2>QC and harmonization{% if current_schema %}, including the mandatory screen{% endif %}</h2>
 {% if res.munge.trait1 is defined and res.munge.trait1 %}
 <p class="muted">Per-trait filters applied on load, then alignment to the LD
 reference. Counts are sequential: each row removes variants from what the
 rows above left. Flip counts are informational (alleles were aligned, not
-dropped).</p>
+dropped).{% if current_schema %} The LD-consistency screen is trait-local and
+runs before the two traits are intersected.{% endif %}</p>
 <div class="row">
 {% for key in ("trait1", "trait2") %}
 {% set t = res.munge[key] %}
 {% set q, h = t.qc, t.harmonize %}
+{% set s = t.get('ld_consistency_screen', {}) %}
 <div>
 <h3>{{ job.labels[key] }}</h3>
 <table>
@@ -118,6 +175,14 @@ dropped).</p>
     <td class="num muted">{{ h.get('n_flipped', 0) }}</td></tr>
 <tr><td class="muted">strand flips applied</td>
     <td class="num muted">{{ h.get('n_strand_flipped', 0) }}</td></tr>
+{% if current_schema and s %}
+<tr><td>Mandatory screen input</td>
+    <td class="num">{{ s.get('n_input', '—') }}</td></tr>
+<tr><td>Dropped by mandatory screen</td>
+    <td class="num">−{{ s.get('n_dropped', 0) }}</td></tr>
+<tr><td><strong>After mandatory screen</strong></td>
+    <td class="num"><strong>{{ s.get('n_kept', '—') }}</strong></td></tr>
+{% endif %}
 </table>
 </div>
 {% endfor %}
@@ -129,6 +194,10 @@ are available. Run a new job for the full breakdown.</p>
 <table>
 <tr><th>Joint panel</th><th class="num">Variants</th></tr>
 <tr><td>In LD reference</td><td class="num">{{ res.munge.n_cache }}</td></tr>
+{% if current_schema %}
+<tr><td><strong>Shared after the two trait-local screens</strong></td>
+    <td class="num"><strong>{{ res.munge.n_kept }}</strong></td></tr>
+{% else %}
 <tr><td>Observed in both GWAS</td><td class="num">{{ res.munge.n_joint }}</td></tr>
 {% if res.munge.n_screen_drop %}
 <tr><td>Dropped by the LD-consistency screen</td>
@@ -136,6 +205,7 @@ are available. Run a new job for the full breakdown.</p>
 {% endif %}
 <tr><td><strong>Kept for fitting</strong></td>
     <td class="num"><strong>{{ res.munge.n_kept }}</strong></td></tr>
+{% endif %}
 {% if res.munge.af_corr %}
 <tr><td>EAF vs reference-AF correlation, {{ job.labels.trait1 }} /
 {{ job.labels.trait2 }}</td>
@@ -148,9 +218,9 @@ are available. Run a new job for the full breakdown.</p>
 <h2>Variant overlap</h2>
 <div class="figures">
 <div>
-<h3>Shared usable variants</h3>
+<h3>Shared {% if figs.current_screen %}post-screen{% else %}usable{% endif %} variants</h3>
 <svg class="venn" viewBox="0 0 400 190" role="img"
-     aria-label="Venn diagram of per-trait usable variants and the shared fitted panel">
+     aria-label="Venn diagram of per-trait {% if figs.current_screen %}post-screen{% else %}usable{% endif %} variants and the shared fitted panel">
 <circle class="c1" cx="158" cy="90" r="86"/>
 <circle class="c2" cx="242" cy="90" r="86"/>
 <text class="count" x="114" y="86" text-anchor="middle">{{ "{:,}".format(figs.traits.trait1.only) }}</text>
@@ -162,10 +232,10 @@ are available. Run a new job for the full breakdown.</p>
 </svg>
 <ul class="legend">
 <li><span class="swatch t1"></span>{{ job.labels.trait1 }}:
-{{ "{:,}".format(figs.traits.trait1.usable) }} usable on the reference,
+{{ "{:,}".format(figs.traits.trait1.usable) }} {% if figs.current_screen %}after the mandatory screen{% else %}usable on the reference{% endif %},
 {{ "%.1f"|format(100 * figs.joint / figs.traits.trait1.usable) }}% shared</li>
 <li><span class="swatch t2"></span>{{ job.labels.trait2 }}:
-{{ "{:,}".format(figs.traits.trait2.usable) }} usable on the reference,
+{{ "{:,}".format(figs.traits.trait2.usable) }} {% if figs.current_screen %}after the mandatory screen{% else %}usable on the reference{% endif %},
 {{ "%.1f"|format(100 * figs.joint / figs.traits.trait2.usable) }}% shared</li>
 </ul>
 </div>
@@ -178,24 +248,49 @@ are available. Run a new job for the full breakdown.</p>
 <div class="arow {{ "t1" if key == "trait1" else "t2" }}">
 <span>After QC</span><span class="track"><span class="bar" style="width: {{ "%.1f"|format(100 * t.after_qc / t.input) }}%"></span></span><span class="n">{{ "{:,}".format(t.after_qc) }}</span></div>
 <div class="arow {{ "t1" if key == "trait1" else "t2" }}">
-<span>Usable on the LD reference</span><span class="track"><span class="bar" style="width: {{ "%.1f"|format(100 * t.usable / t.input) }}%"></span></span><span class="n">{{ "{:,}".format(t.usable) }}</span></div>
+<span>Usable on the LD reference</span><span class="track"><span class="bar" style="width: {{ "%.1f"|format(100 * t.on_reference / t.input) }}%"></span></span><span class="n">{{ "{:,}".format(t.on_reference) }}</span></div>
+{% if t.after_screen is not none %}
+<div class="arow {{ "t1" if key == "trait1" else "t2" }}">
+<span>After mandatory screen</span><span class="track"><span class="bar" style="width: {{ "%.1f"|format(100 * t.after_screen / t.input) }}%"></span></span><span class="n">{{ "{:,}".format(t.after_screen) }}</span></div>
+{% endif %}
 {% endfor %}
 </div>
 </div>
+{% if figs.current_screen %}
+<p class="muted">Circles are schematic, not area-scaled. Each circle uses that
+trait's post-screen variants; their overlap is the fitted panel. The two
+screen losses are reported per trait above, not as a joint pre-screen drop.
+Bar widths are linear in variant count relative to the input.</p>
+{% else %}
 <p class="muted">Circles are schematic, not area-scaled. “Usable” variants
 passed QC and harmonized to the LD reference with finite effect, SE and N;
 the overlap is the joint panel kept for fitting{% if figs.screen_drop %}
 (after the LD-consistency screen dropped {{ "{:,}".format(figs.screen_drop) }}){% endif %}.
 Bar widths are linear in variant count relative to the input.</p>
 {% endif %}
+{% endif %}
 
+{% set full_reference_ldsc = res.ldsc.m_snps is defined %}
+{% set current_ldsc_job = job.get('stage_schema', 1)|int >= 2 %}
+{% if full_reference_ldsc or current_ldsc_job %}
+<h2>Full-reference-score LDSC-style moment diagnostic</h2>
+<div class="alert alert-warning compact-alert"><strong>Not canonical LDSC.</strong>
+<p>New analyses reuse one precomputed LD-score vector and the original M for
+the selected reference; QC and the {% if job.get('stage_schema', 1)|int >= 3 %}mandatory {% endif %}DENTIST-inspired screen only select
+regression rows. The regression still omits the standard high-χ² and
+long-range-LD exclusions.
+Use it as a within-run diagnostic, not a like-for-like external LDSC
+comparison.</p></div>
+{% else %}
 <h2>Unfiltered fitted-panel LDSC-style moment diagnostic</h2>
 <div class="alert alert-warning compact-alert"><strong>Not canonical LDSC.</strong>
-<p>This one-step diagnostic uses LD scores and M from the intersected fitted
-panel, without the standard high-χ² or long-range-LD exclusions. Use it as a
-within-run flag, not a like-for-like external LDSC comparison.</p></div>
+<p>This historical analysis computed LD scores and M from the intersected
+fitted panel, without the standard high-χ² or long-range-LD exclusions. Use
+it as a within-run diagnostic, not a like-for-like external LDSC
+comparison.</p></div>
+{% endif %}
 {% if res.ldsc.error %}
-<p class="muted">The LDSC stage did not converge on this panel:
+<p class="muted">The LDSC diagnostic was unavailable:
 {{ res.ldsc.error }}</p>
 {% else %}
 <table>
@@ -206,7 +301,24 @@ within-run flag, not a like-for-like external LDSC comparison.</p></div>
     <td class="num">{{ res.ldsc.gcov_intercept|f3 }}</td></tr>
 <tr><td>h², {{ job.labels.trait1 }} / {{ job.labels.trait2 }}</td>
     <td class="num">{{ res.ldsc.h2[0]|f3 }} / {{ res.ldsc.h2[1]|f3 }}</td></tr>
+{% if res.ldsc.h2_init is defined %}
+<tr><td>Sampler h² start, {{ job.labels.trait1 }} / {{ job.labels.trait2 }}</td>
+    <td class="num">{{ res.ldsc.h2_init[0]|f3 }} / {{ res.ldsc.h2_init[1]|f3 }}</td></tr>
+{% endif %}
+{% if res.ldsc.m_snps is defined %}
+<tr><td>Reference variants M / regression rows</td>
+    <td class="num">{{ "{:,}".format(res.ldsc.m_snps) }} / {{ "{:,}".format(res.ldsc.n_regression_variants) }}</td></tr>
+<tr><td>Mean LD score</td>
+    <td class="num">{{ res.ldsc.mean_ld_score|f3 }}</td></tr>
+<tr><td>Participation-ratio effective rank</td>
+    <td class="num">{{ "{:,.0f}".format(res.ldsc.effective_rank) }}</td></tr>
+{% endif %}
 </table>
+{% if res.ldsc.score_source is defined %}
+<p class="muted">LD scores: {{ res.ldsc.score_source }}; definition
+<code>{{ res.ldsc.score_definition }}</code>. Effective rank is
+M² / Σℓ and is not the matrix's exact algebraic rank.</p>
+{% endif %}
 {% endif %}
 
 <h2>Downloads</h2>
@@ -238,7 +350,7 @@ harmonization counts</li>
 <tr><th scope="row">Cross-trait sampling-error correlation</th>
 <td>{{ res.provenance.cross_corr if res.provenance.cross_corr is defined else 0 }}</td></tr>
 <tr><th scope="row">LD-consistency screen</th>
-<td>{{ "on" if res.provenance.screen else "off" }}{% if res.provenance.screen_parameters is defined and res.provenance.screen %}; rounds={{ res.provenance.screen_parameters.rounds }}, window={{ res.provenance.screen_parameters.window }}, threshold={{ res.provenance.screen_parameters.threshold }}, eigenvalue floor={{ res.provenance.screen_parameters.eigenvalue_floor }}{% endif %}{% if res.provenance.fitted_variant_ids_sha256 is defined %}; fitted-ID sha256 <code>{{ res.provenance.fitted_variant_ids_sha256[:12] }}…</code>{% endif %}</td></tr>
+<td>{% if job.get('stage_schema', 1)|int >= 3 %}mandatory{% else %}{{ "on" if res.provenance.screen else "off" }}{% endif %}{% if res.provenance.screen_parameters is defined and res.provenance.screen %}; rounds={{ res.provenance.screen_parameters.rounds }}, window={{ res.provenance.screen_parameters.window }}, threshold={{ res.provenance.screen_parameters.threshold }}, eigenvalue floor={{ res.provenance.screen_parameters.eigenvalue_floor }}{% endif %}{% if res.provenance.fitted_variant_ids_sha256 is defined %}; fitted-ID sha256 <code>{{ res.provenance.fitted_variant_ids_sha256[:12] }}…</code>{% endif %}</td></tr>
 {% if res.provenance.sample_size is defined %}
 <tr><th scope="row">Effective-N basis</th><td>
 {% for key, n in res.provenance.sample_size.items() %}
@@ -251,8 +363,10 @@ range {{ "{:,.1f}".format(n.min) }}–{{ "{:,.1f}".format(n.max) }}{% if not loo
 {% for c in res.provenance.catalog.values() %}
 {{ c.accession }} — {{ c.trait }}{% if c.pmid %} (PMID
 {{ c.pmid }}){% endif %}; {{ c.kept }} of {{ c.seen }} variants kept,
-effect from {{ c.effect_from }}{% if c.source %} ({{ c.source }}){% endif %}{% if c.sha256 %}; source sha256
-<code>{{ c.sha256[:12] }}…</code>{% endif %}{% if c.n_basis %}; metadata N:
+effect from {{ c.effect_from }}{% if c.source %} ({{ "network download" if c.source == "download" else c.source }}){% endif %}{% if c.sha256 %}; source sha256
+<code>{{ c.sha256[:12] }}…</code>{% endif %}{% if c.prepared_key %};
+{{ "reused cached" if c.prepared_reused else "computed and cached" }} QC + LD alignment{% if current_schema %} + mandatory screen{% endif %}
+(key <code>{{ c.prepared_key[:12] }}…</code>){% endif %}{% if c.n_basis %}; metadata N:
 {{ c.n_basis }}{% endif %}{% if c.has_per_variant_n %}; retained per-variant N
 ({{ "{:.1%}".format(c.per_variant_n_usable_frac) }} usable){% endif %}{% if not loop.last %}<br>{% endif %}
 {% endfor %}
@@ -280,6 +394,6 @@ peak RSS {% if res.provenance.resources.peak_rss_gb is not none %}{{ "{:.3f}".fo
 {% endif %}
 {% if res.provenance.source is defined %}<tr><th scope="row">Source revision</th><td><code>{{ res.provenance.source.commit or "unknown" }}</code>{% if res.provenance.source.dirty is sameas true %} (dirty checkout){% elif res.provenance.source.dirty is sameas false %} (clean checkout){% else %} (working-tree state unavailable){% endif %}</td></tr>{% endif %}
 <tr><th scope="row">Stage seconds</th>
-<td>{% for k, v in res.provenance.stages.items() %}{{ k }} {{ "%.1f"|format(v) }}s{% if not loop.last %}, {% endif %}{% endfor %}</td></tr>
+<td>{% for k, v in res.provenance.stages.items() %}{{ fallback_label(k) }} {{ "%.1f"|format(v) }}s{% if not loop.last %}, {% endif %}{% endfor %}</td></tr>
 </table>
 {% endblock %}

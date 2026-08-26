@@ -18,7 +18,142 @@ import time
 from pathlib import Path
 
 STATES = ("staging", "queued", "launching", "running", "done", "failed")
-STAGE_ORDER = ("download", "validate", "harmonize", "ldsc", "fit", "weights")
+
+# Version 3 makes the mandatory LD-consistency screen a visible stage. Keep
+# both earlier schemas so completed jobs retain the workflow they actually ran.
+STAGE_SCHEMA = 3
+STAGE_ORDER = (
+    "acquire", "prepare", "screen", "pair", "ldsc", "fit", "weights")
+STAGE_DEFINITIONS = {
+    "acquire": {
+        "label": "Get Catalog data",
+        "description": (
+            "Reuse stored Catalog files, or download and store missing files."
+        ),
+    },
+    "prepare": {
+        "label": "Prepare each trait",
+        "description": (
+            "Validate and read both inputs and the selected LD reference."
+        ),
+    },
+    "screen": {
+        "label": "Run LD-consistency screen",
+        "description": (
+            "Reuse a fully QC'd, harmonized, and screened trait artifact, or "
+            "run QC, LD alignment, and the mandatory DENTIST-inspired "
+            "trait-local screen before storing it."
+        ),
+    },
+    "pair": {
+        "label": "Combine the two traits",
+        "description": (
+            "Intersect the screened traits, check allele frequencies, and "
+            "subset LD. Recomputed for every analysis."
+        ),
+    },
+    "ldsc": {
+        "label": "Run LD-score diagnostic",
+        "description": (
+            "Reuse the selected reference's precomputed LD scores, regress "
+            "the paired GWAS rows, and initialize the sampler h2 values."
+        ),
+    },
+    "fit": {
+        "label": "Fit bivariate model",
+        "description": "Estimate trait-specific and shared genetic architecture.",
+    },
+    "weights": {
+        "label": "Write prediction weights",
+        "description": "Create one SNP-weight file for each trait.",
+    },
+}
+
+SCHEMA2_STAGE_ORDER = (
+    "acquire", "prepare", "pair", "ldsc", "fit", "weights")
+SCHEMA2_STAGE_DEFINITIONS = {
+    "acquire": STAGE_DEFINITIONS["acquire"],
+    "prepare": {
+        "label": "Prepare each trait",
+        "description": (
+            "Check columns, run QC, align alleles, and retain variants in the "
+            "selected LD reference. Catalog preparations can be reused."
+        ),
+    },
+    "pair": {
+        "label": "Combine the two traits",
+        "description": (
+            "Intersect prepared traits, check allele frequencies, subset LD, "
+            "and run the optional LD-consistency screen when enabled. "
+            "Recomputed for every analysis."
+        ),
+    },
+    "ldsc": STAGE_DEFINITIONS["ldsc"],
+    "fit": STAGE_DEFINITIONS["fit"],
+    "weights": STAGE_DEFINITIONS["weights"],
+}
+
+LEGACY_STAGE_ORDER = (
+    "download", "validate", "harmonize", "ldsc", "fit", "weights")
+LEGACY_STAGE_DEFINITIONS = {
+    "download": {
+        "label": "Get Catalog data",
+        "description": "Retrieve and filter Catalog summary statistics.",
+    },
+    "validate": {
+        "label": "Check input columns",
+        "description": "Recognize the required summary-statistics fields.",
+    },
+    "harmonize": {
+        "label": "Prepare and combine traits",
+        "description": (
+            "QC and align both traits, then build their joint LD panel."
+        ),
+    },
+    "ldsc": {
+        "label": "Run LD-score diagnostic",
+        "description": (
+            "Compute LD scores and M on the intersected fitted panel, then "
+            "run the optional moment diagnostic."
+        ),
+    },
+    "fit": STAGE_DEFINITIONS["fit"],
+    "weights": STAGE_DEFINITIONS["weights"],
+}
+
+
+def stage_definitions(job: dict) -> list[dict]:
+    """Return the visible stages for a current or historical job."""
+    schema = int(job.get("stage_schema") or 1)
+    if schema >= STAGE_SCHEMA:
+        order, definitions = STAGE_ORDER, STAGE_DEFINITIONS
+    elif schema >= 2:
+        order, definitions = SCHEMA2_STAGE_ORDER, SCHEMA2_STAGE_DEFINITIONS
+    else:
+        order, definitions = LEGACY_STAGE_ORDER, LEGACY_STAGE_DEFINITIONS
+    options = job.get("options") or {}
+    return [
+        {"key": key, **definitions[key]}
+        for key in order
+        if (key != "weights" or options.get("weights"))
+        and (key not in ("acquire", "download")
+             or options.get("gcst1") or options.get("gcst2"))
+    ]
+
+
+def stage_label(key: str, schema: int | None = None) -> str:
+    """Human label for a persisted stage key."""
+    value = int(schema or 1)
+    if value >= STAGE_SCHEMA:
+        definitions = STAGE_DEFINITIONS
+    elif value >= 2:
+        definitions = SCHEMA2_STAGE_DEFINITIONS
+    else:
+        definitions = LEGACY_STAGE_DEFINITIONS
+    fallback = STAGE_DEFINITIONS.get(
+        key, SCHEMA2_STAGE_DEFINITIONS.get(
+            key, LEGACY_STAGE_DEFINITIONS.get(key, {})))
+    return definitions.get(key, fallback).get("label", key)
 
 # Files a job directory starts with; the runner adds result.json, munge.json,
 # runner.log and optionally weights*.tsv.
@@ -52,7 +187,9 @@ def create_job(root: Path, *, options: dict, labels: dict,
         "id": job_id,
         "status": status,
         "stage": None,
+        "stage_schema": STAGE_SCHEMA,
         "stages": {},
+        "stage_details": {},
         "created": _now(),
         "started": None,
         "finished": None,
@@ -113,32 +250,40 @@ def list_jobs(root: Path) -> list[dict]:
 
 
 def purge_jobs(root: Path, ttl_days: float) -> list[str]:
-    """Delete finished/failed jobs older than ``ttl_days``; returns their ids."""
+    """Delete stale staging and expired terminal jobs; return their ids."""
     if ttl_days <= 0:
         return []
     cutoff = _now() - ttl_days * 86400.0
     removed = []
     for job in list_jobs(root):
-        if job["status"] in ("staging", "queued", "launching", "running"):
+        if job["status"] in ("queued", "launching", "running"):
             continue
-        if (job["finished"] or job["created"]) < cutoff:
+        expired_at = (job["created"] if job["status"] == "staging"
+                      else job["finished"] or job["created"])
+        if expired_at < cutoff:
             shutil.rmtree(job_dir(root, job["id"]), ignore_errors=True)
             removed.append(job["id"])
     return removed
 
 
 def recover_interrupted_jobs(root: Path) -> list[str]:
-    """Fail jobs whose owning web/runner process vanished on restart.
+    """Reconcile jobs whose owning web/runner process vanished on restart.
 
-    Queued jobs are intentionally preserved and will be launched by the new
-    supervisor.  A staging job may have only half an upload, while launching
-    and running jobs belonged to processes that no longer exist.
+    Queued jobs are preserved for the new supervisor.  Unpublished staging
+    directories are deleted; launching and running jobs become failed.
     """
     recovered = []
     for job in list_jobs(root):
         if job["status"] not in ("staging", "launching", "running"):
             continue
         previous = job["status"]
+        if previous == "staging":
+            # No redirect is returned until a job becomes queued, so an
+            # interrupted staging directory has no user-visible job to retain.
+            # It may contain a private, partially copied upload.
+            shutil.rmtree(job_dir(root, job["id"]), ignore_errors=True)
+            recovered.append(job["id"])
+            continue
         update_job(root, job["id"], status="failed", stage=None,
                    finished=_now(),
                    error=(f"server restarted while job was {previous}; "

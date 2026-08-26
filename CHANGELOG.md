@@ -1,11 +1,54 @@
 # Changelog
 
 User-visible changes to **bipred** are recorded here. The project is currently
-`0.3.10.dev0`.
+`0.3.11.dev0`.
 
 ## [Unreleased]
 
 ### Added
+
+- **One precomputed LD-score vector per web reference.** Pairing now preserves
+  each retained row's full-cache index. The web runner gathers the fixed
+  reference-wide scores, keeps the original reference M in cross-trait LDSC,
+  and uses its two bounded h² estimates to initialize the bivariate sampler;
+  QC and the DENTIST-inspired screen change regression rows, never the score
+  definition. Sidecars are atomically bound to the exact cache generation
+  (metadata plus every numerical payload for mmap caches) and validate schema,
+  float64 payload hash, length, positivity, algorithm, source, and correction
+  policy. The bundled UKB maps already provide aligned `ld` columns from the
+  original source reference, so HM3+ and HM3 never run the multi-gigabyte
+  per-pair LD-score contraction again. This source-map definition is recorded
+  separately from scores computed from the spectrally floored/LR8 fitting
+  cache; it is never presented as an exact transformed-cache contraction.
+  Results report reference M, regression-row count, mean/summed LD score, and
+  participation-ratio effective rank (explicitly not exact matrix rank).
+  The web supervisor now defaults to one simultaneous fit because the current
+  ordinary-NPZ references still create a private pair-specific LD panel. Their
+  full payload is now consumed block by block while the paired panel is built,
+  so a complete full reference no longer coexists with a complete copied
+  subset; transient duplication is bounded by the current copied block. Larger
+  trait-local screens likewise evaluate only the selected rows of each source
+  block, so DENTIST does not first allocate a second near-complete principal
+  panel. The selected-row path is numerically equivalent for dense and
+  low-rank blocks and preserves the existing block-seed and progress order.
+  Larger
+  hosts can opt into more with `BIPRED_WEB_CONCURRENCY`, while mmap references
+  additionally let operating-system pages be shared across worker processes.
+
+- **Reusable per-trait summary-statistics preparation.**
+  `prepare_trait_sumstats` now returns a sparse `PreparedTrait` aligned to the
+  full LD reference; `screen_prepared_trait` applies the LD-consistency check
+  to one trait's own usable principal LD panel; and `pair_prepared_traits`
+  intersects two such traits, subsets LD, and performs pair-specific AF checks.
+  The web service persists checksummed upload and Catalog artifacts only after QC,
+  harmonization, standardization, and the mandatory trait-local screen, keyed
+  by normalized input content, exact LD content, N/column/QC/screen semantics,
+  algorithm schema, package versions, and the NumPy/BLAS/LAPACK numerical
+  environment. Changing fit-only settings or pairing A with B and then C
+  therefore reuses A's complete post-screen artifact, while joint-panel checks
+  still rerun. Catalog downloads are also reused
+  safely across jobs, including strict migration of compatible completed
+  job-local files from deployments predating the shared store.
 
 - **Optional progress reporting for the long-running steps.**
   `prepare_bivariate_sumstats`, `ld_consistency_screen` (with its `dentist`
@@ -23,14 +66,20 @@ User-visible changes to **bipred** are recorded here. The project is currently
   for. With `tol > 0` the fit may stop before `done` reaches `total`, and the
   sweep it stops on is still reported. See `docs/guide.md`, *Progress
   reporting*.
-- **The web service reports what every stage is doing**, not just the catalog
-  download, throttled to once a second: the preparation step and then each
-  trait's LD consistency screen block by block under `harmonize` (the long
-  pole at genome scale, which previously sat silent for as long as it ran),
-  LD scores and then the regression under `ldsc`, sweep *k* of the burn-in or
-  sampling schedule under `fit`, and the trait being written under `weights`.
-  The runner swallows a failed status write rather than losing an otherwise
-  healthy fit to a full disk.
+- **Cache-aware analysis stages in the web service.** The job page separates
+  Catalog acquisition, input/reference reading, reusable complete per-trait
+  QC/LD-alignment/screen artifacts, and pair-specific joint-panel construction;
+  the mandatory screen appears immediately before combination and cannot be
+  disabled. Downloaded/reused outcomes remain after fast stages finish,
+  and each concurrent Catalog transfer keeps its own live percentage line.
+  Long
+  counters are throttled per trait/activity, while semantic transitions are
+  never hidden. A missing or corrupt precomputed LD-score artifact now fails
+  before fitting, because it would otherwise silently change the sampler's h²
+  initialization; a data-dependent regression failure is recorded and uses
+  the deterministic default start. Withheld weights remain visible rather
+  than appearing completed or pending. Historical jobs retain their legacy
+  stage labels and scientific descriptions.
 
 - Webapp auto-registers the UK Biobank European **HapMap3+** LD cache
   (`ukb-eur-hm3plus`, 1.44M variants) from the sibling ldpred3 work dir when
@@ -77,20 +126,27 @@ User-visible changes to **bipred** are recorded here. The project is currently
   row runtime/peak RSS and current-profile compute environment, and merges
   every accession this service later tries. Local outcomes persist in
   `_meta/gwascat/accessions.json`; transient network failures are excluded.
-  The catalog `download` stage reports live progress (MB read, percent of
-  the resolved file size, MB/s) through the status endpoint to the job page.
+  The Catalog-acquisition stage reports live progress (MB read, percent of
+  the resolved file size, MB/s) through the status endpoint to the job page,
+  retaining one simultaneous line for each trait.
   The results page reports per-step QC counts, separates the fitted-panel
   moment-estimator SE from posterior SD across retained joint-fit sweeps,
   captures fit warnings, quarantines uninterpretable estimates and weights,
   and records CPU/OS/runtime/threading plus wall/CPU/peak-RSS resources. The
-  DENTIST-inspired LD-consistency sensitivity screen is opt-in, and the form
-  exposes `cross_corr`. A sticky LTpred-vignette-aligned teal/navy interface
-  links the form, the catalog evidence, and the demo;
+  DENTIST-inspired LD-consistency screen is mandatory, trait-local, and runs
+  before intersection; the form exposes `cross_corr`. Results now report the
+  structured effect-cancellation, fitted-slab, and retained-trace statistics
+  behind the divergence warning, including their thresholds and largest-block
+  context; these are fit-validity heuristics, not R-hat or ESS. A sticky
+  LTpred-vignette-aligned teal/navy interface links the form, the catalog
+  evidence, and the demo;
   results pages from jobs that predate the QC report render with a note
   instead of the breakdown. The results page also draws the variant sets: a
-  schematic Venn of each trait's usable variants and the shared fitted panel,
-  plus per-trait QC attrition bars (input → after QC → usable on the LD
-  reference), for jobs whose munge report carries per-trait counts.
+  schematic Venn of each trait's post-screen variants and the shared fitted
+  panel, plus per-trait attrition bars (input → after QC → usable on the LD
+  reference → after mandatory screen), for jobs whose munge report carries
+  per-trait counts. Schema-3 pages report screen input/kept/dropped per trait
+  and never reinterpret those two masks as one joint pre-screen drop.
   See `webapp/README.md`.
   Installed via the new `web` optional extra.
 - Registered the workspace marker taxonomy (`slow` / `integration` /
@@ -103,6 +159,23 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 ### Fixed
 
+- Concurrent Catalog progress and completion now serialize every `job.json`
+  mutation through one lock. The GET body must match the ETag and/or
+  Last-Modified generation checked at submission (with one clean retry), and
+  stale provisional `.build` files are purged and counted against the store
+  budget. One verified LD-generation hash now binds reference IDs, loaded
+  matrices, LD-score lookup, prepared-trait keys, and result provenance; a
+  reference replaced during a job is rejected rather than mixed across
+  generations. Interrupted uploads remove their private staging data
+  immediately, while stale staging directories are TTL-cleaned as a backstop.
+- Historical web jobs keep the stage names and LDSC description they actually
+  ran. Schema-1 results still say that scores and M came from the fitted panel;
+  schema 2 retains its optional pair-level screen instead of being relabelled
+  as the mandatory trait-local schema-3 workflow.
+- Quarantined fits containing non-finite joint, MiXeR-style, or divergence
+  diagnostics no longer crash the results route after a long fit. JSON `null`
+  values render as an em dash while the warning and downloadable `result.json`
+  remain available.
 - **The web service re-downloaded GWAS Catalog deposits it already had.**
   The `download` stage filtered each harmonised file to the job's LD
   reference *while* streaming it, so the file it left in the job directory
@@ -113,19 +186,25 @@ User-visible changes to **bipred** are recorded here. The project is currently
   new reference needs. The stage now keeps one normalised copy per accession
   under `<data dir>/catalog/`, filtered to the union of the LD references
   registered when it was built, and each job filters that copy locally into
-  its own job directory. Re-running with any covered reference does no
-  network I/O; the stored copy is about an order of magnitude smaller than
-  the raw deposit, so this costs far less disk than caching the raw file
-  would. Reuse is keyed on accession, harmonised-file URL, and the *content*
-  hash of the LD cache, so a re-deposited file or a registry name re-pointed
-  at different bytes fetches again rather than silently serving variants the
-  copy never covered; two jobs racing on one accession share a single fetch
-  through a heartbeated lock; and copies are evicted least-recently-used past
-  `BIPRED_WEB_STORE_GB` (default 20), never within an hour of use. The
-  results page reports `(stored copy)` or `(download)` per trait, and the job
-  page distinguishes downloading, filtering a stored copy, and waiting on
-  another job's fetch. Download provenance (`seen`, `sha256`, schema, effect
-  route) continues to describe the remote file, not the local copy.
+  its own job directory. Re-running with any covered reference does not
+  transfer the deposit body; the stored copy is about an order of magnitude
+  smaller than the raw deposit, so this costs far less disk than caching the
+  raw file would. Reuse is keyed on accession, harmonised-file URL, nonzero
+  remote size, available ETag/Last-Modified validators, and the *content* hash
+  of the LD cache. A changed validator catches an in-place same-size
+  re-deposit; when the server supplies neither validator, the compatibility
+  fallback is URL plus size and cannot distinguish that unusual case. A
+  registry name re-pointed at different bytes also rebuilds rather than
+  silently serving variants the copy never covered; two jobs racing on one
+  accession share a single fetch through a heartbeated lock; and copies are
+  evicted least-recently-used past `BIPRED_WEB_STORE_GB` (default 20), never
+  within an hour of use. The results page reports `(stored copy)` or
+  `(download)` per trait, and the job page distinguishes downloading,
+  filtering a stored copy, and waiting on another job's fetch. Download
+  provenance (`seen`, `sha256`, schema, effect route) continues to describe
+  the remote file, not the local copy. When both
+  traits are Catalog inputs their independent transfers/reuse checks now run
+  concurrently, with a hard limit of two workers.
 - The `/catalog` summary strip counted only the canonical LDpred3 evidence
   while the tables below merged in this server's own attempts, so the headline
   numbers disagreed with the lists they summarized whenever the server had

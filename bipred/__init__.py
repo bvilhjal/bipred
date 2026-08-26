@@ -53,7 +53,7 @@ from ldpred3's ``[fast]`` extra.
 
 import importlib
 
-__version__ = "0.3.10.dev0"
+__version__ = "0.3.11.dev0"
 
 # public name -> submodule it lives in. No module name may equal one of its own
 # exported names: importing a submodule binds it on this package, and the cache
@@ -63,8 +63,10 @@ __version__ = "0.3.10.dev0"
 _EXPORTS = {
     "bivariate": ["ldpred3_auto_bivariate", "ldpred3_auto_bivariate_blocks",
                   "BivariateResult"],
-    "prepare": ["prepare_bivariate_sumstats", "PreparedBivariate",
-                "subset_blocks"],
+    "prepare": ["prepare_trait_sumstats", "screen_prepared_trait",
+                "pair_prepared_traits",
+                "prepare_bivariate_sumstats", "PreparedTrait",
+                "PreparedBivariate", "subset_blocks"],
     "multichain": ["ldpred3_auto_bivariate_chains",
                    "MultiChainBivariateResult", "BivariateChainSummary",
                    "BivariateBasicSplitRHat"],

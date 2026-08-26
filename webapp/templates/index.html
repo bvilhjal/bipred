@@ -145,11 +145,11 @@ inputs, augmented by this server's own attempts.</p>
   the fitted-panel moment intercept is not substituted automatically because
   it may also contain confounding.</p>
 
-  <label class="check"><input type="checkbox" name="screen" value="1"
-    {% if f.get('screen') %} checked{% endif %}>
-    Run the experimental LD-consistency sensitivity screen</label>
-  <p class="field-help">DENTIST-inspired, fixed parameters, and not a
-  calibrated conservatism dial. Removed-variant counts are reported.</p>
+  <p class="field-help"><strong>Mandatory LD-consistency screen:</strong>
+  every analysis applies the fixed-parameter, DENTIST-inspired screen to each
+  trait on its own usable principal LD panel before intersection. This is not
+  the complete published DENTIST workflow or a calibrated conservatism dial.
+  Removed-variant counts are reported.</p>
   <label class="check"><input type="checkbox" name="weights" value="1"
     {% if f.get('weights') or not f %} checked{% endif %}>
     Write per-trait posterior-mean weight files</label>
@@ -158,8 +158,11 @@ inputs, augmented by this server's own attempts.</p>
 <div class="alert alert-info privacy-note">
   <strong>Deployment boundary.</strong>
   <p>This checkout service has no authentication. Use it only on a trusted
-  host/network. Job URLs act as capability links; uploads and results are
-  deleted after {{ ttl_days }} days.</p>
+  host/network. Job URLs act as capability links. Original uploads and job
+  results are deleted after {{ ttl_days }} days, but their QC'd, harmonized,
+  and screened summary-statistics arrays are retained in a shared cache for
+  reuse and can outlive the job until storage-budget eviction. Do not upload
+  sensitive or private data.</p>
 </div>
 
 <button id="submit-button" type="submit"{% if not has_real_cache %} disabled{% endif %}>Run bipred</button>

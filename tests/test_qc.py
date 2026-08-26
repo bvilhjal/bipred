@@ -317,6 +317,74 @@ def test_low_rank_blocks_need_no_densifying():
     assert keep.mean() > 0.95
 
 
+@pytest.mark.parametrize(
+    "representation", ["dense", "lowrank", "wide_lowrank"])
+def test_selected_row_screen_matches_principal_subset_exactly(
+        representation, capsys):
+    """Sparse screening preserves masks, seed streams, progress, and output."""
+    from bipred.qc import _ld_consistency_screen_selected
+    from ldpred3 import lowrank_ld
+    from ldpred3.interop import subset_ld_blocks
+
+    k = 80
+    blocks, z_full = _clean_panel(k=k, blocks=4, rho=0.88, seed=31)
+    if representation in ("lowrank", "wide_lowrank"):
+        kwargs = (dict(variance=0.98, quantize=True)
+                  if representation == "lowrank"
+                  else dict(variance=0.999999999, max_rank=75,
+                            quantize=False))
+        blocks = [
+            (lowrank_ld(R, method="exact", **kwargs), idx)
+            for R, idx in blocks
+        ]
+
+    # Exercise scattered rows, one entirely absent source block, and one whole
+    # source block. These are precisely the three ownership/subsetting cases.
+    local = np.flatnonzero(np.arange(k) % 7 != 0)
+    selection = np.concatenate((local, 2 * k + local, 3 * k + np.arange(k)))
+    z_full = z_full.copy()
+    z_full[selection[20]] = -z_full[selection[20]] - 9.0
+    z_full[selection[-25]] = -z_full[selection[-25]] + 8.0
+    z = z_full[selection]
+    principal = subset_ld_blocks(blocks, selection)
+    options = dict(rounds=3, window=60, threshold=20.0, seed=17,
+                   verbose=True, progress_label="selected trait")
+
+    expected_events = []
+    expected = ld_consistency_screen(
+        principal, z, progress=expected_events.append, **options)
+    expected_stdout = capsys.readouterr().out
+
+    actual_events = []
+    actual = _ld_consistency_screen_selected(
+        blocks, selection, z, progress=actual_events.append, **options)
+    actual_stdout = capsys.readouterr().out
+
+    np.testing.assert_array_equal(actual, expected)
+    assert not actual.all(), "the planted inconsistencies must exercise drops"
+    assert actual_events == expected_events
+    assert actual_stdout == expected_stdout
+
+
+def test_selected_row_screen_validates_cache_and_sparse_alignment():
+    from bipred.qc import _ld_consistency_screen_selected
+
+    blocks, z = _clean_panel(k=60, blocks=2, seed=44)
+    selection = np.arange(120, dtype=np.int64)
+    with pytest.raises(ValueError, match="contiguous indices"):
+        _ld_consistency_screen_selected(
+            blocks[::-1], selection, z, rounds=1, window=50)
+    with pytest.raises(ValueError, match="strictly increasing"):
+        _ld_consistency_screen_selected(
+            blocks, np.array([0, 2, 2]), z[:3], rounds=1, window=50)
+    with pytest.raises(IndexError, match=r"\[0, 120\)"):
+        _ld_consistency_screen_selected(
+            blocks, np.array([0, 120]), z[:2], rounds=1, window=50)
+    with pytest.raises(ValueError, match="selection spans 120 variants"):
+        _ld_consistency_screen_selected(
+            blocks, selection, z[:-1], rounds=1, window=50)
+
+
 def _sumstats(n_variants=5000, n_eff=100_000.0, af=None, seed=0, binary=False):
     """Summary statistics whose implied SD matches the reference by construction."""
     rng = np.random.default_rng(seed)

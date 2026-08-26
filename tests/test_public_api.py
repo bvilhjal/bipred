@@ -31,7 +31,11 @@ _EXPECTED = {
     "implied_sample_size",
     "in_long_range_ld",
     "sd_consistency",
+    "prepare_trait_sumstats",
+    "screen_prepared_trait",
+    "pair_prepared_traits",
     "prepare_bivariate_sumstats",
+    "PreparedTrait",
     "PreparedBivariate",
     "subset_blocks",
 }

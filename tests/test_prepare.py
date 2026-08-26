@@ -1,12 +1,15 @@
-"""Public on-ramp: subset_blocks, prepare_bivariate_sumstats, write_weights."""
+"""Public on-ramp: sparse trait preparation, pairing, and write_weights."""
+
+from dataclasses import replace
 
 import warnings
 
 import numpy as np
 import pytest
 
-from bipred import (BivariateResult, prepare_bivariate_sumstats, subset_blocks,
-                    ldpred3_auto_bivariate_blocks)
+from bipred import (BivariateResult, pair_prepared_traits,
+                    prepare_bivariate_sumstats, prepare_trait_sumstats,
+                    subset_blocks, ldpred3_auto_bivariate_blocks)
 from ldpred3 import LowRankLD, save_ld_blocks
 from ldpred3.interop import prepare_ld_cache
 from ldpred3.weights import read_weights
@@ -85,12 +88,132 @@ def test_prepare_aligns_and_standardizes(tmp_path):
     prep = prepare_bivariate_sumstats(cache, p1, p2, n_eff1=n, n_eff2=n, qc=False)
     assert prep.beta_hat1.shape == (20,)
     assert list(prep.id) == list(ids)
+    np.testing.assert_array_equal(prep.cache_indices, np.arange(20))
     # Trait 2 was allele-flipped on every 5th SNP; standardized effects
     # should still match the cache-oriented truth.
     from ldpred3 import standardize_betas
     truth2 = standardize_betas(b2, np.full(20, 1.0 / np.sqrt(n)), n)[0]
     assert np.allclose(prep.beta_hat2, truth2, atol=1e-6)
     assert np.allclose(prep.af, af)
+
+
+def test_prepare_trait_is_sparse_and_sorted_in_cache_order(tmp_path):
+    cache, _p1, _p2, b1, _b2, n, ids, _af = _cache_and_sumstats(tmp_path)
+    source_order = np.array([9, 2, 15, 0, 7])
+    path = tmp_path / "unsorted-trait.tsv"
+    _write_sumstats(
+        path, ids[source_order], ["A"] * len(source_order),
+        ["G"] * len(source_order), b1[source_order],
+        np.full(len(source_order), 1.0 / np.sqrt(n)), n,
+        pos=source_order + 1)
+    events = []
+    trait = prepare_trait_sumstats(
+        cache, path, n_eff=n, qc=False, label="reusable trait",
+        progress=events.append)
+
+    expected = np.sort(source_order)
+    np.testing.assert_array_equal(trait.indices, expected)
+    assert len(trait) == len(expected) < trait.n_cache == len(ids)
+    from ldpred3 import standardize_betas
+    truth = standardize_betas(
+        b1[expected], np.full(len(expected), 1.0 / np.sqrt(n)), n)[0]
+    np.testing.assert_allclose(trait.beta_hat, truth, atol=1e-7)
+    np.testing.assert_array_equal(trait.n_eff, np.full(len(expected), n))
+    assert trait.indices.flags.c_contiguous and trait.beta_hat.flags.c_contiguous
+    assert trait.log["label"] == "reusable trait"
+    assert [event["step"] for event in events] == [
+        "load LD reference",
+        "read, QC, harmonize, and standardize reusable trait",
+    ]
+
+
+def test_pair_prepared_traits_matches_one_shot_preparation(tmp_path):
+    cache, _p1, _p2, b1, b2, n, ids, _af = _cache_and_sumstats(tmp_path)
+    first = np.array([18, 2, 4, 6, 8, 10, 12, 14, 16, 0, 1])
+    second = np.array([17, 1, 4, 6, 8, 10, 12, 14, 16, 2, 3])
+    se1 = np.full(len(first), 1.0 / np.sqrt(n))
+    se2 = np.full(len(second), 1.0 / np.sqrt(n))
+    a1 = np.array(["A"] * len(ids), dtype=object)
+    a2 = np.array(["G"] * len(ids), dtype=object)
+    a1_2, a2_2 = a1.copy(), a2.copy()
+    a1_2[::5], a2_2[::5] = a2[::5], a1[::5]
+    b2_file = b2.copy()
+    b2_file[::5] *= -1
+    p1, p2 = tmp_path / "sparse1.tsv", tmp_path / "sparse2.tsv"
+    _write_sumstats(p1, ids[first], a1[first], a2[first], b1[first], se1, n,
+                    pos=first + 1)
+    _write_sumstats(p2, ids[second], a1_2[second], a2_2[second],
+                    b2_file[second], se2, n, pos=second + 1)
+
+    with prepare_ld_cache(cache) as shared:
+        one_shot = prepare_bivariate_sumstats(
+            shared, p1, p2, n_eff1=n, n_eff2=n, qc=False)
+        trait1 = prepare_trait_sumstats(
+            shared, p1, n_eff=n, qc=False, label="trait1")
+        trait2 = prepare_trait_sumstats(
+            shared, p2, n_eff=n, qc=False, label="trait2")
+        paired = pair_prepared_traits(shared, trait1, trait2)
+
+        for name in ("beta_hat1", "beta_hat2", "n_eff1", "n_eff2", "id",
+                     "chrom", "pos", "effect_allele", "other_allele", "af",
+                     "cache_indices"):
+            np.testing.assert_array_equal(getattr(paired, name),
+                                          getattr(one_shot, name))
+        assert paired.log["trait1"] == one_shot.log["trait1"]
+        assert paired.log["trait2"] == one_shot.log["trait2"]
+        for name in ("n_cache", "n_joint", "n_kept", "n_screen_drop",
+                     "screen", "screen_params", "prepared_cache"):
+            assert paired.log[name] == one_shot.log[name]
+        assert paired.log["prepared_cache"] is True
+        assert all(np.isnan(value) for value in paired.log["af_corr"].values())
+        assert all(np.isnan(value)
+                   for value in one_shot.log["af_corr"].values())
+        assert len(paired.blocks) == len(one_shot.blocks) == 1
+        np.testing.assert_array_equal(paired.blocks[0][1],
+                                      one_shot.blocks[0][1])
+        np.testing.assert_array_equal(paired.blocks[0][0],
+                                      one_shot.blocks[0][0])
+
+
+def test_pair_prepared_traits_validates_sparse_cache_indices(tmp_path):
+    cache, p1, p2, *_ = _cache_and_sumstats(tmp_path)
+    with prepare_ld_cache(cache) as shared:
+        trait1 = prepare_trait_sumstats(
+            shared, p1, n_eff=10_000, qc=False, label="trait1")
+        trait2 = prepare_trait_sumstats(
+            shared, p2, n_eff=10_000, qc=False, label="trait2")
+
+        with pytest.raises(ValueError, match="prepared against 21"):
+            pair_prepared_traits(
+                shared, replace(trait1, n_cache=21), trait2)
+        with pytest.raises(ValueError, match="strictly increasing and unique"):
+            pair_prepared_traits(
+                shared, replace(trait1, indices=trait1.indices[::-1]), trait2)
+        duplicate = trait1.indices.copy()
+        duplicate[1] = duplicate[0]
+        with pytest.raises(ValueError, match="strictly increasing and unique"):
+            pair_prepared_traits(
+                shared, replace(trait1, indices=duplicate), trait2)
+        outside = trait1.indices.copy()
+        outside[-1] = trait1.n_cache
+        with pytest.raises(ValueError, match=r"indices must lie in \[0, 20\)"):
+            pair_prepared_traits(
+                shared, replace(trait1, indices=outside), trait2)
+        with pytest.raises(ValueError, match="one-dimensional integer"):
+            pair_prepared_traits(
+                shared, replace(trait1, indices=trait1.indices.astype(float)),
+                trait2)
+        bad_z = trait1.z.copy()
+        bad_z[0] = np.nan
+        with pytest.raises(ValueError, match="z must be finite"):
+            pair_prepared_traits(shared, replace(trait1, z=bad_z), trait2,
+                                 screen=True)
+        bad_eaf = trait1.eaf.copy()
+        bad_eaf[0] = 1.1
+        with pytest.raises(ValueError, match=r"eaf values must lie in \[0, 1\]"):
+            pair_prepared_traits(
+                shared, replace(trait1, eaf=bad_eaf), trait2,
+                min_af_corr=-1)
 
 
 def test_prepare_n_cases_uses_ldpred3_n_eff(tmp_path):
@@ -274,6 +397,27 @@ def test_prepare_screen_uses_joint_principal_panel_not_zero_filling(tmp_path):
     assert prep.log["n_joint"] == 84
     assert prep.log["n_screen_drop"] == 2
     assert "rs8" not in prep.id and "rs9" not in prep.id
+    np.testing.assert_array_equal(
+        prep.id, ids[np.asarray(prep.cache_indices, dtype=np.int64)])
+
+    trait1 = prepare_trait_sumstats(
+        cache, p1, n_eff=n, qc=False, label="trait1")
+    trait2 = prepare_trait_sumstats(
+        cache, p2, n_eff=n, qc=False, label="trait2")
+    events = []
+    paired = pair_prepared_traits(
+        cache, trait1, trait2, screen=True, screen_seed=11,
+        progress=events.append)
+    np.testing.assert_array_equal(paired.id, prep.id)
+    np.testing.assert_array_equal(paired.beta_hat1, prep.beta_hat1)
+    np.testing.assert_array_equal(paired.beta_hat2, prep.beta_hat2)
+    assert paired.log["n_joint"] == prep.log["n_joint"]
+    assert paired.log["n_screen_drop"] == prep.log["n_screen_drop"]
+    assert paired.log["screen_params"] == prep.log["screen_params"]
+    assert {event["step"] for event in events} == {
+        "LD consistency screen, trait 1",
+        "LD consistency screen, trait 2",
+    }
 
 
 def test_prepare_screen_subsets_a_complete_joint_cache(monkeypatch, tmp_path):
@@ -291,6 +435,8 @@ def test_prepare_screen_subsets_a_complete_joint_cache(monkeypatch, tmp_path):
     assert prep.log["n_joint"] == 20
     assert prep.log["n_screen_drop"] == 1
     assert len(prep.id) == 19 and "rs3" not in prep.id
+    np.testing.assert_array_equal(prep.cache_indices,
+                                  np.delete(np.arange(20), 3))
     owner = prep._ld_owner
     prep.close()
     assert owner.closed

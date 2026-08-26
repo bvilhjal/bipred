@@ -5,8 +5,9 @@ Two responsibilities, mirroring the two moments they are needed:
 * :func:`resolve` runs at *submit* time (in the web process): validate the
   accession, find its harmonised file, and read study metadata (trait name,
   sample size) so the form can confirm what will be downloaded. Answers are
-  cached under ``<data root>/_meta/gwascat/`` — the harmonised-file index
-  for a week, per-study metadata indefinitely (accessions are immutable).
+  cached under ``<data root>/_meta/gwascat/`` — the harmonised-file index for
+  a week and descriptive study metadata indefinitely. File size and HTTP
+  validators are refreshed for every submission.
 
 * :func:`stream_filter` runs at *fit* time (in the runner subprocess): stream
   the harmonised file, keep only variants present in a given variant set,
@@ -15,11 +16,12 @@ Two responsibilities, mirroring the two moments they are needed:
   no reference contains, so filtering in the stream is what keeps job
   directories small.
 
-* :func:`fetch_filtered` wraps that for the runner so a file is downloaded
-  at most once: a shared per-accession copy under ``<data root>/catalog/``
-  is kept filtered to the union of the registered LD references, and each
-  job filters that copy locally. Re-running an analysis — including against
-  a different registered reference — then touches the network not at all.
+* :func:`fetch_filtered` wraps that for the runner so one observed deposit
+  generation is downloaded at most once: a shared per-accession copy under
+  ``<data root>/catalog/`` is kept filtered to the union of the registered LD
+  references, and each job filters that copy locally. Re-running an analysis
+  then avoids transferring the deposit body; submit-time HEAD validation still
+  checks for an in-place replacement.
 
 The schema handling — the ``hm_``-prefixed 2015-era layout versus the current
 one, an effect carried as beta / odds ratio / z-score with per-row fallback —
@@ -37,9 +39,12 @@ import json
 import math
 import os
 import re
+import stat as stat_module
 import time
 import urllib.error
 import urllib.request
+import uuid
+import zlib
 from pathlib import Path
 
 import numpy as np
@@ -52,6 +57,74 @@ REST_STUDY = "https://www.ebi.ac.uk/gwas/rest/api/studies/{accession}"
 LIST_TTL = 7 * 86400.0          # re-fetch the harmonised index weekly
 
 ACCESSION = re.compile(r"^GCST\d{3,}$")
+
+_REMOTE_VALIDATOR_FIELDS = ("remote_etag", "remote_last_modified")
+GENERATION_ATTEMPTS = 2
+
+
+def _remote_validator(value) -> str | None:
+    """Canonical non-empty HTTP validator value, or ``None`` when absent."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value or None
+
+
+def _remote_validators(remote_etag=None, remote_last_modified=None) -> dict:
+    """Only validators actually supplied by the Catalog response/caller."""
+    values = {
+        "remote_etag": _remote_validator(remote_etag),
+        "remote_last_modified": _remote_validator(remote_last_modified),
+    }
+    return {name: value for name, value in values.items()
+            if value is not None}
+
+
+class _GenerationMismatch(Exception):
+    """The GET response is not the deposit generation resolved by HEAD."""
+
+
+def _validated_remote_open(url, remote_etag=None,
+                           remote_last_modified=None):
+    """Open one GET whose response belongs to the resolved generation.
+
+    Strong ETags and modification dates are also sent as HTTP preconditions.
+    Response validators remain mandatory when HEAD supplied them: this catches
+    servers or intermediaries that ignore a conditional request. A weak ETag
+    cannot be used with ``If-Match``, but is still checked explicitly.
+    """
+    expected = _remote_validators(remote_etag, remote_last_modified)
+    request = urllib.request.Request(url)
+    etag = expected.get("remote_etag")
+    modified = expected.get("remote_last_modified")
+    if etag is not None and not etag.lower().startswith("w/") \
+            and etag != "*":
+        request.add_header("If-Match", etag)
+    if modified is not None:
+        request.add_header("If-Unmodified-Since", modified)
+    try:
+        response = urllib.request.urlopen(request, timeout=900)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 412:
+            raise _GenerationMismatch(
+                "the server rejected the resolved HTTP validator") from exc
+        raise
+    observed = _remote_validators(
+        response.headers.get("ETag"), response.headers.get("Last-Modified"))
+    mismatches = [
+        name for name, value in expected.items()
+        if observed.get(name) != value
+    ]
+    if mismatches:
+        try:
+            response.close()
+        finally:
+            labels = ", ".join(name.removeprefix("remote_")
+                               for name in mismatches)
+            raise _GenerationMismatch(
+                f"GET response has a missing or changed {labels}")
+    return response, observed
+
 
 # --- normalised output schema and per-file detection (harvester adaptation) ---
 
@@ -300,7 +373,9 @@ def resolve(accession: str, root: Path) -> dict:
     try:
         req = urllib.request.Request(url, method="HEAD")
         with urllib.request.urlopen(req, timeout=60) as resp:
-            remote_bytes = int(resp.headers.get("Content-Length", 0))
+            remote_bytes = int(resp.headers.get("Content-Length", 0) or 0)
+            validators = _remote_validators(
+                resp.headers.get("ETag"), resp.headers.get("Last-Modified"))
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
             raise ValueError(f"{accession}: harmonised file not found (404)")
@@ -310,6 +385,7 @@ def resolve(accession: str, root: Path) -> dict:
     meta = _study_metadata(accession, root)
     meta["url"] = url
     meta["remote_bytes"] = remote_bytes
+    meta.update(validators)
     return meta
 
 
@@ -322,7 +398,8 @@ def cache_ids(cache_path: Path) -> set:
 
 
 def stream_filter(url_or_path: str, keep_ids: set, dest: Path,
-                  on_bytes=None) -> dict:
+                  on_bytes=None, *, remote_etag=None,
+                  remote_last_modified=None) -> dict:
     """Stream one harmonised file into the normalised layout, keeping only
     ``keep_ids`` variants, and return download provenance.
 
@@ -333,10 +410,12 @@ def stream_filter(url_or_path: str, keep_ids: set, dest: Path,
     """
     digest = hashlib.sha256()
     tmp = str(dest) + ".part"
+    observed_validators = {}
     if os.path.exists(url_or_path):
         raw = open(url_or_path, "rb")
     else:
-        raw = urllib.request.urlopen(url_or_path, timeout=900)
+        raw, observed_validators = _validated_remote_open(
+            url_or_path, remote_etag, remote_last_modified)
     seen = kept = n_usable = 0
     with raw:
         stream = _HashingReader(raw, digest, on_bytes)
@@ -388,8 +467,10 @@ def stream_filter(url_or_path: str, keep_ids: set, dest: Path,
     os.replace(tmp, dest)
     n_frac = n_usable / kept
     info.update(seen=seen, kept=kept, sha256=digest.hexdigest(),
+                source_bytes=stream.total,
                 per_variant_n_usable_frac=n_frac,
                 has_per_variant_n=bool(info["has_n"] and n_frac >= 0.99))
+    info.update(observed_validators)
     return info
 
 
@@ -423,10 +504,19 @@ PART_STALE = 3600.0         # abandoned partial downloads older than this go
 
 
 def _write_json(path: Path, payload: dict) -> None:
-    tmp = str(path) + ".part"
-    with open(tmp, "w") as fh:
-        json.dump(payload, fh, indent=1, sort_keys=True)
-    os.replace(tmp, path)
+    tmp = Path(path).with_name(
+        f".{Path(path).name}.{os.getpid()}.{uuid.uuid4().hex}.part")
+    try:
+        with open(tmp, "w") as fh:
+            json.dump(payload, fh, indent=1, sort_keys=True)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
 
 
 def store_dir(root: Path) -> Path:
@@ -450,21 +540,70 @@ def _load_build(meta_path: Path, fingerprint: str | None = None) -> dict | None:
         build = json.loads(Path(meta_path).read_text())
     except (OSError, ValueError):
         return None
-    if fingerprint is not None and fingerprint not in (build.get("covers") or {}):
+    if not isinstance(build, dict):
+        return None
+    covers = build.get("covers")
+    if (not isinstance(build.get("url"), str)
+            or not isinstance(covers, dict)
+            or not covers
+            or any(not isinstance(key, str) or not isinstance(value, str)
+                   for key, value in covers.items())
+            or build.get("schema") not in (
+                "hm_prefixed", "unprefixed", "legacy-normalised")
+            or build.get("effect_from") not in (
+                "beta", "log(odds_ratio)", "z * se")
+            or not isinstance(build.get("has_n"), bool)):
+        return None
+    for name in ("seen", "kept", "bytes"):
+        value = build.get(name)
+        if (isinstance(value, bool) or not isinstance(value, int)
+                or value <= 0):
+            return None
+    remote_bytes = build.get("remote_bytes")
+    if remote_bytes is not None and (
+            isinstance(remote_bytes, bool)
+            or not isinstance(remote_bytes, int) or remote_bytes < 0):
+        return None
+    for name in _REMOTE_VALIDATOR_FIELDS:
+        value = build.get(name)
+        if value is not None and _remote_validator(value) != value:
+            return None
+    if build["seen"] < build["kept"]:
+        return None
+    last_used = build.get("last_used")
+    if (isinstance(last_used, bool)
+            or not isinstance(last_used, (int, float))
+            or not math.isfinite(float(last_used))):
+        return None
+    for name in ("sha256", "normalised_sha256", "store_sha256"):
+        value = build.get(name)
+        if value is not None and (
+                not isinstance(value, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", value)):
+            return None
+    if fingerprint is not None and fingerprint not in covers:
         return None
     return build
 
 
-def _record_use(meta_path: Path) -> None:
-    """Stamp the copy as in use, which also holds eviction off it."""
-    build = _load_build(meta_path)
-    if build is None:
-        return
-    build["last_used"] = time.time()
-    try:
-        _write_json(Path(meta_path), build)
-    except OSError:
-        pass                                # bookkeeping never fails a job
+def _matching_build(meta_path: Path, url: str, fingerprint: str,
+                    remote_bytes: int = 0, *, remote_etag: str | None = None,
+                    remote_last_modified: str | None = None) -> dict | None:
+    """A build for exactly this deposit and LD-cache content, if present."""
+    build = _load_build(meta_path, fingerprint)
+    if build is None or build.get("url") != url:
+        return None
+    if remote_bytes and build.get("remote_bytes") != remote_bytes:
+        return None
+    # A current validator is positive evidence about this deposit generation:
+    # require the stored copy to carry the same value. When the server supplies
+    # neither validator, retain the historical URL/size fallback so old jobs and
+    # less capable HTTP servers remain usable.
+    for name, value in _remote_validators(
+            remote_etag, remote_last_modified).items():
+        if build.get(name) != value:
+            return None
+    return build
 
 
 class _StoreLock:
@@ -472,14 +611,15 @@ class _StoreLock:
 
     Ownership is a file created with ``O_EXCL``; the owner touches it while
     downloading, and a lock left unheartbeaten for ``LOCK_STALE`` is treated
-    as abandoned by a dead process. Losing the race is never a correctness
-    problem — publishing is an atomic rename — so a waiter that gives up
-    downloads too rather than failing the job.
+    as abandoned by a dead process. A waiter reuses only an exact published
+    match and otherwise loops until it owns the lock; publishing uses atomic
+    renames.
     """
 
     def __init__(self, path):
         self.path = Path(path)
         self.fd = None
+        self.identity = None
         self._touched = 0.0
 
     def acquire(self) -> bool:
@@ -487,23 +627,39 @@ class _StoreLock:
             try:
                 self.fd = os.open(str(self.path),
                                   os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+                stat = os.fstat(self.fd)
+                self.identity = (stat.st_dev, stat.st_ino)
                 self._touched = time.time()
                 return True
             except FileExistsError:
-                if attempt or not self.stale():
+                stale_identity = self.stale_identity()
+                if attempt or stale_identity is None:
                     return False
-                self.steal()
+                self.steal(stale_identity)
         return False
 
-    def stale(self) -> bool:
+    def stale_identity(self) -> tuple | None:
         try:
-            return time.time() - self.path.stat().st_mtime > LOCK_STALE
+            first = self.path.stat()
+            if time.time() - first.st_mtime <= LOCK_STALE:
+                return None
+            second = self.path.stat()
+            first_identity = (first.st_dev, first.st_ino)
+            if (first_identity != (second.st_dev, second.st_ino)
+                    or first.st_mtime_ns != second.st_mtime_ns):
+                return None
+            return first_identity
         except OSError:
-            return False                    # gone: the owner released it
+            return None                     # gone: the owner released it
 
-    def steal(self) -> None:
+    def stale(self) -> bool:
+        return self.stale_identity() is not None
+
+    def steal(self, identity=None) -> None:
         try:
-            os.unlink(self.path)
+            current = self.path.stat()
+            if identity is None or (current.st_dev, current.st_ino) == identity:
+                os.unlink(self.path)
         except OSError:
             pass
 
@@ -513,71 +669,152 @@ class _StoreLock:
             return
         self._touched = now
         try:
-            os.utime(self.path, None)
+            os.utime(self.fd, None)
         except OSError:
             pass
+
+    def owned(self) -> bool:
+        if self.fd is None:
+            return False
+        try:
+            current = self.path.stat()
+            return (current.st_dev, current.st_ino) == self.identity
+        except OSError:
+            return False
 
     def release(self) -> None:
         if self.fd is None:
             return
         try:
-            os.close(self.fd)
+            try:
+                current = self.path.stat()
+                if (current.st_dev, current.st_ino) == self.identity:
+                    os.unlink(self.path)
+            except OSError:
+                pass
         finally:
+            os.close(self.fd)
             self.fd = None
-            self.steal()
+            self.identity = None
 
 
-def _wait_for_build(meta_path: Path, lock: _StoreLock, fingerprint: str,
-                    on_wait=None) -> dict | None:
-    """Wait for whoever holds the lock to publish a copy that covers us."""
+def _file_identity(path: Path) -> tuple | None:
+    """Identity of one published file, stable across an atomic replacement."""
+    try:
+        stat = Path(path).stat()
+    except OSError:
+        return None
+    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _wait_for_unlock(lock: _StoreLock, on_wait=None) -> None:
+    """Wait until the current owner releases, or safely steal a stale lock."""
     start = time.time()
     while time.time() - start < WAIT_LIMIT:
         time.sleep(2.0)
-        build = _load_build(meta_path, fingerprint)
-        if build is not None:
-            return build
         if not lock.path.exists():
-            return None                     # released without helping us
-        if lock.stale():
-            lock.steal()
-            return None
+            return
+        stale_identity = lock.stale_identity()
+        if stale_identity is not None:
+            lock.steal(stale_identity)
+            return
         if on_wait is not None:
             on_wait(round(time.time() - start))
-    return None
+    raise TimeoutError("timed out waiting for the shared Catalog download")
 
 
 def _build_store(url: str, data: Path, meta_path: Path, accession: str,
                  union_ids: set, covers: dict, fingerprint: str,
-                 on_bytes=None, on_wait=None) -> dict:
-    """Download once into the shared store and record what it covers."""
+                 remote_bytes: int = 0,
+                 remote_etag: str | None = None,
+                 remote_last_modified: str | None = None,
+                 on_bytes=None, on_wait=None,
+                 rejected_identity=None) -> tuple:
+    """Return ``(build, reused)`` after publishing or awaiting the store."""
     lock = _StoreLock(str(meta_path) + ".lock")
-    if not lock.acquire():
-        build = _wait_for_build(meta_path, lock, fingerprint, on_wait)
-        if build is not None and data.exists():
-            return build
-        lock.acquire()                      # owner died, or built nothing
+    provisional = data.with_name(
+        f".{data.name}.{os.getpid()}.{uuid.uuid4().hex}.build")
+    while not lock.acquire():
+        _wait_for_unlock(lock, on_wait)
     try:
+        # The previous owner may have published between our last check and
+        # this acquisition. Re-check under the lock before downloading.
+        build = _matching_build(
+            meta_path, url, fingerprint, remote_bytes,
+            remote_etag=remote_etag,
+            remote_last_modified=remote_last_modified)
+        identity = _file_identity(data)
+        if build is not None and identity is not None \
+                and identity != rejected_identity:
+            build["last_used"] = time.time()
+            _write_json(meta_path, build)
+            return build, True
+        if rejected_identity is not None and identity == rejected_identity:
+            _discard(data, meta_path)
+
         def heartbeat(total, _inner=on_bytes):
             lock.touch()
             if _inner is not None:
                 _inner(total)
-        info = stream_filter(url, union_ids, data, on_bytes=heartbeat)
+        for attempt in range(GENERATION_ATTEMPTS):
+            try:
+                info = stream_filter(
+                    url, union_ids, provisional, on_bytes=heartbeat,
+                    remote_etag=remote_etag,
+                    remote_last_modified=remote_last_modified)
+                if remote_bytes and info["source_bytes"] != remote_bytes:
+                    raise _GenerationMismatch(
+                        f"source size changed from {remote_bytes:,} to "
+                        f"{info['source_bytes']:,} bytes")
+                break
+            except _GenerationMismatch as exc:
+                for path in (provisional, Path(str(provisional) + ".part")):
+                    try:
+                        path.unlink()
+                    except OSError:
+                        pass
+                if attempt + 1 == GENERATION_ATTEMPTS:
+                    raise ValueError(
+                        f"{accession}: the Catalog deposit changed between "
+                        "validation and download; retry the submission "
+                        f"({exc})") from exc
+        store_sha256 = _file_sha256(provisional)
+        size = provisional.stat().st_size
+        lock.touch()
+        if not lock.owned():
+            raise RuntimeError(
+                f"{accession}: lost the shared-store lock while downloading; "
+                "retry the job")
         build = {"accession": accession, "url": url,
+                 "remote_bytes": int(remote_bytes or 0),
                  "built": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()),
                  "last_used": time.time(),
                  "seen": info["seen"], "kept": info["kept"],
                  "sha256": info["sha256"], "schema": info["schema"],
                  "effect_from": info["effect_from"], "has_n": info["has_n"],
-                 "covers": covers, "bytes": data.stat().st_size}
+                 "covers": covers, "bytes": size,
+                 "store_sha256": store_sha256,
+                 "origin": "download"}
+        build.update(_remote_validators(remote_etag, remote_last_modified))
+        build.update(_remote_validators(
+            info.get("remote_etag"), info.get("remote_last_modified")))
+        os.replace(provisional, data)
         _write_json(meta_path, build)
-        return build
-    except BaseException:
-        try:
-            os.unlink(str(data) + ".part")
-        except OSError:
-            pass
-        raise
+        return build, False
     finally:
+        for path in (provisional, Path(str(provisional) + ".part")):
+            try:
+                path.unlink()
+            except OSError:
+                pass
         lock.release()
 
 
@@ -589,16 +826,306 @@ def _discard(data: Path, meta_path: Path) -> None:
             pass
 
 
-class _StoreLayoutError(Exception):
+class _StoreReadError(Exception):
+    """A stored file cannot be trusted and records which copy was read."""
+
+    def __init__(self, detail, identity):
+        super().__init__(detail)
+        self.identity = identity
+
+
+class _StoreLayoutError(_StoreReadError):
     """The stored copy is not in the layout we wrote; rebuild rather than read."""
+
+
+class _StoreGzipError(_StoreReadError):
+    """The stored copy is not a complete, valid gzip stream."""
 
 
 HEADER = "\t".join(OUT_COLS)
 
+# Every historical job in this checkout was written by the same canonical
+# normaliser introduced with the web service. Restrict migration to those
+# recorded producers; a future layout or transform must opt in explicitly.
+_LEGACY_NORMALISER_VERSIONS = frozenset(("0.3.9.dev0", "0.3.10.dev0"))
+
+
+def stored_copy_available(root: Path, *, accession: str, url: str,
+                          fingerprint: str, remote_bytes: int = 0,
+                          remote_etag: str | None = None,
+                          remote_last_modified: str | None = None) -> bool:
+    """Whether the shared store already serves this exact source/reference."""
+    try:
+        data, meta_path = _store_paths(root, accession)
+        return (_file_identity(data) is not None
+                and _matching_build(
+                    meta_path, url, fingerprint, remote_bytes,
+                    remote_etag=remote_etag,
+                    remote_last_modified=remote_last_modified) is not None)
+    except (OSError, ValueError):
+        return False
+
+
+def _legacy_candidate_records(root: Path, accession: str, url: str,
+                              fingerprint: str, remote_bytes: int,
+                              exclude_job_id: str | None,
+                              remote_etag: str | None = None,
+                              remote_last_modified: str | None = None):
+    """Yield metadata for completed, provenance-compatible legacy files."""
+    jobs_dir = Path(root) / "jobs"
+    try:
+        paths = sorted(jobs_dir.glob("*/job.json"),
+                       key=lambda p: p.stat().st_mtime_ns, reverse=True)
+    except OSError:
+        return
+    for job_path in paths:
+        try:
+            job_dir = job_path.parent
+            if job_dir.is_symlink() \
+                    or job_dir.resolve().parent != jobs_dir.resolve():
+                continue
+            job = json.loads(job_path.read_text())
+            job_id = job.get("id")
+            if job_id != job_dir.name or job.get("status") != "done" \
+                    or job_id == exclude_job_id:
+                continue
+            result = json.loads((job_dir / "result.json").read_text())
+            provenance = result.get("provenance") or {}
+            if provenance.get("cache_sha256") != fingerprint \
+                    or provenance.get("bipred") not in \
+                    _LEGACY_NORMALISER_VERSIONS:
+                continue
+            result_catalog = provenance.get("catalog") or {}
+            options = job.get("options") or {}
+            files = job.get("files") or {}
+        except (OSError, TypeError, ValueError):
+            continue
+
+        for trait in (1, 2):
+            catalog = options.get(f"catalog{trait}")
+            recorded = result_catalog.get(f"trait{trait}")
+            if not isinstance(catalog, dict) or not isinstance(recorded, dict):
+                continue
+            if options.get(f"gcst{trait}") != accession \
+                    or catalog.get("accession") != accession \
+                    or recorded.get("accession") != accession \
+                    or catalog.get("url") != url:
+                continue
+            old_bytes = catalog.get("remote_bytes") or 0
+            if remote_bytes and old_bytes != remote_bytes:
+                continue
+            if any(catalog.get(name) != value for name, value in
+                   _remote_validators(
+                       remote_etag, remote_last_modified).items()):
+                continue
+
+            name = files.get(f"sumstats{trait}")
+            if not isinstance(name, str) or not name or Path(name).name != name:
+                continue
+            source = job_dir / name
+            try:
+                if source.is_symlink() or not source.is_file() \
+                        or source.resolve().parent != job_dir.resolve():
+                    continue
+            except OSError:
+                continue
+
+            kept = (catalog.get("kept"), recorded.get("kept"))
+            seen = (catalog.get("seen"), recorded.get("seen"))
+            if any(isinstance(v, bool) or not isinstance(v, (int, float))
+                   or not math.isfinite(v) or int(v) != v or v <= 0
+                   for v in kept + seen):
+                continue
+            if kept[0] != kept[1] or seen[0] != seen[1] \
+                    or seen[0] < kept[0]:
+                continue
+            effects = (catalog.get("effect_from"),
+                       recorded.get("effect_from"))
+            if effects[0] != effects[1] or effects[0] not in \
+                    ("beta", "log(odds_ratio)", "z * se"):
+                continue
+
+            raw_values = (catalog.get("sha256"), recorded.get("sha256"))
+            if any(value is not None and not isinstance(value, str)
+                   for value in raw_values):
+                continue
+            raw_hashes = [value.lower() for value in raw_values
+                          if isinstance(value, str)]
+            if any(len(value) != 64
+                   or any(c not in "0123456789abcdef" for c in value)
+                   for value in raw_hashes) \
+                    or len(set(raw_hashes)) > 1:
+                continue
+            inputs = provenance.get("inputs") or {}
+            input_record = inputs.get(f"trait{trait}") or {}
+            if not isinstance(input_record, dict):
+                continue
+            if input_record and input_record.get("filename") not in (None, name):
+                continue
+            input_hash = input_record.get("sha256")
+            if input_hash is not None and (
+                    not isinstance(input_hash, str) or len(input_hash) != 64
+                    or any(c not in "0123456789abcdef"
+                           for c in input_hash.lower())):
+                continue
+            yield {
+                "job_id": job_id, "trait": trait, "source": source,
+                "kept": int(kept[0]), "seen": int(seen[0]),
+                "effect_from": effects[0],
+                "remote_sha256": raw_hashes[0] if raw_hashes else None,
+                "input_sha256": (input_hash.lower()
+                                  if isinstance(input_hash, str) else None),
+                "per_variant_n_usable_frac": catalog.get(
+                    "per_variant_n_usable_frac"),
+                "has_per_variant_n": catalog.get("has_per_variant_n"),
+            }
+
+
+def _copy_legacy_candidate(candidate: dict, part: Path, keep_ids: set) -> dict:
+    """Copy and fully validate one job-local canonical gzip into ``part``."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(str(candidate["source"]), flags)
+    compressed = hashlib.sha256()
+    try:
+        source_stat = os.fstat(fd)
+        if not stat_module.S_ISREG(source_stat.st_mode):
+            raise ValueError("legacy source is not a regular file")
+        src = os.fdopen(fd, "rb")
+        fd = -1
+        with src, open(part, "wb") as dst:
+            while chunk := src.read(1 << 20):
+                compressed.update(chunk)
+                dst.write(chunk)
+            dst.flush()
+            os.fsync(dst.fileno())
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    input_sha256 = compressed.hexdigest()
+    if candidate["input_sha256"] is not None \
+            and input_sha256 != candidate["input_sha256"]:
+        raise ValueError("legacy input SHA-256 does not match result.json")
+
+    logical = hashlib.sha256()
+    kept = n_usable = 0
+    with gzip.open(part, "rt", encoding="utf-8", errors="strict") as src:
+        header = src.readline().rstrip("\n")
+        if header != HEADER:
+            raise ValueError("legacy source has a non-canonical header")
+        logical.update((HEADER + "\n").encode("utf-8"))
+        for line in src:
+            fields = line.rstrip("\n").split("\t")
+            if len(fields) != len(OUT_COLS) or not fields[0] \
+                    or fields[0] not in keep_ids:
+                raise ValueError("legacy source has an invalid retained row")
+            output = line if line.endswith("\n") else line + "\n"
+            logical.update(output.encode("utf-8"))
+            kept += 1
+            if _is_number(fields[-1]) and float(fields[-1]) > 0:
+                n_usable += 1
+    if kept != candidate["kept"]:
+        raise ValueError("legacy row count does not match job provenance")
+    n_frac = n_usable / kept
+    recorded_frac = candidate["per_variant_n_usable_frac"]
+    if recorded_frac is not None and (
+            not isinstance(recorded_frac, (int, float))
+            or not math.isfinite(recorded_frac)
+            or not math.isclose(float(recorded_frac), n_frac,
+                                rel_tol=0.0, abs_tol=1e-12)):
+        raise ValueError("legacy per-variant N fraction does not match")
+    recorded_has_n = candidate["has_per_variant_n"]
+    if recorded_has_n is not None:
+        if not isinstance(recorded_has_n, bool) \
+                or recorded_has_n != bool(n_usable and n_frac >= 0.99):
+            raise ValueError("legacy per-variant N status does not match")
+    return {
+        "input_sha256": input_sha256,
+        "normalised_sha256": logical.hexdigest(),
+        "has_n": bool(n_usable),
+    }
+
+
+def adopt_legacy_job_file(root: Path, *, accession: str, url: str,
+                          fingerprint: str, keep_ids: set,
+                          cache_label: str,
+                          remote_bytes: int = 0,
+                          remote_etag: str | None = None,
+                          remote_last_modified: str | None = None,
+                          exclude_job_id: str | None = None) -> bool:
+    """Best-effort promotion of a compatible completed job into the store.
+
+    Every scientific identity check is strict; any missing or inconsistent
+    evidence merely rejects that candidate and leaves the normal network path
+    to :func:`fetch_filtered`. Publication shares the accession lock and atomic
+    rename protocol used by downloads.
+    """
+    try:
+        data, meta_path = _store_paths(root, accession)
+        lock = _StoreLock(str(meta_path) + ".lock")
+        if not lock.acquire():
+            return False
+        try:
+            if _matching_build(
+                    meta_path, url, fingerprint, remote_bytes,
+                    remote_etag=remote_etag,
+                    remote_last_modified=remote_last_modified) is not None \
+                    and _file_identity(data) is not None:
+                return False
+            part = data.with_name(
+                f".{data.name}.{os.getpid()}.{uuid.uuid4().hex}.legacy")
+            for candidate in _legacy_candidate_records(
+                    root, accession, url, fingerprint, remote_bytes,
+                    exclude_job_id, remote_etag, remote_last_modified):
+                try:
+                    checked = _copy_legacy_candidate(candidate, part, keep_ids)
+                    now = time.time()
+                    build = {
+                        "accession": accession, "url": url,
+                        "remote_bytes": int(remote_bytes or 0),
+                        "built": time.strftime("%Y-%m-%d %H:%M:%S",
+                                               time.gmtime()),
+                        "last_used": now,
+                        "seen": candidate["seen"],
+                        "kept": candidate["kept"],
+                        "sha256": candidate["remote_sha256"],
+                        "normalised_sha256": checked["normalised_sha256"],
+                        "store_sha256": checked["input_sha256"],
+                        "schema": "legacy-normalised",
+                        "effect_from": candidate["effect_from"],
+                        "has_n": checked["has_n"],
+                        "covers": {fingerprint: cache_label},
+                        "bytes": part.stat().st_size,
+                        "origin": "legacy job",
+                        "legacy": {
+                            "job_id": candidate["job_id"],
+                            "trait": candidate["trait"],
+                            "input_sha256": checked["input_sha256"],
+                        },
+                    }
+                    build.update(_remote_validators(
+                        remote_etag, remote_last_modified))
+                    lock.touch()
+                    if not lock.owned():
+                        raise RuntimeError("lost the legacy-adoption lock")
+                    os.replace(part, data)
+                    _write_json(meta_path, build)
+                    return True
+                except Exception:
+                    try:
+                        part.unlink()
+                    except OSError:
+                        pass
+                    continue
+            return False
+        finally:
+            lock.release()
+    except Exception:
+        return False
+
 
 def _filter_normalised(store: Path, keep_ids: set, dest: Path,
-                       on_bytes=None) -> tuple:
-    """Copy the stored copy's ``keep_ids`` rows verbatim; return (kept, n_usable).
+                       on_bytes=None, expected_sha256=None) -> tuple:
+    """Copy rows; return counts plus logical and compressed SHA-256.
 
     Rows are written byte-for-byte, so the result is exactly what a download
     filtered to ``keep_ids`` would have produced. Do not be tempted to route
@@ -607,37 +1134,64 @@ def _filter_normalised(store: Path, keep_ids: set, dest: Path,
     ``pval``) are not among them, so a round trip would silently drop them.
     """
     n_col = OUT_COLS.index("n")
+    digest = hashlib.sha256()
+    compressed = hashlib.sha256()
     tmp = str(dest) + ".part"
     kept = n_usable = 0
-    with open(store, "rb") as raw:
-        counted = _HashingReader(raw, None, on_bytes)
-        with gzip.open(counted, "rt", encoding="utf-8",
-                       errors="replace") as src, \
-                gzip.open(tmp, "wt", encoding="utf-8", newline="") as dst:
-            header = src.readline().rstrip("\n")
-            if header != HEADER:
+    identity = None
+    finished = False
+    try:
+        with open(store, "rb") as raw:
+            stat = os.fstat(raw.fileno())
+            identity = (stat.st_dev, stat.st_ino, stat.st_size,
+                        stat.st_mtime_ns)
+            counted = _HashingReader(raw, compressed, on_bytes)
+            with gzip.open(counted, "rt", encoding="utf-8",
+                           errors="replace") as src, \
+                    gzip.open(tmp, "wt", encoding="utf-8", newline="") as dst:
+                header = src.readline().rstrip("\n")
+                if header != HEADER:
+                    raise _StoreLayoutError(header, identity)
+                output = header + "\n"
+                dst.write(output)
+                digest.update(output.encode("utf-8"))
+                for line in src:
+                    fields = line.rstrip("\n").split("\t")
+                    if fields[0] not in keep_ids:
+                        continue
+                    output = line if line.endswith("\n") else line + "\n"
+                    dst.write(output)
+                    digest.update(output.encode("utf-8"))
+                    kept += 1
+                    if len(fields) > n_col and _is_number(fields[n_col]) \
+                            and float(fields[n_col]) > 0:
+                        n_usable += 1
+        store_sha256 = compressed.hexdigest()
+        if expected_sha256 is not None and store_sha256 != expected_sha256:
+            raise _StoreGzipError(
+                "compressed content does not match its recorded SHA-256",
+                identity)
+        finished = True
+    except (gzip.BadGzipFile, EOFError, zlib.error) as exc:
+        raise _StoreGzipError(str(exc), identity) from exc
+    finally:
+        if os.path.exists(tmp) and (not finished or kept == 0):
+            try:
                 os.unlink(tmp)
-                raise _StoreLayoutError(header)
-            dst.write(header + "\n")
-            for line in src:
-                fields = line.rstrip("\n").split("\t")
-                if fields[0] not in keep_ids:
-                    continue
-                dst.write(line if line.endswith("\n") else line + "\n")
-                kept += 1
-                if len(fields) > n_col and _is_number(fields[n_col]) \
-                        and float(fields[n_col]) > 0:
-                    n_usable += 1
+            except OSError:
+                pass
     if kept == 0:
-        os.unlink(tmp)
         raise ValueError("no variants overlap the LD reference — wrong "
                          "genome build or a hits-only deposition?")
     os.replace(tmp, dest)
-    return kept, n_usable
+    return kept, n_usable, digest.hexdigest(), store_sha256
 
 
 def fetch_filtered(url: str, dest: Path, *, accession: str, root: Path,
                    keep_ids: set, fingerprint: str, coverage=None,
+                   remote_bytes: int = 0,
+                   remote_etag: str | None = None,
+                   remote_last_modified: str | None = None,
                    on_bytes=None, on_filter=None, on_wait=None) -> dict:
     """One accession's variants, filtered to ``keep_ids``, without re-downloading.
 
@@ -650,48 +1204,119 @@ def fetch_filtered(url: str, dest: Path, *, accession: str, root: Path,
 
     The returned dict has :func:`stream_filter`'s fields — with ``seen``,
     ``sha256``, ``schema``, ``effect_from`` and ``has_n`` describing the
-    *remote* file rather than the stored copy — plus ``reused`` and
-    ``store_kept``.
+    *remote* file rather than the stored copy — plus ``normalised_sha256``
+    for the decompressed job file, ``reused`` and ``store_kept``.
     """
     data, meta_path = _store_paths(root, accession)
-    for attempt in (0, 1):
-        build = _load_build(meta_path, fingerprint) if data.exists() else None
-        if build is not None and build.get("url") != url:
-            # An accession is immutable, but the harmonised file it points at
-            # can be re-deposited under a new path. Then the copy is of a file
-            # we are no longer being asked for, and reuse would be a lie.
-            build = None
-        if build is not None:
-            _record_use(meta_path)          # holds eviction off before we read
-        reused = build is not None and data.exists()
-        if not reused:
-            union_ids, covers = coverage() if coverage else (set(keep_ids), {})
+    coverage_value = None
+    downloaded = False
+    corruption_rebuilds = 0
+
+    def requested_coverage():
+        nonlocal coverage_value
+        if coverage_value is None:
+            union_ids, covers = coverage() if coverage else (
+                set(keep_ids), {})
             covers = dict(covers)
             covers.setdefault(fingerprint, "requested LD reference")
             if not keep_ids <= union_ids:
                 raise ValueError(
                     "stored-copy variant union does not cover this job's LD "
                     "reference; refusing to filter against it")
-            build = _build_store(url, data, meta_path, accession, union_ids,
-                                 covers, fingerprint, on_bytes=on_bytes,
-                                 on_wait=on_wait)
+            coverage_value = union_ids, covers
+        return coverage_value
+
+    while True:
+        identity = _file_identity(data)
+        build = _matching_build(
+            meta_path, url, fingerprint, remote_bytes,
+            remote_etag=remote_etag,
+            remote_last_modified=remote_last_modified) \
+            if identity is not None else None
+        if build is None:
+            union_ids, covers = requested_coverage()
+            _, reused_build = _build_store(
+                url, data, meta_path, accession, union_ids, covers,
+                fingerprint, remote_bytes=remote_bytes,
+                remote_etag=remote_etag,
+                remote_last_modified=remote_last_modified,
+                on_bytes=on_bytes, on_wait=on_wait,
+                rejected_identity=None)
+            downloaded |= not reused_build
+
+        # Keep this lock through selection *and* filtering. Otherwise a
+        # re-deposited URL can publish new bytes between those operations and
+        # make us report old provenance for new content.
+        use_lock = _StoreLock(str(meta_path) + ".lock")
+        while not use_lock.acquire():
+            _wait_for_unlock(use_lock, on_wait)
+        retry = False
         try:
-            kept, n_usable = _filter_normalised(data, keep_ids, dest,
-                                                on_filter)
-            break
-        except _StoreLayoutError as exc:
-            if attempt:                     # we just wrote it: give up loudly
-                raise ValueError(
-                    f"{accession}: stored copy has an unreadable header "
-                    f"({exc})")
-            _discard(data, meta_path)       # an older layout: fetch it again
-    n_frac = n_usable / kept
-    return {"schema": build["schema"], "effect_from": build["effect_from"],
-            "has_n": build["has_n"], "seen": build["seen"],
-            "sha256": build["sha256"], "kept": kept,
-            "per_variant_n_usable_frac": n_frac,
-            "has_per_variant_n": bool(build["has_n"] and n_frac >= 0.99),
-            "reused": reused, "store_kept": build["kept"]}
+            build = _matching_build(
+                meta_path, url, fingerprint, remote_bytes,
+                remote_etag=remote_etag,
+                remote_last_modified=remote_last_modified)
+            identity = _file_identity(data)
+            if build is None or identity is None:
+                retry = True             # another URL won before this lock
+            else:
+                build["last_used"] = time.time()
+                _write_json(meta_path, build)
+
+                def filter_progress(total):
+                    use_lock.touch()
+                    if on_filter is not None:
+                        on_filter(total)
+                try:
+                    if identity[2] != build["bytes"]:
+                        raise _StoreGzipError(
+                            "byte count does not match its metadata", identity)
+                    kept, n_usable, normalised_sha256, store_sha256 = \
+                        _filter_normalised(
+                            data, keep_ids, dest, filter_progress,
+                            expected_sha256=build.get("store_sha256"))
+                except _StoreReadError as exc:
+                    if not use_lock.owned():
+                        retry = True
+                    elif corruption_rebuilds:
+                        problem = ("an unreadable header" if isinstance(
+                            exc, _StoreLayoutError) else
+                            "a corrupt, replaced, or truncated gzip stream")
+                        raise ValueError(
+                            f"{accession}: stored copy has {problem} "
+                            f"({exc})") from exc
+                    else:
+                        # No publisher can replace the copy while we own this
+                        # lock. Discard this exact generation and rebuild once.
+                        if _file_identity(data) == exc.identity:
+                            _discard(data, meta_path)
+                        corruption_rebuilds += 1
+                        retry = True
+                else:
+                    if (build.get("store_sha256") is None
+                            and use_lock.owned()):
+                        # Upgrade a valid store created before checksums were
+                        # recorded. The full compressed stream was just read.
+                        build["store_sha256"] = store_sha256
+                        _write_json(meta_path, build)
+                    n_frac = n_usable / kept
+                    return {
+                        "schema": build["schema"],
+                        "effect_from": build["effect_from"],
+                        "has_n": build["has_n"], "seen": build["seen"],
+                        "sha256": build["sha256"], "kept": kept,
+                        "normalised_sha256": normalised_sha256,
+                        "per_variant_n_usable_frac": n_frac,
+                        "has_per_variant_n": bool(
+                            build["has_n"] and n_frac >= 0.99),
+                        "reused": not downloaded,
+                        "store_kept": build["kept"],
+                        "store_origin": build.get("origin", "download"),
+                    }
+        finally:
+            use_lock.release()
+        if retry:
+            continue
 
 
 def purge_store(root: Path, budget_gb: float) -> list:
@@ -703,15 +1328,19 @@ def purge_store(root: Path, budget_gb: float) -> list:
     """
     base = store_dir(root)
     now = time.time()
-    for part in base.glob("*.tsv.gz.part"):
-        try:
-            if now - part.stat().st_mtime > PART_STALE:
-                part.unlink()
-        except OSError:
-            pass
+    transient_bytes = 0
+    for pattern in ("*.part", "*.legacy", "*.build"):
+        for part in base.glob(pattern):
+            try:
+                if now - part.stat().st_mtime > PART_STALE:
+                    part.unlink()
+                else:
+                    transient_bytes += part.stat().st_size
+            except OSError:
+                pass
     if not budget_gb or budget_gb <= 0:
         return []
-    total, candidates = 0, []
+    total, candidates = transient_bytes, []
     for meta_path in sorted(base.glob("GCST*.json")):
         try:
             data, _ = _store_paths(root, meta_path.stem)
@@ -721,22 +1350,42 @@ def purge_store(root: Path, budget_gb: float) -> list:
         try:
             size = data.stat().st_size
         except OSError:
-            _discard(data, meta_path)       # orphaned record of a gone copy
             continue
         total += size
-        if build is None or now - float(build.get("last_used") or 0) > EVICT_GRACE:
-            candidates.append((float((build or {}).get("last_used") or 0),
-                               meta_path.stem, data, meta_path, size))
+        try:
+            last_used = float((build or {}).get("last_used") or 0)
+        except (TypeError, ValueError):
+            last_used = 0.0
+        if not math.isfinite(last_used):
+            last_used = 0.0
+        if build is None or now - last_used > EVICT_GRACE:
+            candidates.append((last_used, meta_path.stem, data, meta_path,
+                               size))
     budget = budget_gb * 2 ** 30
     removed = []
     for _, accession, data, meta_path, size in sorted(candidates):
         if total <= budget:
             break
-        for path in (data, meta_path):
+        lock = _StoreLock(str(meta_path) + ".lock")
+        if not lock.acquire():
+            continue
+        try:
+            current = _load_build(meta_path)
             try:
-                path.unlink()
+                current_size = data.stat().st_size
             except OSError:
-                pass
-        total -= size
-        removed.append(accession)
+                current_size = 0
+            try:
+                current_last = float(
+                    (current or {}).get("last_used") or 0)
+            except (TypeError, ValueError):
+                current_last = 0.0
+            if math.isfinite(current_last) \
+                    and time.time() - current_last <= EVICT_GRACE:
+                continue
+            _discard(data, meta_path)
+            total -= current_size
+            removed.append(accession)
+        finally:
+            lock.release()
     return removed

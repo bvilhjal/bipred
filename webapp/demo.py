@@ -64,12 +64,16 @@ def build_demo(out_dir: Path, *, m=12000, n_samples=1500, seed=12345,
     dosage = hap[0::2] + hap[1::2]
     af_obs = dosage.mean(axis=0) / 2.0
 
-    from ldpred3 import compute_ld_blocks, save_ld_blocks
+    from ldpred3 import compute_ld_blocks, ld_scores, save_ld_blocks
     blocks = compute_ld_blocks(np.ascontiguousarray(dosage), chrom=chrom,
                                block_size=500)
     cache = out_dir / "demo.ld.npz"
     save_ld_blocks(cache, blocks, ids, reference_af=af_obs, n_ref=n_samples,
                    counted_allele=ea, other_allele=oa, chrom=chrom, pos=pos)
+    caches.write_ld_score_sidecar(
+        cache, ld_scores(blocks),
+        source="synthetic demo full-reference LD blocks",
+        algorithm="ldpred3.ld_scores-v1")
 
     # Correlated sparse effects; marginals through the fitted LD, as in
     # examples/minimal.py. state: 1 = causal in both, 2 = trait 1 only,
@@ -116,7 +120,8 @@ def build_demo(out_dir: Path, *, m=12000, n_samples=1500, seed=12345,
 def ensure_demo(root: Path | None = None) -> Path:
     """Build the demo dataset on first use; returns its directory."""
     out = caches.demo_cache_dir(root)
-    expected = ["demo.ld.npz", "trait1.tsv", "trait2.tsv", "meta.json"]
+    expected = ["demo.ld.npz", "demo.ld.npz.ldscores.npz",
+                "trait1.tsv", "trait2.tsv", "meta.json"]
     if not all((out / name).exists() for name in expected):
         build_demo(out)
     return out

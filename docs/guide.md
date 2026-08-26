@@ -40,6 +40,36 @@ For several sibling fits, create one fully validated
 of the path; its outer context owns the mappings and avoids another complete
 payload scan.
 
+When one GWAS recurs in several pairs, prepare it once rather than repeat its
+QC and harmonization:
+
+```python
+from ldpred3.interop import prepare_ld_cache
+from bipred import (pair_prepared_traits, prepare_trait_sumstats,
+                    screen_prepared_trait)
+
+with prepare_ld_cache("ld.npz") as ld:
+    trait1 = prepare_trait_sumstats(ld, "trait1.tsv.gz", n_eff=80_000)
+    trait2 = prepare_trait_sumstats(ld, "trait2.tsv.gz", n_eff=95_000)
+    trait1 = screen_prepared_trait(ld, trait1)
+    trait2 = screen_prepared_trait(ld, trait2)
+    prep = pair_prepared_traits(ld, trait1, trait2)
+```
+
+Each prepared trait stores only usable values plus their strictly increasing
+indices in the full LD-cache order; it owns no LD mapping and can be
+serialized. A persistent web-style store should publish the object only after
+`screen_prepared_trait`, so a cache hit means QC, harmonization, standardization,
+and the mandatory trait-local screen are all complete. Its key must include the
+LD cache's identity or content hash and every QC/screen setting that changes the
+retained rows. Equal variant counts do not prove equal variant order.
+`screen_prepared_trait` uses each trait's own usable principal LD panel and is
+therefore applied before storage and before intersection in the web workflow.
+It evaluates those selected rows directly inside each source block; it does not
+materialize or retain a separate principal panel merely to run the screen.
+The older `pair_prepared_traits(..., screen=True)` contract remains available
+when a pair-specific intersection screen is deliberately wanted.
+
 The default weight file is scored with `scaling="target"`. Bipred has no
 observed fit-cohort dosage SD in an LD cache. Passing `af=prep.af` (or CLI
 `--hwe-frozen-scale`) writes `SD_REF = sqrt(2 f (1-f))`: a reference-panel HWE
@@ -58,7 +88,9 @@ The low-level contract (what `prepare_bivariate_sumstats` produces) is:
 3. Either one dense LD correlation matrix or blocks `[(R, idx), ...]` whose
    contiguous indices partition `0..m-1`. After dropping variants, retile
    with `subset_blocks` — do not pass `beta[keep]` with the original cache
-   indices.
+   indices. `PreparedBivariate.cache_indices` separately retains each fitted
+   row's position in the full reference; use it for reference-wide invariants,
+   not as the sampler's re-tiled block index.
 4. A scalar `cross_corr` when the two GWAS have correlated sampling errors;
    shared samples are one possible cause.
 
@@ -150,6 +182,16 @@ mask. The reference exclusion is `chi2 > max(0.001 N, 80)`.
 `ldsc_rg` and leave the joint fit its full variant set; keep `m_snps` at the
 full count. The same mask on `ldpred3_auto_bivariate_blocks` deletes the slab's
 large effects — that is the 0.3.7 failure mode.
+
+Likewise, fix one LD-score vector for the full reference, then pass
+`ell_full[prep.cache_indices]` and `m_snps=len(ell_full)`. QC, the
+DENTIST-inspired screen, and trait intersection select regression rows; they
+do not redefine the score or M. Record whether the vector was computed from
+the fitting cache or imported from its original source reference; those are
+different estimators after spectral flooring or low-rank conversion. For the
+matrix that actually supplied the scores, `sum(ell_full) = ||R||_F^2`, so its
+participation-ratio effective rank is `M**2 / sum(ell_full)`. This is a
+spectral summary, not the exact algebraic rank.
 
 Blocks are independent, so `ncores` settles several at once — 2.49× on four
 cores at 16 × k=2,000, with the mask identical at every core count. The pool
@@ -457,7 +499,10 @@ prep = prepare_bivariate_sumstats(
   never settled. Do not interpret `h2` or `rg` from it. Recheck harmonization,
   scaling, sample size, and reference compatibility, then compare
   `bipred.qc.ld_consistency_screen`; passing that approximate screen is not a
-  certificate of correctness.
+  certificate of correctness. `result.divergence_diagnostics` records the
+  exact ratios, trace summaries, thresholds, and per-trait flags used by this
+  warning. They are fit-validity heuristics, not R-hat, ESS, or a convergence
+  certificate.
 - `ldpred3.shrink_ld_blocks` keys its shrinkage on `k / n_ref`, which assumes
   the distortion is finite-panel noise. Against a reference whose correlations
   were thresholded to zero outside a window, the distortion is structural and

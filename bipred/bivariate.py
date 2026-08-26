@@ -711,6 +711,104 @@ def _warn_if_implausible_fit(raw_h2, p, h2_bounds, m):
         )
 
 
+def _fit_divergence_statistics(beta1, beta2, raw_h2, sigma_diag,
+                               genetic_samples, m, largest_block=None):
+    """Return the numbers used by the single-chain divergence heuristic.
+
+    These are fit-validity diagnostics, not R-hat, ESS, or a convergence
+    certificate. Values are still returned on panels too small for the
+    calibrated thresholds, but ``evaluated`` is false and no flag is set.
+    """
+    evaluated = m >= _DIAGNOSTIC_MIN_VARIANTS
+    trace_iterations = 0
+    trace_evaluated = False
+    trace_moments = {}
+    if genetic_samples is not None:
+        trace = np.asarray(genetic_samples, dtype=np.float64)
+        if trace.ndim == 2 and trace.shape[1] >= 3:
+            trace_iterations = int(len(trace))
+            if trace_iterations >= _DIVERGENCE_MIN_TRACE:
+                quarter = trace_iterations // 4
+                trace_evaluated = evaluated
+                for key, column in (("trait1", 0), ("trait2", 2)):
+                    trace_moments[key] = (
+                        float(np.mean(trace[:quarter, column])),
+                        float(np.mean(trace[-quarter:, column])),
+                    )
+
+    traits = {}
+    for key, beta, h2_t, s_tt in (
+            ("trait1", beta1, raw_h2[0], sigma_diag[0]),
+            ("trait2", beta2, raw_h2[1], sigma_diag[1])):
+        values = np.asarray(beta, dtype=np.float64)
+        total = float(np.sum(values ** 2))
+        maximum = float(np.max(np.abs(values)))
+        raw_variance = float(h2_t)
+        effect_ratio = total / raw_variance if raw_variance > 0.0 else None
+        slab_sd = math.sqrt(float(s_tt)) if s_tt > 0.0 else None
+        slab_ratio = maximum / slab_sd if slab_sd is not None else None
+
+        first = last = last_over_first = drift = direction = None
+        if key in trace_moments:
+            first, last = trace_moments[key]
+            if first > 0.0 and last > 0.0:
+                last_over_first = last / first
+                if last_over_first > 1.0:
+                    drift, direction = last_over_first, "rising"
+                elif last_over_first < 1.0:
+                    drift, direction = 1.0 / last_over_first, "falling"
+                else:
+                    drift, direction = 1.0, "flat"
+
+        flags = {
+            "nonpositive_genetic_variance": bool(
+                evaluated and raw_variance <= 0.0),
+            "effect_energy_ratio": bool(
+                evaluated and effect_ratio is not None
+                and effect_ratio > _DIVERGENCE_MAX_EFFECT_RATIO),
+            "max_effect_slab_sd": bool(
+                evaluated and slab_ratio is not None
+                and slab_ratio > _DIVERGENCE_MAX_SLAB_SIGMAS),
+            "trace_drift": bool(
+                trace_evaluated and drift is not None
+                and drift > _DIVERGENCE_MAX_TRACE_DRIFT),
+        }
+        traits[key] = {
+            "sum_beta_squared": total,
+            "raw_genetic_variance": raw_variance,
+            "effect_energy_ratio": effect_ratio,
+            "max_abs_posterior_mean": maximum,
+            "per_causal_effect_sd": slab_sd,
+            "max_effect_slab_sd": slab_ratio,
+            "trace_first_quarter_mean": first,
+            "trace_last_quarter_mean": last,
+            "trace_last_over_first": last_over_first,
+            "trace_drift_fold": drift,
+            "trace_direction": direction,
+            "flags": flags,
+        }
+
+    return {
+        "evaluated": bool(evaluated),
+        "flagged": any(
+            flag for trait in traits.values()
+            for flag in trait["flags"].values()),
+        "variant_count": int(m),
+        "largest_block_variants": (
+            int(largest_block) if largest_block is not None else None),
+        "trace_iterations": trace_iterations,
+        "trace_evaluated": bool(trace_evaluated),
+        "thresholds": {
+            "minimum_variants": _DIAGNOSTIC_MIN_VARIANTS,
+            "minimum_trace_iterations": _DIVERGENCE_MIN_TRACE,
+            "effect_energy_ratio": _DIVERGENCE_MAX_EFFECT_RATIO,
+            "max_effect_slab_sd": _DIVERGENCE_MAX_SLAB_SIGMAS,
+            "trace_drift_fold": _DIVERGENCE_MAX_TRACE_DRIFT,
+        },
+        "traits": traits,
+    }
+
+
 def _warn_if_fit_diverged(beta1, beta2, raw_h2, sigma_diag, genetic_samples, m,
                           largest_block=None):
     """Flag a chain that ran away, which ``h2`` and ``p`` alone cannot show.
@@ -741,45 +839,38 @@ def _warn_if_fit_diverged(beta1, beta2, raw_h2, sigma_diag, genetic_samples, m,
     Deliberately silent below :data:`_DIAGNOSTIC_MIN_VARIANTS`, like its
     sibling: on a small panel these ratios are ordinary noise.
     """
-    if m < _DIAGNOSTIC_MIN_VARIANTS:
-        return
+    statistics = _fit_divergence_statistics(
+        beta1, beta2, raw_h2, sigma_diag, genetic_samples, m,
+        largest_block=largest_block)
+    if not statistics["evaluated"]:
+        return statistics
     reasons = []
-    for label, beta, h2_t, s_tt in (("1", beta1, raw_h2[0], sigma_diag[0]),
-                                    ("2", beta2, raw_h2[1], sigma_diag[1])):
-        total = float(np.sum(np.asarray(beta, dtype=np.float64) ** 2))
-        if h2_t > 0.0:
-            ratio = total / h2_t
-            if ratio > _DIVERGENCE_MAX_EFFECT_RATIO:
-                reasons.append(
-                    "trait %s has sum(beta^2) %.3g against a genetic variance "
-                    "of %.3g (ratio %.0f), so its effects are largely "
-                    "cancelling through LD rather than adding" %
-                    (label, total, h2_t, ratio))
-        if s_tt > 0.0:
-            sigmas = float(np.max(np.abs(beta))) / math.sqrt(s_tt)
-            if sigmas > _DIVERGENCE_MAX_SLAB_SIGMAS:
-                reasons.append(
-                    "trait %s has a posterior-mean effect %.0f times the "
-                    "per-causal effect SD the fit itself inferred" %
-                    (label, sigmas))
-    if genetic_samples is not None:
-        trace = np.asarray(genetic_samples, dtype=np.float64)
-        if trace.ndim == 2 and len(trace) >= _DIVERGENCE_MIN_TRACE:
-            quarter = len(trace) // 4
-            for label, column in (("1", 0), ("2", 2)):
-                first = float(np.mean(trace[:quarter, column]))
-                last = float(np.mean(trace[-quarter:, column]))
-                if first > 0.0 and last > 0.0:
-                    if last / first > _DIVERGENCE_MAX_TRACE_DRIFT:
-                        reasons.append(
-                            "trait %s's genetic variance rose %.2fx across the "
-                            "retained sweeps, so the chain had not settled" %
-                            (label, last / first))
-                    elif first / last > _DIVERGENCE_MAX_TRACE_DRIFT:
-                        reasons.append(
-                            "trait %s's genetic variance fell %.2fx across the "
-                            "retained sweeps, so the chain had not settled" %
-                            (label, first / last))
+    for label, key in (("1", "trait1"), ("2", "trait2")):
+        trait = statistics["traits"][key]
+        if trait["flags"]["nonpositive_genetic_variance"]:
+            reasons.append(
+                "trait %s has a non-positive sampled genetic variance %.3g, "
+                "so its h2 and rg estimates are not valid" %
+                (label, trait["raw_genetic_variance"]))
+        if trait["flags"]["effect_energy_ratio"]:
+            reasons.append(
+                "trait %s has sum(beta^2) %.3g against a genetic variance "
+                "of %.3g (ratio %.0f), so its effects are largely "
+                "cancelling through LD rather than adding" %
+                (label, trait["sum_beta_squared"],
+                 trait["raw_genetic_variance"],
+                 trait["effect_energy_ratio"]))
+        if trait["flags"]["max_effect_slab_sd"]:
+            reasons.append(
+                "trait %s has a posterior-mean effect %.0f times the "
+                "per-causal effect SD the fit itself inferred" %
+                (label, trait["max_effect_slab_sd"]))
+        if trait["flags"]["trace_drift"]:
+            verb = "rose" if trait["trace_direction"] == "rising" else "fell"
+            reasons.append(
+                "trait %s's genetic variance %s %.2fx across the retained "
+                "sweeps, so the chain had not settled" %
+                (label, verb, trait["trace_drift_fold"]))
     if reasons:
         # Block geometry is reported here rather than warned about on its own.
         # Size alone does not predict this failure -- the fit that motivated
@@ -812,6 +903,7 @@ def _warn_if_fit_diverged(beta1, beta2, raw_h2, sigma_diag, genetic_samples, m,
             RuntimeWarning,
             stacklevel=3,
         )
+    return statistics
 
 
 @dataclass
@@ -1487,8 +1579,10 @@ class BivariateResult:
     ``(gvar1, gcov, gvar2)`` quadratics and ``noise_scale_samples`` retains the
     two noise scales at every post-burn-in sweep. ``retained_iterations`` is the
     number of rows retained in those traces; ``stopped_early`` reports whether
-    adaptive stopping shortened a single-chain run. See :attr:`mixer` for the
-    MiXeR-style polygenic-overlap summary.
+    adaptive stopping shortened a single-chain run. ``divergence_diagnostics``
+    records the structured single-chain fit-validity ratios behind any
+    divergence warning; these heuristics are not a convergence certificate.
+    See :attr:`mixer` for the MiXeR-style polygenic-overlap summary.
     """
 
     beta1_est: np.ndarray
@@ -1505,6 +1599,7 @@ class BivariateResult:
     noise_scale_samples: Optional[np.ndarray] = None  # (n_kept, 2); ones if inflation off
     retained_iterations: Optional[int] = None     # post-burn-in sweeps actually kept
     stopped_early: bool = False                   # True when adaptive stopping fired
+    divergence_diagnostics: Optional[dict] = None  # structured heuristic ratios
 
     def write_weights(self, path, *, trait, id, chrom, pos, effect_allele,
                       other_allele, af=None, sd=None):
@@ -2262,12 +2357,10 @@ def _ldpred3_auto_bivariate_prepared_inner(prepared, options, start,
     avg2 /= count
     beta1_mean = avg1
     beta2_mean = avg2
-    _warn_if_fit_diverged(beta1_mean, beta2_mean,
-                          (float(g11), float(g22)),
-                          (float(s1_mean), float(s2_mean)),
-                          genetic_samples[:count], m,
-                          largest_block=max((b[3] for b in prepared.blocks),
-                                            default=None))
+    divergence = _warn_if_fit_diverged(
+        beta1_mean, beta2_mean, (float(g11), float(g22)),
+        (float(s1_mean), float(s2_mean)), genetic_samples[:count], m,
+        largest_block=max((b[3] for b in prepared.blocks), default=None))
     return BivariateResult(beta1_est=beta1_mean, beta2_est=beta2_mean,
                            h2=(float(h2_1), float(h2_2)), rg=rg,
                            p=float(pi_mean[1] + pi_mean[2] + pi_mean[3]),
@@ -2281,7 +2374,8 @@ def _ldpred3_auto_bivariate_prepared_inner(prepared, options, start,
                            genetic_samples=genetic_samples[:count].copy(),
                            noise_scale_samples=noise_scale_samples[:count].copy(),
                            retained_iterations=int(count),
-                           stopped_early=bool(count < num_iter))
+                           stopped_early=bool(count < num_iter),
+                           divergence_diagnostics=divergence)
 
 
 def ldpred3_auto_bivariate(corr, beta_hat1, beta_hat2, n_eff1, n_eff2, **kwargs):

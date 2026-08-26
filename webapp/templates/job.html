@@ -1,6 +1,8 @@
 {% extends "base.html" %}
+{% from "_stage_ui.html" import fallback_description, fallback_label %}
 {% block title %}Job {{ job.id }} — bipred{% endblock %}
 {% block content %}
+{% set current_schema = job.get('stage_schema', 1)|int >= 3 %}
 <h1>Job {{ job.id }} <span class="badge badge-{{ job.status }}"
 id="badge">{{ job.status }}</span></h1>
 <p class="muted">{{ job.labels.trait1 }} × {{ job.labels.trait2 }} —
@@ -16,36 +18,60 @@ results</a>.</div>
 
 {% if running %}
 <p id="status-note" aria-live="polite">Current stage: <strong
-id="stage-name">{{ job.stage or "queued" }}</strong>. This page updates
+id="stage-name">{% if job.stage %}{{ fallback_label(job.stage) }}{% else %}queued{% endif %}</strong>. This page updates
 live.</p>
-<p class="muted" id="progress-line" hidden></p>
+<div class="progress-lines" id="progress-lines" aria-live="polite" hidden></div>
 <noscript><p class="muted">JavaScript is disabled —
 <a href="/jobs/{{ job.id }}">reload this page</a> to update the status.</p>
 </noscript>
 {% endif %}
 
-<h2>Stages</h2>
+<h2>Analysis stages</h2>
 <ul class="stages" id="stages" aria-live="polite">
-{% for name in stages %}
-<li class="{% if name in job.stages %}done{% elif name == job.stage %}active{% else %}pending{% endif %}">
-<span>{{ name }}</span>
-<span class="state">{% if name in job.stages %}{{ "%.2f"|format(job.stages[name]) }} s{% elif name == job.stage %}running{% else %}pending{% endif %}</span>
+{% for item in stages %}
+{% set mapped = item is mapping %}
+{% set key = item.key if mapped else item %}
+{% set detail = job.get("stage_details", {}).get(key, {}) %}
+<li class="{% if key in job.stages %}done{% elif key == job.stage and job.status == 'failed' %}failed{% elif key == job.stage %}active{% else %}pending{% endif %}">
+<span class="stage-copy"><span class="stage-label">{{ item.label if mapped else fallback_label(key) }}</span>
+<span class="stage-description">{{ item.description if mapped else fallback_description(key, job.get('stage_schema', 1)) }}</span>
+<span class="stage-detail"{% if not detail.summary %} hidden{% endif %}>{{ detail.summary or "" }}</span></span>
+<span class="state">{% if key in job.stages and detail.skipped %}skipped{% elif key in job.stages %}{{ "%.2f"|format(job.stages[key]) }} s{% elif key == job.stage and job.status == 'failed' %}failed{% elif key == job.stage %}running{% else %}pending{% endif %}</span>
 </li>
 {% endfor %}
 </ul>
 
 <div id="munge"{% if not munge %} hidden{% endif %}>
-<h2>Harmonization</h2>
+{% if current_schema %}
+<h2>Mandatory trait screens</h2>
+<table id="m-trait-screens">
+<tr><th>Trait</th><th class="num">Input</th><th class="num">Kept</th>
+    <th class="num">Dropped</th></tr>
+{% for key in ("trait1", "trait2") %}
+{% set s = munge.get(key, {}).get('ld_consistency_screen', {}) if munge else {} %}
+<tr><td>{{ job.labels[key] }}</td>
+    <td class="num" id="m-screen-input-{{ key }}">{{ s.get('n_input', '—') }}</td>
+    <td class="num" id="m-screen-kept-{{ key }}">{{ s.get('n_kept', '—') }}</td>
+    <td class="num" id="m-screen-dropped-{{ key }}">{{ s.get('n_dropped', '—') }}</td></tr>
+{% endfor %}
+</table>
+{% endif %}
+<h2>Joint analysis set</h2>
 <table>
 <tr><td>Variants in LD reference</td>
 <td class="num" id="m-n-cache">{{ munge.n_cache if munge else "—" }}</td></tr>
+{% if current_schema %}
+<tr><td>Shared after the two trait-local screens</td>
+<td class="num" id="m-n-kept">{{ munge.n_kept if munge else "—" }}</td></tr>
+{% else %}
 <tr><td>Observed in both GWAS</td>
 <td class="num" id="m-n-joint">{{ munge.n_joint if munge else "—" }}</td></tr>
 <tr><td>Kept for fitting</td>
 <td class="num" id="m-n-kept">{{ munge.n_kept if munge else "—" }}</td></tr>
 <tr id="m-screen-row"{% if not (munge and munge.n_screen_drop) %} hidden{% endif %}>
-<td>Dropped by screen</td>
+<td>Dropped by the LD-consistency screen</td>
 <td class="num" id="m-screen-drop">{{ munge.n_screen_drop if munge else "" }}</td></tr>
+{% endif %}
 </table>
 </div>
 {% endblock %}
@@ -54,7 +80,14 @@ live.</p>
 <script>
 window.BIPRED_JOB = {id: {{ job.id | tojson }},
                      status: {{ job.status | tojson }},
-                     stages: {{ stages | tojson }}};
+                     stageSchema: {{ job.get('stage_schema', 1) | tojson }},
+                     stages: [{% for item in stages %}
+                     {% set mapped = item is mapping %}
+                     {% set key = item.key if mapped else item %}
+                     {"key": {{ key | tojson }},
+                      "label": {{ (item.label if mapped else fallback_label(key)) | tojson }},
+                      "description": {{ (item.description if mapped else fallback_description(key, job.get('stage_schema', 1))) | tojson }}}{% if not loop.last %},{% endif %}
+                     {% endfor %}]};
 </script>
 <script src="/static/job.js" defer></script>
 {% endblock %}
