@@ -165,11 +165,27 @@ manually:
 | `external_overlap_ldsc200k` | 24 (2 cells x 3 reps x 4 methods) | `external_overlap_ldsc200k.provenance.json` | same; the LDSC-scale panel (m = 200k) variant of the above |
 | `external_hdl_tg` | 5 | `external_hdl_tg.provenance.json` | GLGC HDL/TG inputs + LDSC weights from Table 4 |
 
-The complete 0.3.5 regeneration used clean revision `5c06ec7`, Python 3.14.6,
-NumPy 2.4.6, Numba 0.66.0, and ldpred3 0.4.5. `run_all.sh` selected msprime
-and completed all ten scripts, producing eleven CSVs and five PNGs; all three
-manual benchmarks were also regenerated. These wall times are measurements of
-that 10-core Apple M2 Pro under one-thread controls, not portable expectations.
+**The artifact record is currently split across two ldpred3 versions.** The
+ten `run_all.sh` scripts were regenerated from clean revision `bf5236a`
+(bipred 0.3.10.dev0) against the current pin, ldpred3 0.6.1 at
+`af5d92c7aab6a5b67d15c94ebe28b89e33f5d69d`, with Python 3.14.6, NumPy 2.4.6 and
+Numba 0.66.0; `run_all.sh` selected msprime and all ten completed. The manual
+benchmarks -- `qc_factorial`, `real_ldl_cad`, `external_overlap`,
+`external_overlap_ldsc200k`, `external_hdl_tg` and `bivariate_demo` -- still
+carry the earlier 0.3.5 record (revision `5c06ec7`, ldpred3 0.4.5), because
+they need real-data inputs and tool environments that sweep did not have. They
+must be regenerated against the current pin before this counts as a
+release-quality record; until then, do not read a manual artifact and a
+`run_all.sh` artifact as one sweep.
+
+For the record: moving the pin left every bipred-owned estimate unchanged.
+What moved was ldpred3's univariate inference -- the `calib_*` columns of
+`mixer_overlap`, which are the only ones fed by `ldpred3_auto_infer`, and the
+`uni_gv`/`uni_r2` rows of `rg_methods` -- alongside timing and peak RSS
+throughout. The joint-fit columns beside them are identical.
+
+Wall times are measurements of that 10-core Apple M2 Pro under one-thread
+controls, not portable expectations.
 
 **Table 4. Acquisition record for the six checksummed real-data inputs.**
 

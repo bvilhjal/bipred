@@ -430,7 +430,7 @@ def test_runtime_ci_and_frozen_benchmark_use_explicit_distinct_sources():
     assert 'LDPRED3_REV: "master"' in ci
     assert f'LDPRED3_FLOOR: "{floor}"' in ci
     assert LDPRED3_REV in benchmark_readme
-    assert LDPRED3_VERSION == "0.4.5"
+    assert LDPRED3_VERSION == "0.6.1"
 
     # CI installs ldpred3 from `master` but supports a *range*, so it must not
     # assert equality between the installed version and the declared floor.
@@ -690,7 +690,7 @@ def test_results_environmental_overlap_table_matches_its_csv():
 
     # The claim itself: no cell may exceed the bound the prose states.
     worst = max(float(r["biv_cc0_mae_realized"]) for r in rows)
-    assert worst <= 0.0242 + 1e-9, worst
+    assert worst <= 0.0246 + 1e-9, worst
 
 
 def test_results_polygenicity_table_matches_its_csv():

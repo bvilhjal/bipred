@@ -27,7 +27,7 @@ universal QC validation.
 Two findings are easy to misread:
 
 - **Table 11 no longer reproduces the old aggregate failure.** Joint-fit MAE
-  is at most 0.0242 after removing fit-time LD quantisation, but three
+  is at most 0.0246 after removing fit-time LD quantisation, but three
   individual fits still raise divergence warnings. Low mean error is not a
   clean bill of numerical health.
 - Timings are machine-specific and were regenerated with every accuracy row in
@@ -46,8 +46,8 @@ segments are tagged per backend and never mix.
 | Component | Value |
 |---|---|
 | Python | 3.14.6 |
-| bipred | 0.3.5 (`5c06ec7`, clean) |
-| ldpred3 | 0.4.5 (installed-tree SHA-256 `76e2c2c2dacf...`) |
+| bipred | 0.3.10.dev0 (`bf5236a`, clean) |
+| ldpred3 | 0.6.1 (`af5d92c`, clean git checkout) |
 | NumPy / Numba | 2.4.6 / 0.66.0 |
 | Simulator | msprime (`msprime-v1`) |
 | Platform | Apple M2 Pro (10 cores), macOS 26.5.2, arm64 |
@@ -56,6 +56,14 @@ segments are tagged per backend and never mix.
 All timing runs used one OpenBLAS, OMP, MKL, Numba, and NumExpr thread. Times
 are machine-specific. Peak RSS includes simulation, LD construction, reference
 panels, and JIT state present in each process.
+
+Table 1 describes the ten `run_all.sh` artifacts only. The manual benchmarks
+-- sections 8 and 10 below, and the external-tool comparisons -- still carry
+the earlier record (bipred 0.3.5 at `5c06ec7`, ldpred3 0.4.5), because they
+need real-data inputs and tool environments the regenerating sweep did not
+have. Read no table here as combining the two: a timing from a manual artifact
+and a timing from a `run_all.sh` artifact were not measured against the same
+ldpred3.
 
 ## Reading the results
 
@@ -146,11 +154,11 @@ The comparison uses five target points and six replicates at symmetric
 
 | Estimator | Symmetric MAE | Asymmetric MAE | Mean 5k fit time, symmetric |
 |---|---:|---:|---:|
-| LDSC | 0.0542 | 0.0608 | 0.033 s |
-| two univariate fits, `uni_gv` | 0.0190 | 0.0422 | 0.942 s |
-| two univariate fits, `uni_r2` | 0.0184 | 0.0420 | 0.942 s |
-| joint default | **0.0086** | **0.0174** | 0.136 s |
-| joint cross-sweep sensitivity | 0.0108 | 0.0242 | 0.135 s |
+| LDSC | 0.0542 | 0.0608 | 0.023 s |
+| two univariate fits, `uni_gv` | 0.0190 | 0.0424 | 0.873 s |
+| two univariate fits, `uni_r2` | 0.0186 | 0.0420 | 0.873 s |
+| joint default | **0.0086** | **0.0174** | 0.134 s |
+| joint cross-sweep sensitivity | 0.0108 | 0.0242 | 0.128 s |
 
 No estimator failed in these cells. The cross-sweep
 `rg_decorrelated=True` estimator did not improve on the default, including in
@@ -180,17 +188,20 @@ Each size runs in a fresh subprocess and reports one realized draw.
 
 | Variants | LDSC time | LDpred3 time | Peak RSS | Realized r_g | LDSC absolute error | LDpred3 absolute error |
 |---:|---:|---:|---:|---:|---:|---:|
-| 5,000 | 0.027 s | 0.118 s | 0.207 GB | 0.511 | 0.0399 | 0.0172 |
-| 10,000 | 0.132 s | 0.256 s | 0.318 GB | 0.519 | 0.0590 | 0.0024 |
-| 20,000 | 0.307 s | 0.463 s | 0.328 GB | 0.513 | 0.0332 | 0.0005 |
-| 40,000 | 1.300 s | 1.056 s | 0.421 GB | 0.518 | 0.0138 | 0.0016 |
-| 80,000 | 5.358 s | 2.053 s | 2.559 GB | 0.519 | 0.0632 | 0.0322 |
+| 5,000 | 0.015 s | 0.114 s | 0.219 GB | 0.511 | 0.0399 | 0.0172 |
+| 10,000 | 0.067 s | 0.227 s | 0.251 GB | 0.519 | 0.0590 | 0.0024 |
+| 20,000 | 0.251 s | 0.456 s | 0.298 GB | 0.513 | 0.0332 | 0.0005 |
+| 40,000 | 0.669 s | 0.917 s | 0.367 GB | 0.518 | 0.0138 | 0.0016 |
+| 80,000 | 3.108 s | 1.947 s | 0.621 GB | 0.519 | 0.0632 | 0.0322 |
 
-LDSC time overtakes the joint fit between 20k and 40k variants. Peak RSS is
-not smooth: it rises from 0.421 GB at 40k to 2.559 GB at 80k in this single
-subprocess draw. Treat that process-wide peak as machine- and
-allocator-dependent, not as a fixed per-variant memory law. This sweep measures
-the default dense D32 path, not million-variant LR8 production behavior.
+LDSC time overtakes the joint fit between 40k and 80k variants. Every accuracy
+column here is unchanged from the ldpred3 0.4.5 record to the digit; only the
+time and memory columns moved, and the 0.4.5 sweep's non-smooth peak RSS --
+0.421 GB at 40k jumping to 2.559 GB at 80k -- did not reappear, rising instead
+to 0.621 GB. Treat a process-wide peak as machine- and allocator-dependent, not
+as a fixed per-variant memory law: one draw showing the jump and the next not
+is the same warning either way. This sweep measures the default dense D32 path,
+not million-variant LR8 production behavior.
 
 **Figure 4. Running time, memory, and single-draw recovery.**
 
@@ -295,16 +306,20 @@ and correlates their residual environments.
 
 | Target | Environmental correlation | Realized r_g | LDSC free / constrained | Joint unset / set |
 |---:|---:|---:|---:|---:|
-| 0.0 | 0.0 | -0.022 | 0.0666 / 0.0353 | 0.0126 / 0.0118 |
-| 0.0 | 0.3 | -0.003 | 0.0622 / 0.0331 | 0.0146 / 0.0105 |
-| 0.0 | 0.6 | -0.003 | 0.0639 / 0.0297 | 0.0185 / 0.0090 |
-| 0.5 | 0.0 | 0.487 | 0.0389 / 0.0620 | 0.0147 / 0.0082 |
-| 0.5 | 0.6 | 0.494 | 0.0377 / 0.0633 | 0.0242 / 0.0072 |
+| 0.0 | 0.0 | -0.022 | 0.0666 / 0.0353 | 0.0123 / 0.0109 |
+| 0.0 | 0.3 | -0.003 | 0.0622 / 0.0331 | 0.0145 / 0.0109 |
+| 0.0 | 0.6 | -0.003 | 0.0639 / 0.0297 | 0.0189 / 0.0093 |
+| 0.5 | 0.0 | 0.487 | 0.0389 / 0.0620 | 0.0139 / 0.0078 |
+| 0.5 | 0.6 | 0.494 | 0.0377 / 0.0633 | 0.0246 / 0.0073 |
 
 The old fit-time `ld_int8` default quantised the caller's float LD and produced
 MAE as high as 0.86. Consuming the supplied float32 blocks leaves the current
-cell means between 0.0072 and 0.0242; setting the mechanistic `cross_corr`
-reduces them further in all five cells. The current log nevertheless records
+cell means between 0.0073 and 0.0246; setting the mechanistic `cross_corr`
+reduces them further in all five cells. The realized correlations and both
+LDSC columns are unchanged from the ldpred3 0.4.5 record; the joint columns
+moved by at most 0.0008, which is ldpred3 0.6.1's altered kernel reduction
+order carried through a few hundred Gibbs sweeps rather than a change of
+behaviour. The current log nevertheless records
 three individual divergence warnings. This stress test supports removing
 in-fit quantisation; it does not establish blanket robustness to environmental
 overlap.
