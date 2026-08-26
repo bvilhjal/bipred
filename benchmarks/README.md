@@ -169,20 +169,37 @@ manually:
 ten `run_all.sh` scripts were regenerated from clean revision `bf5236a`
 (bipred 0.3.10.dev0) against the current pin, ldpred3 0.6.1 at
 `af5d92c7aab6a5b67d15c94ebe28b89e33f5d69d`, with Python 3.14.6, NumPy 2.4.6 and
-Numba 0.66.0; `run_all.sh` selected msprime and all ten completed. The manual
-benchmarks -- `qc_factorial`, `real_ldl_cad`, `external_overlap`,
-`external_overlap_ldsc200k`, `external_hdl_tg` and `bivariate_demo` -- still
-carry the earlier 0.3.5 record (revision `5c06ec7`, ldpred3 0.4.5), because
-they need real-data inputs and tool environments that sweep did not have. They
-must be regenerated against the current pin before this counts as a
-release-quality record; until then, do not read a manual artifact and a
-`run_all.sh` artifact as one sweep.
+Numba 0.66.0; `run_all.sh` selected msprime and all ten completed. `bivariate_demo`,
+`external_overlap` and `external_overlap_ldsc200k` were regenerated on the same
+stack. Three artifacts have **not** been, because they need real-data inputs
+that were unavailable:
+
+| Artifact | Stack it still carries |
+|---|---|
+| `qc_factorial` | bipred 0.3.7, ldpred3 0.4.5 |
+| `real_ldl_cad` | bipred 0.3.5, ldpred3 0.4.5 |
+| `external_hdl_tg` | bipred 0.3.9.dev0, ldpred3 0.5.5.dev0, NumPy 1.26.4, Python 3.10 |
+
+Regenerate those three against the current pin before calling this a
+release-quality record; until then, do not read one of them and a regenerated
+artifact as one sweep.
 
 For the record: moving the pin left every bipred-owned estimate unchanged.
 What moved was ldpred3's univariate inference -- the `calib_*` columns of
-`mixer_overlap`, which are the only ones fed by `ldpred3_auto_infer`, and the
-`uni_gv`/`uni_r2` rows of `rg_methods` -- alongside timing and peak RSS
-throughout. The joint-fit columns beside them are identical.
+`mixer_overlap`, which are the only ones fed by `ldpred3_auto_infer`, the
+`uni_gv`/`uni_r2` rows of `rg_methods`, and `bivariate_demo`'s `solo_r2` --
+alongside timing and peak RSS throughout. The joint-fit columns beside them
+are identical.
+
+The two `external_overlap` artifacts moved for a separate and larger reason:
+their previous rows were simulated with the **bundled Numba coalescent**
+(`numba-v1`), because the interpreter that produced them could not import
+msprime. The regenerated rows use msprime (`msprime-v1`), the documented
+default. Those two backends draw different events from the same model and are
+tagged so they never mix, so the old and new rows are not comparable
+estimate-for-estimate -- the realized `r_g` that scores each cell is itself a
+different draw. The regenerated run also has a working `ldsc_orig` arm; in the
+previous record three of its cells had failed outright.
 
 Wall times are measurements of that 10-core Apple M2 Pro under one-thread
 controls, not portable expectations.

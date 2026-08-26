@@ -57,13 +57,14 @@ All timing runs used one OpenBLAS, OMP, MKL, Numba, and NumExpr thread. Times
 are machine-specific. Peak RSS includes simulation, LD construction, reference
 panels, and JIT state present in each process.
 
-Table 1 describes the ten `run_all.sh` artifacts only. The manual benchmarks
--- sections 8 and 10 below, and the external-tool comparisons -- still carry
-the earlier record (bipred 0.3.5 at `5c06ec7`, ldpred3 0.4.5), because they
-need real-data inputs and tool environments the regenerating sweep did not
-have. Read no table here as combining the two: a timing from a manual artifact
-and a timing from a `run_all.sh` artifact were not measured against the same
-ldpred3.
+Table 1 describes the thirteen artifacts regenerated on the current pin: the
+ten from `run_all.sh` plus `bivariate_demo`, `external_overlap` and
+`external_overlap_ldsc200k`. Three still carry older stacks, because they need
+real-data inputs that were unavailable -- `qc_factorial` (bipred 0.3.7,
+ldpred3 0.4.5), `real_ldl_cad` (0.3.5, 0.4.5) and `external_hdl_tg`
+(0.3.9.dev0, 0.5.5.dev0, NumPy 1.26.4). Read no table here as combining the
+two groups: a timing from one of those three and a timing from a regenerated
+artifact were not measured against the same ldpred3.
 
 ## Reading the results
 
@@ -346,22 +347,25 @@ every replicate at full precision.
 
 | Reference shrinkage | Architecture | Realized r_g | Alone | Joint | Gain | Estimated r_g | Joint fits with implausibility warning |
 |---:|---|---:|---:|---:|---:|---:|---:|
-| 0% | shared, target 0.0 | +0.003 | 0.577 | 0.582 | +0.0048 | +0.001 | 5 / 6 |
-| 0% | shared, target 0.3 | +0.306 | 0.576 | 0.591 | +0.0143 | +0.220 | 4 / 6 |
-| 0% | shared, target 0.6 | +0.606 | 0.575 | 0.577 | +0.0025 | +0.439 | 4 / 6 |
-| 0% | shared, target 0.9 | +0.902 | 0.566 | 0.699 | +0.1330 | +0.818 | 6 / 6 |
-| 0% | disjoint causal support | -0.015 | 0.584 | 0.582 | -0.0016 | +0.001 | 6 / 6 |
-| 5% | shared, target 0.0 | +0.003 | 0.583 | 0.596 | +0.0129 | +0.000 | 0 / 6 |
-| 5% | shared, target 0.3 | +0.306 | 0.581 | 0.609 | +0.0281 | +0.295 | 0 / 6 |
-| 5% | shared, target 0.6 | +0.606 | 0.577 | 0.660 | +0.0824 | +0.546 | 0 / 6 |
-| 5% | shared, target 0.9 | +0.902 | 0.570 | 0.771 | +0.2004 | +0.767 | 0 / 6 |
-| 5% | disjoint causal support | -0.015 | 0.586 | 0.583 | -0.0032 | -0.003 | 0 / 6 |
+| 0% | shared, target 0.0 | +0.003 | 0.582 | 0.582 | -0.0003 | +0.001 | 5 / 6 |
+| 0% | shared, target 0.3 | +0.306 | 0.580 | 0.591 | +0.0108 | +0.220 | 4 / 6 |
+| 0% | shared, target 0.6 | +0.606 | 0.578 | 0.577 | -0.0007 | +0.439 | 4 / 6 |
+| 0% | shared, target 0.9 | +0.902 | 0.570 | 0.699 | +0.1293 | +0.818 | 6 / 6 |
+| 0% | disjoint causal support | -0.015 | 0.587 | 0.582 | -0.0045 | +0.001 | 6 / 6 |
+| 5% | shared, target 0.0 | +0.003 | 0.581 | 0.596 | +0.0148 | +0.000 | 0 / 6 |
+| 5% | shared, target 0.3 | +0.306 | 0.579 | 0.609 | +0.0300 | +0.295 | 0 / 6 |
+| 5% | shared, target 0.6 | +0.606 | 0.576 | 0.660 | +0.0839 | +0.546 | 0 / 6 |
+| 5% | shared, target 0.9 | +0.902 | 0.566 | 0.771 | +0.2047 | +0.767 | 0 / 6 |
+| 5% | disjoint causal support | -0.015 | 0.584 | 0.583 | -0.0003 | -0.003 | 0 / 6 |
 
 The raw-reference arm is an unstable control: 25 of 30 fits raise the
 implausibility warning and three raise a divergence warning. Its apparent gains
-are not interpretable as estimator performance. Five-percent shrinkage removes
-all warnings in this fixture; its shared-effect gain rises from +0.0129 at
-target 0 to +0.2004 at target 0.9. That pattern is conditional on this panel,
+are not interpretable as estimator performance, and two of them changed sign
+between the ldpred3 0.4.5 and 0.6.1 records while every joint R² and estimated
+`r_g` beside them stayed put -- the arm's gain column is a difference between
+two large, nearly equal numbers, so it tracks whatever moves the `Alone`
+column. Five-percent shrinkage removes all warnings in this fixture; its
+shared-effect gain rises from +0.0148 at target 0 to +0.2047 at target 0.9. That pattern is conditional on this panel,
 regularisation, and simulation rather than a general gain estimate.
 
 The last row has exactly disjoint causal supports, but LD gives it mean realized

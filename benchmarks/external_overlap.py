@@ -79,7 +79,14 @@ from _external_common import (                                      # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WORK = os.environ.get("EXT_WORK", os.path.join(HERE, ".ext_work"))
-OUT = os.environ.get("OUT", os.path.join(HERE, "external_overlap.csv"))
+# A relative OUT resolves against this directory, not the caller's cwd: the
+# default is HERE-based, the harness and RESULTS.md read the artifacts from
+# here, and the documented `OUT=external_overlap_ldsc200k.csv` invocation is
+# run from the repo root -- where it would otherwise silently drop the CSV and
+# its provenance sidecar one directory up. Pass an absolute path to override.
+OUT = os.environ.get("OUT", "external_overlap.csv")
+if not os.path.isabs(OUT):
+    OUT = os.path.join(HERE, OUT)
 
 N_REF = int(os.environ.get("N_REF", "3000"))
 NB = int(os.environ.get("NB", "80"))        # independent coalescent segments
