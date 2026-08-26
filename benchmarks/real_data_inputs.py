@@ -17,8 +17,12 @@ from importlib import metadata
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANIFEST = os.path.join(HERE, "real_data_inputs.sha256")
 REPO_ROOT = os.path.dirname(HERE)
-LDPRED3_REV = "5d86ac9d97e42c57fa31d84ff093d3bf637dc0e6"
-LDPRED3_VERSION = "0.4.5"
+# The ldpred3 the benchmark artifacts were generated against. Moving this
+# pin re-bases the record: numbers may shift for ldpred3 reasons as well as
+# bipred ones, so regenerate every artifact in the same sweep rather than
+# splicing a new pin's rows into an old pin's table.
+LDPRED3_REV = "af5d92c7aab6a5b67d15c94ebe28b89e33f5d69d"
+LDPRED3_VERSION = "0.6.1"
 
 
 def load_manifest(path=MANIFEST):
