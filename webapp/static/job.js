@@ -28,7 +28,11 @@
    * counts the ones before the named one — so that reads as done + 1.
    * Concurrent Catalog events arrive wrapped as {traits: {trait1, trait2}}. */
   function renderStep(p) {
-    let text = p.phase || p.step;
+    /* Trait pipelines use ``phase`` only to group progress under the
+     * overlapping prepare/screen stages. Their human-readable operation is
+     * ``step``; fit events still use phase names such as burn-in/sampling. */
+    const fitPhase = p.phase === "burn-in" || p.phase === "sampling";
+    let text = fitPhase ? p.phase : (p.step || p.phase);
     if (!p.total) return text;
     const stepwise = p.unit === "step";
     const at = stepwise ? Math.min(p.done + 1, p.total) : p.done;
@@ -46,7 +50,10 @@
       p.accession + " (trait " + p.trait + ")" : "trait " + p.trait;
     let text = null;
     if (p && p.step) {
-      text = renderStep(p);
+      text = (p.trait ? where + " — " : "") + renderStep(p);
+    } else if (p && p.screen_waiting) {
+      text = "Waiting for the safe LD-screen slot for " + where + " — " +
+             (p.reason || "the loaded BLAS cannot run two eigensolvers safely");
     } else if (p && p.prepared_waiting) {
       text = "Waiting for another job to QC, harmonize, and screen " + where +
              " — " + p.prepared_waiting + " s";
@@ -118,15 +125,18 @@
   function renderStages(s) {
     if (!stagesEl) return;
     const details = s.stage_details || {};
+    const activeStages = Array.isArray(s.active_stages) ? s.active_stages : [];
     const rows = cfg.stages.map(function (stage) {
       const name = stage.key;
       const detail = details[name] || {};
+      const active = activeStages.length ? activeStages.includes(name) :
+                                           name === s.stage;
       let cls = "pending", state = "pending";
       if (s.stages && Object.prototype.hasOwnProperty.call(s.stages, name)) {
         cls = "done";
         state = detail.skipped ? "skipped" :
                 Number(s.stages[name]).toFixed(2) + " s";
-      } else if (name === s.stage) {
+      } else if (active) {
         cls = s.status === "failed" ? "failed" : "active";
         state = s.status === "failed" ? "failed" : "running";
       }
@@ -152,6 +162,12 @@
       return row;
     });
     stagesEl.replaceChildren(...rows);
+  }
+
+  function activeStageLabel(s) {
+    const active = Array.isArray(s.active_stages) ? s.active_stages : [];
+    if (!active.length) return stageLabel(s.stage || s.status);
+    return active.map(stageLabel).join(" + ");
   }
 
   function renderMunge(m) {
@@ -208,13 +224,13 @@
       badge.textContent = s.status;
       badge.className = "badge badge-" + s.status;
     }
-    if (stageName) stageName.textContent = stageLabel(s.stage || s.status);
+    if (stageName) stageName.textContent = activeStageLabel(s);
     renderStages(s);
     renderMunge(s.munge);
     renderProgress(s.progress);
     if (note && !note.hidden) {
       note.innerHTML = "Current stage: <strong>" +
-                       stageLabel(s.stage || s.status) +
+                       activeStageLabel(s) +
                        "</strong>. This page updates live.";
     }
 

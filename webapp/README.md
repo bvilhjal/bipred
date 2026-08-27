@@ -100,7 +100,9 @@ LD-consistency screen, indexed in the full LD reference's order. The key covers
 the normalized input content, exact LD-cache content hash, resolved sample-size
 semantics, column overrides, QC and screen settings, preparation schema, and
 bipred/ldpred3 versions, plus the NumPy version and BLAS/LAPACK implementation,
-version, and integer API. Labels, the other trait, burn-in, iterations,
+version, and integer API. It also binds the stored pre-screen univariate LDSC
+QC record to the exact full-reference LD-score payload and original M. Labels,
+the other trait, burn-in, iterations,
 sampling-error correlation, thread counts, CPU dispatch, and weight output do
 not alter that per-trait work.
 A rerun or an A+B then A+C analysis can therefore reuse A's complete post-screen
@@ -148,8 +150,8 @@ visible stages follow the reusable-data boundaries:
 | Stage | Reported |
 |---|---|
 | **Get Catalog data** (Catalog inputs only) | The two independent traits are fetched/reused concurrently. Each trait keeps its own live line with network MB, percent, and MB/s; stored-copy reuse and waits are explicit. The completed row retains downloaded/reused outcomes for both traits. |
-| **Prepare each trait** | Validate and read both inputs and the selected LD reference. |
-| **Run LD-consistency screen** | Reuse a complete QC'd, harmonized, and screened trait artifact, or run QC, LD alignment, and the mandatory DENTIST-inspired trait-local screen before storing it. The completed row reports the outcome for each trait. |
+| **Prepare each trait** | Two trait workers independently validate/hash their input, run QC and harmonization against one shared LD owner, and perform a quick free-intercept univariate LDSC check using precomputed full-reference scores and the original M. Gross attrition or implausible h²/intercept diagnostics are reported as warnings; structurally invalid inputs stop. |
+| **Run LD-consistency screen** | Each trait proceeds directly from preparation into its mandatory DENTIST-inspired screen, without waiting for the other trait. Confirmed single-threaded reentrant BLAS permits both screens to overlap; otherwise the two screen calls serialize while preparation remains concurrent, avoiding known OpenMP-OpenBLAS corruption. The post-screen artifact is then stored. |
 | **Combine the two traits** | Intersect the screened traits, check allele frequencies, and subset LD. This always reruns. |
 | **Run LD-score diagnostic** | Reuse the selected reference's one precomputed LD-score vector, select the paired GWAS rows, regress with the original reference M, and initialize the sampler's two h² values. A missing or invalid reference artifact stops the job rather than silently changing the fitted method; a data-dependent regression failure is recorded and uses the deterministic default start. |
 | **Fit bivariate model** | Sweep *k* of *burn-in + sampling*, labelled by phase. |
@@ -160,8 +162,10 @@ transitions and completed-stage summaries are persisted, so a fast cache hit
 does not disappear between the browser's polls. With JavaScript disabled the
 page still renders the last server-side state and offers a reload link.
 
-Stage schema 3 uses `acquire`, `prepare`, `screen`, `pair`, `ldsc`, `fit`, and
-`weights` in `job.json` and result provenance. The page retains schema 2's
+Stage schema 4 uses `acquire`, overlapping `prepare`/`screen`, `pair`, `ldsc`,
+`fit`, and `weights` in `job.json` and result provenance. `active_stages` keeps
+both overlapping rows truthful. The page retains schema 3's serial trait-stage
+semantics, schema 2's
 combined optional-screen `pair` stage and schema 1's older
 `download`/`validate`/`harmonize` mapping for completed jobs.
 
@@ -172,8 +176,9 @@ Uploads are written under a `staging` job and transition atomically to
 most `BIPRED_WEB_CONCURRENCY` fit subprocesses (`python -m webapp.runner`),
 each pinned to one numerical thread (the same BLAS pins as the test suite, so
 N jobs never oversubscribe the host and numerics stay deterministic).
-`job.json` tracks acquire → prepare → screen → pair → ldsc → fit → (weights) with
-per-stage seconds; a persisted `launching` claim prevents duplicate starts,
+`job.json` tracks acquire → (prepare and screen per trait) → pair → ldsc → fit
+→ (weights) with per-stage seconds; pairing starts only after both trait workers
+join. A persisted `launching` claim prevents duplicate starts,
 and startup reconciliation deletes unpublished staging uploads and fails
 interrupted running jobs rather than leaving either stuck. The runner writes
 `result.json`, `munge.json`, and optional weight files. Results record
@@ -186,7 +191,9 @@ independently of jobs, under the `BIPRED_WEB_STORE_GB` budget, and every
 trait's complete post-screen artifact—including derived arrays from an
 upload—has its own `BIPRED_WEB_PREPARED_GB` budget and can outlive the job.
 LD scores are likewise immutable reference data: every runner reads the small
-`<cache>.ldscores.npz` sidecar and performs only the trait-dependent regression.
+`<cache>.ldscores.npz` sidecar once, uses it for each pre-screen univariate QC
+regression and the post-pair diagnostic, and performs only trait-dependent
+regressions.
 It never squares a pair-specific LD subset. Because these scores initialize
 the sampler, a registered reference is incomplete without a valid sidecar.
 The cache fingerprint covers both NPZ metadata and all numerical mmap payloads.

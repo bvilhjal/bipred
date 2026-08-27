@@ -37,21 +37,79 @@ class _Stages:
         self.t0 = None
         self._lock = threading.Lock()
         self._last_progress = {}
+        self._started = {}
+        self._prepared_traits = set()
+
+    def _done_locked(self, name):
+        started = self._started.pop(name, self.t0)
+        if started is None:
+            raise RuntimeError(f"stage {name!r} was not started")
+        self.job["stages"][name] = round(time.time() - started, 3)
+        active = [item for item in self.job.get("active_stages", [])
+                  if item != name]
+        self.job["active_stages"] = active
+        if self.job.get("stage") == name and active:
+            self.job["stage"] = active[-1]
+        if not active:
+            self.job["progress"] = None
 
     def start(self, name):
         with self._lock:
             self.job["stage_schema"] = jobs.STAGE_SCHEMA
             self.job.setdefault("stage_details", {})
             self.job["stage"] = name
+            self.job["active_stages"] = [name]
             self.job["progress"] = None
             self.t0 = time.time()
+            self._started[name] = self.t0
             self._last_progress = {}
+            jobs.save_job(self.root, self.job)
+
+    def activate(self, name):
+        """Start an overlapping stage without completing its predecessor."""
+        with self._lock:
+            if name not in self._started:
+                self._started[name] = time.time()
+            active = self.job.setdefault("active_stages", [])
+            if name not in active:
+                active.append(name)
+            self.job["stage"] = name
             jobs.save_job(self.root, self.job)
 
     def done(self, name):
         with self._lock:
-            self.job["stages"][name] = round(time.time() - self.t0, 3)
-            self.job["progress"] = None
+            self._done_locked(name)
+            jobs.save_job(self.root, self.job)
+
+    def finish_prepare_trait(self, trait, info):
+        """Publish one trait's preparation and close the stage after both."""
+        key = f"trait{int(trait)}"
+        with self._lock:
+            if key in self._prepared_traits:
+                return
+            self._prepared_traits.add(key)
+            details = self.job.setdefault("stage_details", {})
+            previous = details.get("prepare") or {}
+            traits = dict(previous.get("traits") or {})
+            traits[key] = info
+            ordered = {name: traits[name] for name in ("trait1", "trait2")
+                       if name in traits}
+            summaries = []
+            for name, value in ordered.items():
+                status = value.get("qc_status", "complete")
+                text = (f"trait {name[-1]}: {value['n_usable']:,} aligned "
+                        f"({status})")
+                if value.get("warnings"):
+                    text += f" — {value['warnings'][0]}"
+                summaries.append(text)
+            details["prepare"] = {
+                **previous,
+                "summary": "; ".join(summaries) + ".",
+                "traits": ordered,
+                "parallel": True,
+            }
+            if len(self._prepared_traits) == 2:
+                self._done_locked("prepare")
             jobs.save_job(self.root, self.job)
 
     def progress(self, **fields):
@@ -70,8 +128,7 @@ class _Stages:
             self._last_progress[key] = now
             fields.setdefault("mb_s", None)
             trait = fields.get("trait")
-            if (self.job.get("stage") == "acquire"
-                    and trait in (1, 2, "1", "2")):
+            if trait in (1, 2, "1", "2"):
                 current = self.job.get("progress")
                 if not isinstance(current, dict) or not isinstance(
                         current.get("traits"), dict):
@@ -148,6 +205,25 @@ def _to_float_list(values):
 
 _DEFAULT_H2_INIT = (0.1, 0.1)
 _PREPARED_SCOPE = "post-QC, LD-aligned, trait-local LD-consistency-screened"
+_QC_LDSC_PARAMETERS = {
+    "chi2_cap": 80.0,
+    "chi2_n_scale": 0.001,
+    "max_jackknife_blocks": 20,
+    "n_iter": 2,
+    "intercept": "free",
+}
+_QC_WARNING_THRESHOLDS = {
+    # Absolute LDSC warning thresholds are not meaningful on tiny panels.
+    "minimum_warning_variants": 10_000,
+    "h2_interval": [0.0, 1.0],
+    "intercept_interval": [0.8, 1.2],
+    "minimum_mean_chi2": 0.9,
+    "maximum_ratio": 0.5,
+    "minimum_qc_retained_fraction": 0.5,
+    "minimum_reference_match_fraction": 0.5,
+    "maximum_screen_drop_fraction": 0.01,
+    "minimum_screen_warning_variants": 1_000,
+}
 
 
 def _screen_parameters():
@@ -159,8 +235,197 @@ def _screen_parameters():
     }
 
 
+def _ldsc_qc_identity(panel):
+    """Semantic identity of the reference-wide scores used before DENTIST."""
+    return {
+        "m_snps": int(panel.m_snps),
+        "score_sha256": panel.score_sha256.lower(),
+        "definition": panel.definition.strip(),
+        "source": panel.source.strip(),
+        "source_sha256": (panel.source_sha256.lower()
+                          if panel.source_sha256 is not None else None),
+        "algorithm": panel.algorithm.strip(),
+        "correction": panel.correction.strip(),
+        "parameters": dict(_QC_LDSC_PARAMETERS),
+    }
+
+
+def _run_trait_ldsc_qc(trait, panel):
+    """Fast, free-intercept univariate LDSC on aligned pre-screen rows."""
+    import numpy as np
+    from ldpred3 import ldsc_h2
+
+    identity = _ldsc_qc_identity(panel)
+    with np.errstate(over="ignore"):
+        chisq = np.square(trait.z)
+    threshold = np.maximum(
+        _QC_LDSC_PARAMETERS["chi2_cap"],
+        _QC_LDSC_PARAMETERS["chi2_n_scale"] * trait.n_eff)
+    keep = np.isfinite(chisq) & (chisq <= threshold)
+    n_input = int(len(trait))
+    n_regression = int(np.count_nonzero(keep))
+    diagnostic = {
+        "identity": identity,
+        "status": "unavailable",
+        "n_aligned_variants": n_input,
+        "n_regression_variants": n_regression,
+        "n_chi2_excluded": n_input - n_regression,
+        "h2": None, "h2_se": None,
+        "intercept": None, "intercept_se": None,
+        "mean_chi2": None, "ratio": None,
+        "used_for_filtering": False,
+        "used_for_h2_init": False,
+    }
+    if n_regression < 2:
+        diagnostic["error"] = (
+            "fewer than two aligned variants passed the LDSC-only "
+            "chi-square cap")
+        return diagnostic
+    indices = trait.indices[keep]
+    try:
+        result = ldsc_h2(
+            chisq[keep], panel.scores[indices],
+            trait.n_eff[keep], m_snps=panel.m_snps,
+            n_blocks=min(
+                _QC_LDSC_PARAMETERS["max_jackknife_blocks"], n_regression),
+            n_iter=_QC_LDSC_PARAMETERS["n_iter"])
+    except (ValueError, np.linalg.LinAlgError, FloatingPointError) as exc:
+        diagnostic["error"] = str(exc)
+        return diagnostic
+    if not np.all(np.isfinite(
+            [result.h2, result.intercept, result.mean_chisq])):
+        diagnostic["error"] = (
+            "univariate LDSC returned a non-finite h2, intercept, or mean "
+            "chi-square estimate")
+        return diagnostic
+    diagnostic.update({
+        "status": "available",
+        "h2": float(result.h2),
+        "h2_se": float(result.h2_se),
+        "intercept": float(result.intercept),
+        "intercept_se": float(result.intercept_se),
+        "mean_chi2": float(result.mean_chisq),
+        "ratio": float(result.ratio),
+        "intercept_minus_one": float(result.intercept - 1.0),
+        "flags": {
+            "h2_nonpositive": bool(result.h2 <= 0.0),
+            "h2_above_one": bool(result.h2 > 1.0),
+            "intercept_nonpositive": bool(result.intercept <= 0.0),
+        },
+    })
+    return _json_safe(diagnostic)
+
+
+def _assess_trait_quality(trait, ldsc, *, screen=None):
+    """Flag gross attrition or implausible univariate LDSC diagnostics.
+
+    These are transparent triage heuristics, not additional variant filters.
+    Structural input failures still raise at the preparation/reference
+    boundaries; a noisy or unusual LDSC estimate warns and remains available
+    for inspection rather than vetoing a potentially legitimate phenotype.
+    """
+    qc = trait.log.get("qc") or {}
+    harmonize = trait.log.get("harmonize") or {}
+    n_input = int(qc.get("n_input") or 0)
+    n_qc = int(qc.get("n_kept") or 0)
+    n_sumstats = int(harmonize.get("n_sumstats") or n_qc)
+    n_usable = int(screen["n_input"]) if screen is not None else int(len(trait))
+    qc_fraction = n_qc / n_input if n_input else None
+    match_fraction = n_usable / n_sumstats if n_sumstats else None
+    issues = []
+    if (qc_fraction is not None and qc_fraction <
+            _QC_WARNING_THRESHOLDS["minimum_qc_retained_fraction"]):
+        issues.append(
+            f"sum-statistics QC retained only {qc_fraction:.1%} of input rows")
+    if (match_fraction is not None and match_fraction <
+            _QC_WARNING_THRESHOLDS["minimum_reference_match_fraction"]):
+        issues.append(
+            f"only {match_fraction:.1%} of post-QC rows aligned to the LD "
+            "reference")
+
+    n_regression = int(ldsc.get("n_regression_variants") or 0)
+    ldsc_evaluated = (
+        ldsc.get("status") == "available"
+        and n_regression >= _QC_WARNING_THRESHOLDS["minimum_warning_variants"])
+    if ldsc.get("status") != "available":
+        issues.append(
+            "the pre-DENTIST univariate LDSC check was unavailable: "
+            + str(ldsc.get("error") or "unknown regression failure"))
+    elif ldsc_evaluated:
+        h2 = ldsc.get("h2")
+        intercept = ldsc.get("intercept")
+        mean_chi2 = ldsc.get("mean_chi2")
+        ratio = ldsc.get("ratio")
+        lo, hi = _QC_WARNING_THRESHOLDS["h2_interval"]
+        if h2 is None or not lo < h2 <= hi:
+            issues.append(
+                f"univariate LDSC h2={h2!r} lies outside ({lo:g}, {hi:g}]")
+        lo, hi = _QC_WARNING_THRESHOLDS["intercept_interval"]
+        if intercept is None or not lo <= intercept <= hi:
+            issues.append(
+                f"univariate LDSC intercept={intercept!r} lies outside "
+                f"[{lo:g}, {hi:g}]")
+        if (mean_chi2 is None or mean_chi2 <
+                _QC_WARNING_THRESHOLDS["minimum_mean_chi2"]):
+            issues.append(
+                f"mean chi-square={mean_chi2!r} is below "
+                f"{_QC_WARNING_THRESHOLDS['minimum_mean_chi2']:g}")
+        if (ratio is not None and ratio >
+                _QC_WARNING_THRESHOLDS["maximum_ratio"]):
+            issues.append(
+                f"LDSC attenuation ratio={ratio:.3g} exceeds "
+                f"{_QC_WARNING_THRESHOLDS['maximum_ratio']:g}")
+
+    screen_fraction = None
+    if screen is not None:
+        n_screen_input = int(screen["n_input"])
+        screen_fraction = (
+            int(screen["n_dropped"]) / n_screen_input
+            if n_screen_input else None)
+        if (n_screen_input >=
+                _QC_WARNING_THRESHOLDS["minimum_screen_warning_variants"]
+                and screen_fraction >
+                _QC_WARNING_THRESHOLDS["maximum_screen_drop_fraction"]):
+            issues.append(
+                f"the LD-consistency screen dropped {screen_fraction:.1%} "
+                "of aligned variants")
+    return {
+        "status": "warning" if issues else (
+            "pass" if ldsc_evaluated else "not evaluated at genome scale"),
+        "warnings": issues,
+        "n_input": n_input,
+        "n_after_qc": n_qc,
+        "n_usable": n_usable,
+        "qc_retained_fraction": qc_fraction,
+        "reference_match_fraction": match_fraction,
+        "screen_drop_fraction": screen_fraction,
+        "ldsc_thresholds_evaluated": bool(ldsc_evaluated),
+        "thresholds": dict(_QC_WARNING_THRESHOLDS),
+    }
+
+
+def _screen_parallelism():
+    """Whether this process may run two DENTIST eigensolvers concurrently."""
+    from bipred._ldpred3_compat import _blas_pool_safe, _blas_runtime_info
+
+    threads, nested_safe = _blas_runtime_info()
+    safe = bool(_blas_pool_safe(True))
+    if safe:
+        reason = "single-threaded reentrant BLAS confirmed"
+    elif threads is None:
+        reason = "BLAS reentrancy could not be confirmed"
+    elif threads != 1:
+        reason = f"loaded BLAS uses {threads} threads"
+    else:
+        reason = "OpenMP-layer BLAS is unsafe for concurrent eigensolvers"
+    return safe, reason, {
+        "concurrent": safe, "blas_threads": threads,
+        "blas_reentrant": nested_safe, "reason": reason,
+    }
+
+
 def _required_ld_score_rows(cache, root, *, cache_sha256, n_variants,
-                            cache_indices, fitted_shape):
+                            cache_indices, fitted_shape, panel=None):
     """Load the selected reference's scores and gather exact fitted rows.
 
     Reference integrity is deliberately outside the optional LDSC-regression
@@ -169,9 +434,15 @@ def _required_ld_score_rows(cache, root, *, cache_sha256, n_variants,
     """
     import numpy as np
 
-    panel = caches.load_or_create_ld_score_panel(
-        cache, root, cache_sha256=cache_sha256,
-        n_variants=int(n_variants))
+    if panel is None:
+        panel = caches.load_or_create_ld_score_panel(
+            cache, root, cache_sha256=cache_sha256,
+            n_variants=int(n_variants))
+    elif (panel.cache_sha256 != cache_sha256
+          or int(panel.m_snps) != int(n_variants)):
+        raise ValueError(
+            "preloaded LD-score panel does not match the selected LD "
+            "reference generation")
     indices = np.asarray(cache_indices)
     if (indices.ndim != 1 or indices.shape != tuple(fitted_shape)
             or not np.issubdtype(indices.dtype, np.integer)
@@ -456,7 +727,11 @@ def _n_semantics(options, trait):
     return {"mode": "per_variant"}
 
 
-def _progress_sink(stage):
+class _TraitPipelineCancelled(RuntimeError):
+    """Internal cooperative stop after the counterpart trait has failed."""
+
+
+def _progress_sink(stage, *, trait=None, phase=None, cancel=None):
     """Turn library progress events into job-status updates.
 
     ``bipred._progress`` deliberately lets a callback's exception propagate,
@@ -467,8 +742,16 @@ def _progress_sink(stage):
     clock read until the second is up.
     """
     def sink(event):
+        if cancel is not None and cancel.is_set():
+            raise _TraitPipelineCancelled(
+                f"trait{trait} stopped because its counterpart failed")
+        fields = dict(event)
+        if trait is not None:
+            fields["trait"] = trait
+        if phase is not None:
+            fields["phase"] = phase
         try:
-            stage.progress(**event)
+            stage.progress(**fields)
         except OSError:
             pass
     return sink
@@ -520,7 +803,7 @@ def run(job_dir: Path, job: dict) -> None:
     captured_warnings = []
     root = job_dir.parent.parent
     opt = job["options"]
-    # This is a method invariant in stage schema 3, not a user-tunable
+    # This is a method invariant in stage schema 4, not a user-tunable
     # sensitivity option. It also upgrades a queued schema-2 job safely.
     opt["screen"] = True
     cache = caches.cache_path(opt["cache_key"], root)
@@ -627,146 +910,274 @@ def run(job_dir: Path, job: dict) -> None:
     stage.start("prepare")
     from bipred import (pair_prepared_traits, prepare_trait_sumstats,
                         screen_prepared_trait)
+    from bipred.prepare import _cache_variant_table
+    from ldpred3.harmonize import _variant_indices
     from ldpred3.sumstats import detect_columns
     from . import prepared_store
     prepared_ld = None
     prep = None
-    traits = []
+    traits = {}
     prepared_info = {}
-    try:
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            for trait, path, overrides, label in (
-                    (1, ss1, opt["columns1"], job["labels"]["trait1"]),
-                    (2, ss2, opt["columns2"], job["labels"]["trait2"])):
-                try:
-                    detect_columns(str(path), **overrides)
-                except Exception as exc:
-                    raise ValueError(
-                        f"trait{trait} ({label}): cannot interpret columns: "
-                        f"{exc}")
-            stage.progress(step="Load LD reference")
-            prepared_ld, ld_sha256 = _load_stable_ld_cache(
-                cache, root, expected_sha256=expected_ld_sha256)
-            input_sha256 = {
-                "trait1": _sha256(ss1), "trait2": _sha256(ss2),
-            }
-            stage.detail(
-                "prepare",
-                "Validated both input schemas and loaded the selected LD "
-                "reference; no unscreened trait artifact was published.",
-                traits={"trait1": "columns validated",
-                        "trait2": "columns validated"},
-                ld_sha256=ld_sha256, published=False)
-    except Exception as exc:
-        if prepared_ld is not None:
-            prepared_ld.close()
-        # Let the track record blame the right catalog accession when one
-        # trait fails; preparation failures never belong to its counterpart.
-        attributed = _attribute_to_catalog(exc, job)
-        if attributed is not None:
-            raise attributed from exc
-        raise
-    captured_warnings.extend(_warning_rows("prepare", caught))
-    stage.done("prepare")
-
-    # The mandatory screen is trait-local and deliberately occurs after all
-    # reusable QC/alignment work but before the traits are intersected. Thus a
-    # trait is judged against every usable neighbour it carries on this exact
-    # reference, not against a counterpart-dependent missingness pattern.
-    stage.start("screen")
+    input_sha256 = {}
     screen_params = _screen_parameters()
     screen_outcomes = {}
+    warning_rows = {}
+    cancel_traits = threading.Event()
+    screen_lock = threading.Lock()
     try:
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            for trait, path in ((1, ss1), (2, ss2)):
-                key = f"trait{trait}"
-                catalog = opt.get(f"catalog{trait}")
-                accession = catalog.get("accession") if catalog else None
-                logical_sha256 = (
-                    catalog.get("normalised_sha256") if catalog
-                    else input_sha256[key])
-                if not logical_sha256:
-                    raise ValueError(
-                        f"{key}: input lacks a logical content hash; "
-                        "refusing unsafe prepared-data reuse")
-                spec = prepared_store.semantic_spec(
-                    logical_input_sha256=logical_sha256,
-                    ld_sha256=ld_sha256,
-                    n_semantics=_n_semantics(opt, trait),
-                    columns=opt[f"columns{trait}"], qc=True, qc_params={},
-                    screen=True, screen_params=screen_params)
+        stage.progress(step="Load shared LD reference and LD scores",
+                       phase="prepare")
+        prepared_ld, ld_sha256 = _load_stable_ld_cache(
+            cache, root, expected_sha256=expected_ld_sha256)
+        ld_score_panel = caches.load_or_create_ld_score_panel(
+            cache, root, cache_sha256=ld_sha256,
+            n_variants=int(len(prepared_ld.variant_ids)))
+        ldsc_qc_identity = _ldsc_qc_identity(ld_score_panel)
+        # Avoid two cold workers transiently building the reference-sized ID
+        # dictionary. The table and its index are immutable thereafter.
+        _variant_indices(_cache_variant_table(prepared_ld))
+        parallel_screen, screen_reason, screen_execution = \
+            _screen_parallelism()
+        stage.detail(
+            "prepare",
+            "Loaded one shared LD reference and its precomputed LD scores; "
+            "both trait pipelines are starting independently.",
+            traits={}, ld_sha256=ld_sha256, published=False,
+            parallel=True, shared_ld_reference=True,
+            pre_dentist_ldsc=True)
 
-                def build(path=path, trait=trait, key=key,
-                          accession=accession):
+        def trait_pipeline(trait, path):
+            key = f"trait{trait}"
+            label = job["labels"][key]
+            catalog = opt.get(f"catalog{trait}")
+            accession = catalog.get("accession") if catalog else None
+            built_here = {"value": False}
+
+            def checkpoint():
+                if cancel_traits.is_set():
+                    raise _TraitPipelineCancelled(
+                        f"{key} stopped because its counterpart failed")
+
+            checkpoint()
+            stage.progress(
+                trait=trait, accession=accession, phase="prepare",
+                step=f"Validate and hash trait {trait}")
+            try:
+                detect_columns(str(path), **opt[f"columns{trait}"])
+            except Exception as exc:
+                raise ValueError(
+                    f"{key} ({label}): cannot interpret columns: {exc}") \
+                    from exc
+            physical_sha256 = _sha256(path)
+            logical_sha256 = (
+                catalog.get("normalised_sha256") if catalog
+                else physical_sha256)
+            if not logical_sha256:
+                raise ValueError(
+                    f"{key}: input lacks a logical content hash; refusing "
+                    "unsafe prepared-data reuse")
+            spec = prepared_store.semantic_spec(
+                logical_input_sha256=logical_sha256,
+                ld_sha256=ld_sha256,
+                n_semantics=_n_semantics(opt, trait),
+                columns=opt[f"columns{trait}"], qc=True, qc_params={},
+                screen=True, screen_params=screen_params,
+                pre_dentist_ldsc=ldsc_qc_identity)
+
+            def build():
+                built_here["value"] = True
+                checkpoint()
+                stage.progress(
+                    trait=trait, accession=accession, phase="prepare",
+                    step=f"QC, harmonize, and run univariate LDSC for trait "
+                         f"{trait}")
+                unscreened = prepare_trait_sumstats(
+                    prepared_ld, str(path),
+                    n_eff=opt[f"n_eff{trait}"],
+                    n_cases=opt[f"n_cases{trait}"],
+                    n_controls=opt[f"n_controls{trait}"],
+                    columns=opt[f"columns{trait}"], label=key,
+                    progress=None)
+                checkpoint()
+                ldsc_qc = _run_trait_ldsc_qc(
+                    unscreened, ld_score_panel)
+                pre_quality = _assess_trait_quality(unscreened, ldsc_qc)
+                unscreened.log["pre_dentist_ldsc"] = ldsc_qc
+                unscreened.log["qc_assessment"] = pre_quality
+                stage.finish_prepare_trait(trait, {
+                    "n_usable": int(len(unscreened)),
+                    "qc_status": pre_quality["status"],
+                    "warnings": list(pre_quality["warnings"]),
+                    "ldsc_h2": ldsc_qc.get("h2"),
+                    "ldsc_intercept": ldsc_qc.get("intercept"),
+                })
+
+                stage.activate("screen")
+                if parallel_screen:
+                    acquired = False
+                else:
+                    acquired = screen_lock.acquire(blocking=False)
+                    if not acquired:
+                        stage.progress(
+                            trait=trait, accession=accession, phase="screen",
+                            screen_waiting=True, reason=screen_reason)
+                        while not screen_lock.acquire(timeout=0.25):
+                            checkpoint()
+                        acquired = True
+                try:
+                    checkpoint()
                     stage.progress(
-                        trait=trait, accession=accession,
-                        step=f"Prepare and LD-screen trait {trait}")
-                    unscreened = prepare_trait_sumstats(
-                        prepared_ld, str(path),
-                        n_eff=opt[f"n_eff{trait}"],
-                        n_cases=opt[f"n_cases{trait}"],
-                        n_controls=opt[f"n_controls{trait}"],
-                        columns=opt[f"columns{trait}"], label=key,
-                        progress=None)
-                    return screen_prepared_trait(
+                        trait=trait, accession=accession, phase="screen",
+                        step=f"LD-consistency screen for trait {trait}")
+                    screened = screen_prepared_trait(
                         prepared_ld, unscreened, **screen_params,
-                        progress=_progress_sink(stage))
+                        progress=_progress_sink(
+                            stage, trait=trait, phase="screen",
+                            cancel=cancel_traits))
+                finally:
+                    if acquired:
+                        screen_lock.release()
+                record = screened.log["ld_consistency_screen"]
+                final_quality = _assess_trait_quality(
+                    screened, ldsc_qc, screen=record)
+                screened.log["qc_assessment"] = final_quality
+                return screened
 
-                def on_wait(seconds, trait=trait, accession=accession):
-                    stage.progress(
-                        trait=trait, accession=accession,
-                        prepared_waiting=seconds)
+            def on_wait(seconds):
+                checkpoint()
+                stage.progress(
+                    trait=trait, accession=accession, phase="prepare",
+                    prepared_waiting=seconds)
 
+            # The prepared store captures builder warnings for persistence;
+            # this outer thread-local buffer receives the replay exactly once
+            # for both a new artifact and a cache hit.
+            with prepared_store._warning_capture() as caught:
+                warnings.simplefilter("always")
                 screened, reused = prepared_store.get_or_build(
                     root, spec, label=key, builder=build, on_wait=on_wait)
-                prepared_key = prepared_store.key_for(spec)
-                record = screened.log["ld_consistency_screen"]
-                info = {
-                    "n_input": int(record["n_input"]),
-                    "n_kept": int(record["n_kept"]),
-                    "n_dropped": int(record["n_dropped"]),
-                    "prepared_key": prepared_key,
-                    "prepared_reused": bool(reused),
-                    "prepared_scope": _PREPARED_SCOPE,
-                }
-                screen_outcomes[key] = info
-                prepared_info[key] = {
+            ldsc_qc = screened.log["pre_dentist_ldsc"]
+            quality = _assess_trait_quality(
+                screened, ldsc_qc,
+                screen=screened.log["ld_consistency_screen"])
+            # Recompute policy flags from validated primary counts/estimates;
+            # cached advisory text is never trusted as scientific input.
+            screened.log["qc_assessment"] = quality
+            if not built_here["value"]:
+                stage.finish_prepare_trait(trait, {
+                    "n_usable": int(ldsc_qc["n_aligned_variants"]),
+                    "qc_status": quality["status"],
+                    "warnings": list(quality["warnings"]),
+                    "ldsc_h2": ldsc_qc.get("h2"),
+                    "ldsc_intercept": ldsc_qc.get("intercept"),
+                    "reused": True,
+                })
+                stage.activate("screen")
+
+            prepared_key = prepared_store.key_for(spec)
+            record = screened.log["ld_consistency_screen"]
+            info = {
+                "n_input": int(record["n_input"]),
+                "n_kept": int(record["n_kept"]),
+                "n_dropped": int(record["n_dropped"]),
+                "qc_status": quality.get("status"),
+                "qc_warnings": list(quality.get("warnings") or []),
+                "prepared_key": prepared_key,
+                "prepared_reused": bool(reused),
+                "prepared_scope": _PREPARED_SCOPE,
+            }
+            stage.progress(
+                trait=trait, accession=accession, phase="screen",
+                prepared_source=("stored screened trait" if reused else
+                                 "screened and stored"))
+            runtime_warnings = _warning_rows(f"QC trait {trait}", caught)
+            runtime_warnings.extend({
+                "stage": f"QC trait {trait}", "category": "QCWarning",
+                "message": f"{key} summary-statistics QC: {message}",
+            } for message in quality["warnings"])
+            return {
+                "trait": screened,
+                "input_sha256": physical_sha256,
+                "screen": info,
+                "prepared": {
                     "logical_sha256": logical_sha256,
                     "prepared_key": prepared_key,
                     "prepared_reused": bool(reused),
                     "prepared_scope": _PREPARED_SCOPE,
                     "prepared_numerical_environment":
                         spec["numerical_environment"],
+                    "ld_score_qc_identity": ldsc_qc_identity,
+                },
+                "catalog_update": ({
+                    "prepared_key": prepared_key,
+                    "prepared_reused": bool(reused),
+                    "prepared_scope": _PREPARED_SCOPE,
+                } if catalog is not None else None),
+                "warnings": runtime_warnings,
+            }
+
+        pool = ThreadPoolExecutor(max_workers=2)
+        pending = {}
+        catalog_updates = {}
+        failure = None
+        try:
+            for trait, path in ((1, ss1), (2, ss2)):
+                pending[pool.submit(trait_pipeline, trait, path)] = trait
+            for future in as_completed(pending):
+                trait = pending[future]
+                try:
+                    outcome = future.result()
+                except BaseException as exc:
+                    failure = exc
+                    cancel_traits.set()
+                    for other in pending:
+                        if other is not future:
+                            other.cancel()
+                    break
+                key = f"trait{trait}"
+                traits[key] = outcome["trait"]
+                input_sha256[key] = outcome["input_sha256"]
+                screen_outcomes[key] = outcome["screen"]
+                prepared_info[key] = outcome["prepared"]
+                warning_rows[key] = outcome["warnings"]
+                catalog_update = outcome["catalog_update"]
+                if catalog_update is not None:
+                    # Workers still serialize live progress through ``job``.
+                    # Defer changes to its nested options until every worker
+                    # has joined, so JSON serialization never races a dict
+                    # mutation in the coordinator thread.
+                    catalog_updates[key] = catalog_update
+                ordered = {
+                    name: screen_outcomes[name]
+                    for name in ("trait1", "trait2")
+                    if name in screen_outcomes
                 }
-                if catalog is not None:
-                    catalog.update(
-                        prepared_key=prepared_key,
-                        prepared_reused=bool(reused),
-                        prepared_scope=_PREPARED_SCOPE)
-                stage.progress(
-                    trait=trait, accession=accession,
-                    prepared_source=("stored screened trait" if reused else
-                                     "screened and stored"))
-                traits.append(screened)
                 summary = "; ".join(
-                    f"trait {key[-1]}: {value['n_kept']:,} of "
-                    f"{value['n_input']:,} kept"
-                    for key, value in screen_outcomes.items())
+                    f"trait {name[-1]}: {value['n_kept']:,} of "
+                    f"{value['n_input']:,} kept ({value['qc_status']})"
+                    for name, value in ordered.items())
                 stage.detail(
-                    "screen", summary + ".", traits=screen_outcomes,
+                    "screen", summary + ".", traits=ordered,
                     mandatory=True, parameters=screen_params,
-                    prepared_scope=_PREPARED_SCOPE)
-            jobs.save_job(root, job)
-        captured_warnings.extend(_warning_rows("screen", caught))
-    except Exception as exc:
+                    prepared_scope=_PREPARED_SCOPE,
+                    execution=screen_execution)
+        finally:
+            pool.shutdown(wait=True, cancel_futures=True)
+        if failure is not None:
+            raise failure
+        for key in ("trait1", "trait2"):
+            captured_warnings.extend(warning_rows.get(key, []))
+            if key in catalog_updates:
+                opt[f"catalog{key[-1]}"].update(catalog_updates[key])
+        jobs.save_job(root, job)
+    except BaseException as exc:
         if prepared_ld is not None:
             prepared_ld.close()
             prepared_ld = None
-        attributed = _attribute_to_catalog(exc, job)
-        if attributed is not None:
-            raise attributed from exc
+        if isinstance(exc, Exception):
+            attributed = _attribute_to_catalog(exc, job)
+            if attributed is not None:
+                raise attributed from exc
         raise
     stage.done("screen")
 
@@ -786,7 +1197,7 @@ def run(job_dir: Path, job: dict) -> None:
             # non-destructive path even when they are not mmap-backed.
             consume_ld_cache = type(source_blocks) is list
             prep = pair_prepared_traits(
-                prepared_ld, traits[0], traits[1],
+                prepared_ld, traits["trait1"], traits["trait2"],
                 screen=False, progress=_progress_sink(stage),
                 consume_ld_cache=consume_ld_cache)
             prep.log.update({
@@ -836,6 +1247,10 @@ def run(job_dir: Path, job: dict) -> None:
                 "qc_enabled": bool(tlog.get("qc_enabled")),
                 "qc": _json_safe(tlog.get("qc") or {}),
                 "harmonize": _json_safe(tlog.get("harmonize") or {}),
+                "pre_dentist_ldsc": _json_safe(
+                    tlog.get("pre_dentist_ldsc") or {}),
+                "qc_assessment": _json_safe(
+                    tlog.get("qc_assessment") or {}),
                 "ld_consistency_screen": _json_safe(screen_log),
                 "prepared": _json_safe(prepared_info[trait]),
                 # Post-screen variants usable before the cross-trait
@@ -869,7 +1284,8 @@ def run(job_dir: Path, job: dict) -> None:
                 cache, root, cache_sha256=ld_sha256,
                 n_variants=int(prep.log["n_cache"]),
                 cache_indices=cache_indices,
-                fitted_shape=prep.beta_hat1.shape)
+                fitted_shape=prep.beta_hat1.shape,
+                panel=ld_score_panel)
         except Exception as exc:
             stage.detail(
                 "ldsc",
@@ -920,6 +1336,7 @@ def run(job_dir: Path, job: dict) -> None:
                 n_regression_variants=int(len(ell)),
                 h2_init=list(h2_init), h2_init_source=h2_sources)
         del ell, panel
+        ld_score_panel = None
         stage.done("ldsc")
         prep.cache_indices = None
         del cache_indices
@@ -1066,6 +1483,13 @@ def run(job_dir: Path, job: dict) -> None:
             "screen": True,
             "screen_parameters": dict(screen_params),
             "screen_scope": "trait-local before pairing",
+            "trait_pipeline_workers": 2,
+            "screen_execution": screen_execution,
+            "pre_dentist_ldsc": ldsc_qc_identity,
+            "pre_dentist_ldsc_scope": (
+                "post-QC, LD-aligned, before trait-local DENTIST"),
+            "pre_dentist_ldsc_chi2_cap_scope": "regression only",
+            "qc_warning_thresholds": dict(_QC_WARNING_THRESHOLDS),
             "fitted_variant_ids_sha256": _ids_sha256(prep.id),
             "sample_size": n_info,
             "inputs": {

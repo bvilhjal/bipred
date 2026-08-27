@@ -19,9 +19,10 @@ from pathlib import Path
 
 STATES = ("staging", "queued", "launching", "running", "done", "failed")
 
-# Version 3 makes the mandatory LD-consistency screen a visible stage. Keep
-# both earlier schemas so completed jobs retain the workflow they actually ran.
-STAGE_SCHEMA = 3
+# Version 4 permits preparation and screening to overlap across the two
+# independent trait pipelines and adds pre-DENTIST univariate LDSC QC. Keep
+# every earlier schema so completed jobs retain the workflow they actually ran.
+STAGE_SCHEMA = 4
 STAGE_ORDER = (
     "acquire", "prepare", "screen", "pair", "ldsc", "fit", "weights")
 STAGE_DEFINITIONS = {
@@ -34,15 +35,17 @@ STAGE_DEFINITIONS = {
     "prepare": {
         "label": "Prepare each trait",
         "description": (
-            "Validate and read both inputs and the selected LD reference."
+            "Prepare both traits independently against one shared LD "
+            "reference, including QC, harmonization, and a quick univariate "
+            "LD-score h2/intercept check."
         ),
     },
     "screen": {
         "label": "Run LD-consistency screen",
         "description": (
             "Reuse a fully QC'd, harmonized, and screened trait artifact, or "
-            "run QC, LD alignment, and the mandatory DENTIST-inspired "
-            "trait-local screen before storing it."
+            "run the mandatory DENTIST-inspired trait-local screen as soon "
+            "as that trait is ready, then store the completed artifact."
         ),
     },
     "pair": {
@@ -67,6 +70,29 @@ STAGE_DEFINITIONS = {
         "label": "Write prediction weights",
         "description": "Create one SNP-weight file for each trait.",
     },
+}
+
+SCHEMA3_STAGE_ORDER = STAGE_ORDER
+SCHEMA3_STAGE_DEFINITIONS = {
+    "acquire": STAGE_DEFINITIONS["acquire"],
+    "prepare": {
+        "label": "Prepare each trait",
+        "description": (
+            "Validate and read both inputs and the selected LD reference."
+        ),
+    },
+    "screen": {
+        "label": "Run LD-consistency screen",
+        "description": (
+            "Reuse a fully QC'd, harmonized, and screened trait artifact, or "
+            "run QC, LD alignment, and the mandatory DENTIST-inspired "
+            "trait-local screen before storing it."
+        ),
+    },
+    "pair": STAGE_DEFINITIONS["pair"],
+    "ldsc": STAGE_DEFINITIONS["ldsc"],
+    "fit": STAGE_DEFINITIONS["fit"],
+    "weights": STAGE_DEFINITIONS["weights"],
 }
 
 SCHEMA2_STAGE_ORDER = (
@@ -127,6 +153,8 @@ def stage_definitions(job: dict) -> list[dict]:
     schema = int(job.get("stage_schema") or 1)
     if schema >= STAGE_SCHEMA:
         order, definitions = STAGE_ORDER, STAGE_DEFINITIONS
+    elif schema >= 3:
+        order, definitions = SCHEMA3_STAGE_ORDER, SCHEMA3_STAGE_DEFINITIONS
     elif schema >= 2:
         order, definitions = SCHEMA2_STAGE_ORDER, SCHEMA2_STAGE_DEFINITIONS
     else:
@@ -146,6 +174,8 @@ def stage_label(key: str, schema: int | None = None) -> str:
     value = int(schema or 1)
     if value >= STAGE_SCHEMA:
         definitions = STAGE_DEFINITIONS
+    elif value >= 3:
+        definitions = SCHEMA3_STAGE_DEFINITIONS
     elif value >= 2:
         definitions = SCHEMA2_STAGE_DEFINITIONS
     else:
@@ -187,6 +217,7 @@ def create_job(root: Path, *, options: dict, labels: dict,
         "id": job_id,
         "status": status,
         "stage": None,
+        "active_stages": [],
         "stage_schema": STAGE_SCHEMA,
         "stages": {},
         "stage_details": {},

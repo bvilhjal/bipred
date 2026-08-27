@@ -44,10 +44,10 @@ __all__ = [
 ]
 
 STORE_DIRNAME = "prepared"
-SPEC_SCHEMA = "bipred-prepared-semantic-v4"
-DEFAULT_ALGORITHM_SCHEMA = "prepared-trait-v4"
+SPEC_SCHEMA = "bipred-prepared-semantic-v5"
+DEFAULT_ALGORITHM_SCHEMA = "prepared-trait-v5"
 FORMAT = "bipred-prepared-trait"
-FORMAT_VERSION = 4
+FORMAT_VERSION = 5
 
 LOCK_STALE = 900.0
 LOCK_TOUCH = 30.0
@@ -59,7 +59,7 @@ EVICT_GRACE = 3600.0
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SPEC_FIELDS = frozenset({
     "spec_schema", "logical_input_sha256", "ld_sha256", "n_semantics",
-    "columns", "qc", "screen", "algorithm_schema", "versions",
+    "columns", "qc", "screen", "diagnostics", "algorithm_schema", "versions",
     "numerical_environment",
 })
 _QC_FIELDS = frozenset({"enabled", "params"})
@@ -84,6 +84,23 @@ _META_FIELDS = frozenset({
     "created", "last_used", "arrays", "log", "warnings",
 })
 _WARNING_FIELDS = frozenset({"message", "category", "module"})
+_DIAGNOSTIC_FIELDS = frozenset({"pre_dentist_ldsc"})
+_LDSC_IDENTITY_FIELDS = frozenset({
+    "m_snps", "score_sha256", "definition", "source", "source_sha256",
+    "algorithm", "correction", "parameters",
+})
+_LDSC_LOG_BASE_FIELDS = frozenset({
+    "identity", "status", "n_aligned_variants", "n_regression_variants",
+    "n_chi2_excluded", "h2", "h2_se", "intercept", "intercept_se",
+    "mean_chi2", "ratio", "used_for_filtering", "used_for_h2_init",
+})
+_LDSC_LOG_AVAILABLE_FIELDS = _LDSC_LOG_BASE_FIELDS | frozenset({
+    "intercept_minus_one", "flags",
+})
+_LDSC_LOG_UNAVAILABLE_FIELDS = _LDSC_LOG_BASE_FIELDS | frozenset({"error"})
+_LDSC_FLAG_FIELDS = frozenset({
+    "h2_nonpositive", "h2_above_one", "intercept_nonpositive",
+})
 
 DEFAULT_SCREEN_PARAMS = {
     "rounds": 4,
@@ -494,6 +511,45 @@ def _validated_spec(spec):
         raise ValueError("spec.screen.params must be an object")
     screen_params = _validated_screen_params(
         screen["params"], "spec.screen.params")
+    diagnostics = spec["diagnostics"]
+    _fields(diagnostics, _DIAGNOSTIC_FIELDS, "spec.diagnostics")
+    ldsc = diagnostics["pre_dentist_ldsc"]
+    if ldsc is not None:
+        _fields(ldsc, _LDSC_IDENTITY_FIELDS,
+                "spec.diagnostics.pre_dentist_ldsc")
+        m_snps = ldsc["m_snps"]
+        if (isinstance(m_snps, bool) or not isinstance(m_snps, int)
+                or m_snps < 1):
+            raise ValueError(
+                "spec.diagnostics.pre_dentist_ldsc.m_snps must be a "
+                "positive integer")
+        score_sha256 = _sha(
+            ldsc["score_sha256"],
+            "spec.diagnostics.pre_dentist_ldsc.score_sha256")
+        source_sha256 = ldsc["source_sha256"]
+        if source_sha256 is not None:
+            source_sha256 = _sha(
+                source_sha256,
+                "spec.diagnostics.pre_dentist_ldsc.source_sha256")
+        for name in ("definition", "source", "algorithm", "correction"):
+            if not isinstance(ldsc[name], str) or not ldsc[name].strip():
+                raise ValueError(
+                    "spec.diagnostics.pre_dentist_ldsc."
+                    f"{name} must be a non-empty string")
+        parameters = ldsc["parameters"]
+        if not isinstance(parameters, dict) or not parameters:
+            raise ValueError(
+                "spec.diagnostics.pre_dentist_ldsc.parameters must be a "
+                "non-empty object")
+        ldsc = {
+            "m_snps": int(m_snps), "score_sha256": score_sha256,
+            "definition": ldsc["definition"].strip(),
+            "source": ldsc["source"].strip(),
+            "source_sha256": source_sha256,
+            "algorithm": ldsc["algorithm"].strip(),
+            "correction": ldsc["correction"].strip(),
+            "parameters": parameters,
+        }
     algorithm = spec["algorithm_schema"]
     if not isinstance(algorithm, str) or not algorithm:
         raise ValueError("spec.algorithm_schema must be a non-empty string")
@@ -512,6 +568,7 @@ def _validated_spec(spec):
         "columns": columns,
         "qc": {"enabled": qc["enabled"], "params": qc["params"]},
         "screen": {"enabled": True, "params": screen_params},
+        "diagnostics": {"pre_dentist_ldsc": ldsc},
         "algorithm_schema": algorithm,
         "versions": {
             "bipred": versions["bipred"],
@@ -524,6 +581,7 @@ def _validated_spec(spec):
 def semantic_spec(*, logical_input_sha256, ld_sha256, n_semantics,
                   columns=None, qc=True, qc_params=None,
                   screen=True, screen_params=None,
+                  pre_dentist_ldsc=None,
                   algorithm_schema=DEFAULT_ALGORITHM_SCHEMA,
                   bipred_version=None, ldpred3_version=None,
                   numpy_version=None, numerical_backend=None):
@@ -533,12 +591,15 @@ def semantic_spec(*, logical_input_sha256, ld_sha256, n_semantics,
     scalar override or the chosen per-variant-N column and fallback policy.
     The mandatory screen is part of the identity because the stored trait is
     already screened. ``screen_params`` records all fixed controls, including
-    the seed. The NumPy version and stable BLAS/LAPACK identity are detected by
-    default; explicit values support reproducible tests and migrations. The
-    CPU architecture is retained because it can change eigensolver results;
-    paths, CPU dispatch flags and thread counts are deliberately absent. Labels,
-    counterpart-trait identity and fit options are absent by construction and
-    are rejected as unknown top-level fields by :func:`key_for`.
+    the seed. When supplied, ``pre_dentist_ldsc`` binds the stored univariate
+    QC diagnostic to the exact full-reference LD-score panel and regression
+    policy that produced it. The NumPy version and stable BLAS/LAPACK identity
+    are detected by default; explicit values support reproducible tests and
+    migrations. The CPU architecture is retained because it can change
+    eigensolver results; paths, CPU dispatch flags and thread counts are
+    deliberately absent. Labels, counterpart-trait identity and fit options
+    are absent by construction and are rejected as unknown top-level fields by
+    :func:`key_for`.
     """
     if not isinstance(qc, bool):
         raise ValueError("qc must be boolean")
@@ -559,6 +620,7 @@ def semantic_spec(*, logical_input_sha256, ld_sha256, n_semantics,
             "params": (dict(DEFAULT_SCREEN_PARAMS) if screen_params is None
                        else screen_params),
         },
+        "diagnostics": {"pre_dentist_ldsc": pre_dentist_ldsc},
         "algorithm_schema": algorithm_schema,
         "versions": {
             "bipred": bipred.__version__ if bipred_version is None
@@ -744,6 +806,102 @@ def _validated_screen_log(log, spec, n_rows):
             "the semantic specification")
 
 
+def _validated_diagnostic_log(log, spec, n_screen_input):
+    expected = spec["diagnostics"]["pre_dentist_ldsc"]
+    if expected is None:
+        return
+    record = log.get("pre_dentist_ldsc")
+    if not isinstance(record, dict):
+        raise ValueError(
+            "PreparedTrait.log.pre_dentist_ldsc must be an object")
+    status = record.get("status")
+    expected_fields = (_LDSC_LOG_AVAILABLE_FIELDS
+                       if status == "available"
+                       else _LDSC_LOG_UNAVAILABLE_FIELDS)
+    _fields(record, expected_fields,
+            "PreparedTrait.log.pre_dentist_ldsc")
+    identity = _plain(
+        record.get("identity"),
+        "PreparedTrait.log.pre_dentist_ldsc.identity")
+    if identity != expected:
+        raise ValueError(
+            "PreparedTrait.log.pre_dentist_ldsc identity does not match the "
+            "semantic specification")
+    counts = []
+    for name in ("n_aligned_variants", "n_regression_variants",
+                 "n_chi2_excluded"):
+        value = record[name]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(
+                f"PreparedTrait.log.pre_dentist_ldsc.{name} must be a "
+                "non-negative integer")
+        counts.append(int(value))
+    n_aligned, n_regression, n_excluded = counts
+    if n_aligned != n_regression + n_excluded:
+        raise ValueError(
+            "PreparedTrait.log.pre_dentist_ldsc counts are incoherent")
+    if n_aligned != n_screen_input:
+        raise ValueError(
+            "PreparedTrait.log.pre_dentist_ldsc.n_aligned_variants does not "
+            "match the screen input")
+    for name in ("used_for_filtering", "used_for_h2_init"):
+        if record[name] is not False:
+            raise ValueError(
+                f"PreparedTrait.log.pre_dentist_ldsc.{name} must be false")
+    metrics = ("h2", "h2_se", "intercept", "intercept_se", "mean_chi2",
+               "ratio")
+    if status == "available":
+        for name in metrics:
+            value = record[name]
+            if value is not None and (isinstance(value, bool)
+                                      or not isinstance(value, (int, float))
+                                      or not math.isfinite(float(value))):
+                raise ValueError(
+                    f"PreparedTrait.log.pre_dentist_ldsc.{name} must be "
+                    "finite or null")
+        for name in ("h2", "intercept", "mean_chi2"):
+            if record[name] is None:
+                raise ValueError(
+                    f"PreparedTrait.log.pre_dentist_ldsc.{name} must be "
+                    "finite when status is available")
+        delta = record["intercept_minus_one"]
+        if (isinstance(delta, bool) or not isinstance(delta, (int, float))
+                or not math.isfinite(float(delta))
+                or not math.isclose(float(delta),
+                                    float(record["intercept"]) - 1.0,
+                                    rel_tol=1e-12, abs_tol=1e-12)):
+            raise ValueError(
+                "PreparedTrait.log.pre_dentist_ldsc.intercept_minus_one is "
+                "incoherent")
+        flags = record["flags"]
+        _fields(flags, _LDSC_FLAG_FIELDS,
+                "PreparedTrait.log.pre_dentist_ldsc.flags")
+        if not all(isinstance(flags[name], bool)
+                   for name in _LDSC_FLAG_FIELDS):
+            raise ValueError(
+                "PreparedTrait.log.pre_dentist_ldsc flags must be boolean")
+        expected_flags = {
+            "h2_nonpositive": bool(float(record["h2"]) <= 0.0),
+            "h2_above_one": bool(float(record["h2"]) > 1.0),
+            "intercept_nonpositive": bool(
+                float(record["intercept"]) <= 0.0),
+        }
+        if flags != expected_flags:
+            raise ValueError(
+                "PreparedTrait.log.pre_dentist_ldsc flags are incoherent")
+    else:
+        if status != "unavailable":
+            raise ValueError(
+                "PreparedTrait.log.pre_dentist_ldsc.status must be "
+                "'available' or 'unavailable'")
+        if any(record[name] is not None for name in metrics):
+            raise ValueError(
+                "unavailable pre-DENTIST LDSC metrics must be null")
+        if not isinstance(record["error"], str) or not record["error"]:
+            raise ValueError(
+                "unavailable pre-DENTIST LDSC must record an error")
+
+
 def _normalise_trait(trait, label, spec):
     if not isinstance(trait, PreparedTrait):
         raise TypeError("prepared-store builder must return PreparedTrait")
@@ -789,6 +947,8 @@ def _normalise_trait(trait, label, spec):
         raise ValueError("PreparedTrait.log must be an object")
     log = dict(log)
     _validated_screen_log(log, spec, len(indices))
+    _validated_diagnostic_log(
+        log, spec, int(log["ld_consistency_screen"]["n_input"]))
     log["label"] = label
     return PreparedTrait(
         indices=indices, beta_hat=arrays["beta_hat"],
@@ -826,6 +986,80 @@ def _replay(records):
             if isinstance(candidate, type) and issubclass(candidate, Warning):
                 category = candidate
         warnings.warn(record["message"], category, stacklevel=3)
+
+
+# ``warnings.catch_warnings(record=True)`` mutates process-global hooks on
+# Python 3.9/3.10. Two trait builders can therefore steal each other's warning
+# records. Keep one global dispatcher installed while any builder is active,
+# but route each warning to the innermost buffer for its emitting thread.
+_WARNING_ROUTER_LOCK = threading.RLock()
+_WARNING_BUFFERS = {}
+_WARNING_ROUTER_USERS = 0
+_WARNING_ORIGINAL_SHOWWARNING = None
+_WARNING_ORIGINAL_FILTERS = None
+
+
+def _route_warning(message, category, filename, lineno, file=None, line=None):
+    with _WARNING_ROUTER_LOCK:
+        stack = _WARNING_BUFFERS.get(threading.get_ident())
+        target = stack[-1] if stack else None
+        fallback = _WARNING_ORIGINAL_SHOWWARNING
+    if target is not None:
+        target.append(warnings.WarningMessage(
+            message, category, filename, lineno, file=file, line=line))
+    elif fallback is not None:
+        fallback(message, category, filename, lineno, file=file, line=line)
+
+
+class _ThreadWarningCapture:
+    """Thread-routed equivalent of ``catch_warnings(record=True)``."""
+
+    def __init__(self):
+        self.records = []
+        self.thread_id = None
+
+    def __enter__(self):
+        global _WARNING_ROUTER_USERS
+        global _WARNING_ORIGINAL_FILTERS, _WARNING_ORIGINAL_SHOWWARNING
+        self.thread_id = threading.get_ident()
+        with _WARNING_ROUTER_LOCK:
+            if _WARNING_ROUTER_USERS == 0:
+                _WARNING_ORIGINAL_SHOWWARNING = warnings.showwarning
+                _WARNING_ORIGINAL_FILTERS = list(warnings.filters)
+                warnings.showwarning = _route_warning
+                warnings.simplefilter("always")
+            _WARNING_ROUTER_USERS += 1
+            _WARNING_BUFFERS.setdefault(self.thread_id, []).append(
+                self.records)
+        return self.records
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        global _WARNING_ROUTER_USERS
+        global _WARNING_ORIGINAL_FILTERS, _WARNING_ORIGINAL_SHOWWARNING
+        with _WARNING_ROUTER_LOCK:
+            stack = _WARNING_BUFFERS.get(self.thread_id)
+            if not stack or stack[-1] is not self.records:
+                raise RuntimeError("prepared-store warning capture is unbalanced")
+            stack.pop()
+            if not stack:
+                _WARNING_BUFFERS.pop(self.thread_id, None)
+            _WARNING_ROUTER_USERS -= 1
+            if _WARNING_ROUTER_USERS == 0:
+                warnings.showwarning = _WARNING_ORIGINAL_SHOWWARNING
+                warnings.filters[:] = _WARNING_ORIGINAL_FILTERS
+                mutated = getattr(warnings, "_filters_mutated", None)
+                if mutated is not None:
+                    mutated()
+                _WARNING_ORIGINAL_SHOWWARNING = None
+                _WARNING_ORIGINAL_FILTERS = None
+        return False
+
+
+def _warning_capture():
+    """Use Python's context-local collector when the runtime provides it."""
+    if bool(getattr(sys.flags, "context_aware_warnings", 0)):
+        return warnings.catch_warnings(record=True)
+    return _ThreadWarningCapture()
 
 
 def _array_manifest(arrays):
@@ -1020,7 +1254,7 @@ def _discard(paths):
 def _built(builder, label, spec):
     caught = []
     try:
-        with warnings.catch_warnings(record=True) as caught:
+        with _warning_capture() as caught:
             warnings.simplefilter("always")
             trait = builder()
     except BaseException:

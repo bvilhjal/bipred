@@ -161,6 +161,8 @@ def test_job_progress_contract_supports_one_line_per_trait(web):
         root, options={"weights": False},
         labels={"trait1": "A", "trait2": "B"}, status="staging")
     job["status"] = "running"
+    job["stage"] = "screen"
+    job["active_stages"] = ["prepare", "screen"]
     jobs.save_job(root, job)
 
     page = client.get(f"/jobs/{job['id']}")
@@ -168,15 +170,24 @@ def test_job_progress_contract_supports_one_line_per_trait(web):
     assert page.status_code == 200
     assert 'id="progress-lines"' in page.text
     assert 'class="progress-lines"' in page.text
+    assert ('id="stage-name">Prepare each trait + Run LD-consistency '
+            'screen</strong>') in page.text
     assert "stageSchema:" in page.text
     assert "p.traits" in script
     assert "Object.keys(p.traits).sort()" in script
+    assert "active_stages" in script
+    assert 'join(" + ")' in script
+    # Trait-scoped events retain both their identity and useful step text;
+    # ``phase`` is stage grouping, not a replacement for the operation label.
+    assert 'p.phase === "burn-in" || p.phase === "sampling"' in script
+    assert "fitPhase ? p.phase : (p.step || p.phase)" in script
+    assert '(p.trait ? where + " — " : "") + renderStep(p)' in script
     assert "progressLines.replaceChildren(...nodes)" in script
     assert "ld_consistency_screen" in script
 
 
 def test_job_poller_reloads_after_stage_schema_upgrade(web):
-    """A page opened while an old queued job waits must adopt schema 3."""
+    """A page opened while an old queued job waits must adopt the live schema."""
     client, _ = web
     script = client.get("/static/job.js").text
 
@@ -384,12 +395,14 @@ def test_job_page_shows_cache_aware_stage_definitions(web):
     ]
     assert [catalog_page.text.index(label) for label in catalog_labels] == \
         sorted(catalog_page.text.index(label) for label in catalog_labels)
-    assert "Validate and read both inputs and the selected LD reference" in \
+    assert "Prepare both traits independently against one shared LD" in \
+        catalog_page.text
+    assert "quick univariate LD-score h2/intercept check" in \
         catalog_page.text
     assert "harmonized, and screened trait artifact" in catalog_page.text
     assert "mandatory DENTIST-inspired" in catalog_page.text
     assert "trait-local screen" in catalog_page.text
-    assert "before storing it" in catalog_page.text
+    assert "as soon as that trait is ready" in catalog_page.text
     assert "Recomputed for every analysis" in catalog_page.text
     assert "prepare summary statistics" not in catalog_page.text.lower()
 
@@ -403,6 +416,7 @@ def test_status_endpoint_keeps_completed_stage_details(web):
         root, options={"weights": False},
         labels={"trait1": "First", "trait2": "Second"}, status="staging")
     job["stages"]["screen"] = 1.25
+    job["active_stages"] = ["pair"]
     job["stage_details"]["screen"] = {
         "summary": "2 complete post-screen trait artifacts reused.",
         "traits": {
@@ -416,6 +430,7 @@ def test_status_endpoint_keeps_completed_stage_details(web):
     payload = client.get(f"/jobs/{job['id']}/status").json()
     assert payload["stage_schema"] == jobs.STAGE_SCHEMA
     assert payload["progress"] is None
+    assert payload["active_stages"] == ["pair"]
     assert payload["stage_details"] == job["stage_details"]
 
 
@@ -456,6 +471,16 @@ def test_legacy_jobs_keep_their_original_visible_stages():
     assert all(item["key"] != "screen" for item in definitions)
     assert jobs.stage_label("pair", 2) == "Combine the two traits"
 
+    schema3 = {
+        "stage_schema": 3,
+        "options": {"gcst1": "GCST000001", "weights": False},
+    }
+    definitions = jobs.stage_definitions(schema3)
+    assert [item["key"] for item in definitions] == [
+        "acquire", "prepare", "screen", "pair", "ldsc", "fit"]
+    assert "Validate and read both inputs" in definitions[1]["description"]
+    assert "before storing it" in definitions[2]["description"]
+
 
 @pytest.mark.slow
 @pytest.mark.integration
@@ -475,7 +500,7 @@ def test_status_endpoint(web):
     assert payload["stage"] is None or isinstance(payload["stage"], str)
     assert payload["error"] is None
     assert payload["progress"] is None      # cleared once the stage completes
-    assert payload["stage_schema"] == jobs.STAGE_SCHEMA == 3
+    assert payload["stage_schema"] == jobs.STAGE_SCHEMA == 4
     assert payload["stage_details"] == job["stage_details"]
     assert payload["stage_details"]["screen"]["mandatory"] is True
     assert set(payload["stage_details"]["screen"]["traits"]) == {
@@ -1838,6 +1863,28 @@ def test_acquire_progress_retains_both_trait_counters(tmp_path):
     assert progress["traits"]["trait1"]["total"] == 100
     assert progress["traits"]["trait2"]["bytes"] == 40
     assert progress["traits"]["trait2"]["total"] == 200
+
+
+def test_prepare_screen_progress_retains_both_trait_states(tmp_path):
+    from webapp import jobs, runner
+
+    (tmp_path / "jobs").mkdir()
+    job = jobs.create_job(
+        tmp_path, options={}, labels={"trait1": "A", "trait2": "B"},
+        status="running")
+    stage = runner._Stages(tmp_path, job)
+    stage.start("prepare")
+    stage.progress(trait=2, phase="prepare", step="harmonize trait 2")
+    stage.activate("screen")
+    stage.progress(trait=1, phase="screen", step="screen trait 1",
+                   done=3, total=10, unit="block")
+
+    saved = jobs.load_job(tmp_path, job["id"])
+    progress = saved["progress"]
+    assert list(sorted(progress["traits"])) == ["trait1", "trait2"]
+    assert progress["traits"]["trait1"]["phase"] == "screen"
+    assert progress["traits"]["trait2"]["phase"] == "prepare"
+    assert saved["active_stages"] == ["prepare", "screen"]
 
 
 def test_acquire_completion_waits_for_progress_serialization(

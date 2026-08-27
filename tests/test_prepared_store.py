@@ -40,6 +40,16 @@ _NUMERICAL_BACKEND = {
         "architecture": "x86_64",
     },
 }
+_LDSC_IDENTITY = {
+    "m_snps": 5,
+    "score_sha256": "e" * 64,
+    "definition": "full-reference-test",
+    "source": "test scores",
+    "source_sha256": None,
+    "algorithm": "test-v1",
+    "correction": "none",
+    "parameters": {"chi2_cap": 80.0, "intercept": "free"},
+}
 
 
 def _spec(logical="a", ld="b", **overrides):
@@ -115,6 +125,45 @@ def test_prepared_store_roundtrip_relabels_and_replays_warnings(tmp_path):
             "indices", "beta_hat", "n_eff", "z", "eaf", "n_cache"}
 
 
+def test_concurrent_builders_keep_warning_provenance_thread_local(tmp_path):
+    """Overlapping Python 3.10 warning contexts must not steal each other."""
+    barrier = threading.Barrier(2)
+    before_hook = warnings.showwarning
+    before_filters = list(warnings.filters)
+
+    def run(name, logical, beta):
+        def build():
+            barrier.wait(timeout=5)
+            warnings.warn(f"warning-{name}", RuntimeWarning)
+            return _trait(beta=beta, label=name)
+
+        return prepared_store.get_or_build(
+            tmp_path, _spec(logical=logical), label=name, builder=build)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(run, "trait1", "c", 0.11)
+            second = pool.submit(run, "trait2", "d", 0.12)
+            assert first.result()[1] is False
+            assert second.result()[1] is False
+
+    assert {str(item.message) for item in caught} == {
+        "warning-trait1", "warning-trait2"}
+    assert warnings.showwarning is before_hook
+    assert warnings.filters == before_filters
+    metadata = [
+        json.loads(path.read_text())
+        for path in (tmp_path / prepared_store.STORE_DIRNAME).glob("*.json")
+    ]
+    by_logical = {
+        item["spec"]["logical_input_sha256"]: item["warnings"]
+        for item in metadata
+    }
+    assert by_logical["c" * 64][0]["message"] == "warning-trait1"
+    assert by_logical["d" * 64][0]["message"] == "warning-trait2"
+
+
 def test_prepared_semantic_key_tracks_every_preparation_input():
     payload = b"rsid\tbeta\nrs1\t0.1\n"
     gzip_a = gzip.compress(payload, mtime=1)
@@ -167,6 +216,16 @@ def test_prepared_semantic_key_tracks_every_preparation_input():
     missing.pop("screen")
     with pytest.raises(ValueError, match="missing"):
         prepared_store.key_for(missing)
+
+    with_ldsc = _spec(
+        logical=logical_a, pre_dentist_ldsc=_LDSC_IDENTITY)
+    changed_scores = _spec(
+        logical=logical_a,
+        pre_dentist_ldsc={
+            **_LDSC_IDENTITY, "score_sha256": "f" * 64,
+        })
+    assert prepared_store.key_for(with_ldsc) != \
+        prepared_store.key_for(changed_scores)
 
 
 def test_numerical_environment_is_strict_stable_and_inspectable():

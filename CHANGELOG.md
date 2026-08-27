@@ -1,11 +1,21 @@
 # Changelog
 
 User-visible changes to **bipred** are recorded here. The project is currently
-`0.3.11.dev0`.
+`0.3.12.dev0`.
 
 ## [Unreleased]
 
 ### Added
+
+- **Independent trait preparation and QC in the web runner.** The two traits
+  now proceed concurrently through QC, harmonization, a quick pre-DENTIST
+  univariate LD-score h²/intercept diagnostic, and their mandatory trait-local
+  screens; pairing waits for both completed artifacts. Both workers share one
+  immutable LD reference and one precomputed full-reference LD-score panel.
+  DENTIST eigensolvers overlap only when the loaded BLAS is known to be safe;
+  otherwise their calls serialize while the remaining trait work stays
+  concurrent. Live progress reports both traits, and gross QC/LDSC anomalies
+  are shown as explicit triage warnings rather than undocumented filters.
 
 - **One precomputed LD-score vector per web reference.** Pairing now preserves
   each retained row's full-cache index. The web runner gathers the fixed

@@ -653,6 +653,7 @@ def create_app() -> FastAPI:
         if job is None:
             return JSONResponse({"error": "unknown job"}, status_code=404)
         return {"id": job_id, "status": job["status"], "stage": job["stage"],
+                "active_stages": job.get("active_stages", []),
                 "stage_schema": job.get("stage_schema", 1),
                 "stages": job["stages"], "error": job["error"],
                 "stage_details": job.get("stage_details", {}),

@@ -20,9 +20,9 @@ Recognize the required summary-statistics fields.
 {%- elif key == "harmonize" -%}
 QC and align both traits, then build their joint LD panel.
 {%- elif key == "prepare" -%}
-{% if schema|int >= 3 %}Validate and read both inputs and the selected LD reference.{% else %}Check columns, run QC, align alleles, and retain variants in the selected LD reference. Catalog preparations can be reused.{% endif %}
+{% if schema|int >= 4 %}Prepare both traits independently against one shared LD reference, including QC, harmonization, and a quick univariate LD-score h²/intercept check.{% elif schema|int >= 3 %}Validate and read both inputs and the selected LD reference.{% else %}Check columns, run QC, align alleles, and retain variants in the selected LD reference. Catalog preparations can be reused.{% endif %}
 {%- elif key == "screen" -%}
-Reuse a fully QC'd, harmonized, and screened trait artifact, or run QC, LD alignment, and the mandatory DENTIST-inspired trait-local screen before storing it.
+{% if schema|int >= 4 %}Reuse a fully QC'd, harmonized, and screened trait artifact, or run the mandatory DENTIST-inspired trait-local screen as soon as that trait is ready, then store the completed artifact.{% else %}Reuse a fully QC'd, harmonized, and screened trait artifact, or run QC, LD alignment, and the mandatory DENTIST-inspired trait-local screen before storing it.{% endif %}
 {%- elif key == "pair" and schema|int >= 3 -%}
 Intersect the screened traits, check allele frequencies, and subset LD. Recomputed for every analysis.
 {%- elif key == "pair" -%}

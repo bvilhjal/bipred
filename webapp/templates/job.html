@@ -18,7 +18,7 @@ results</a>.</div>
 
 {% if running %}
 <p id="status-note" aria-live="polite">Current stage: <strong
-id="stage-name">{% if job.stage %}{{ fallback_label(job.stage) }}{% else %}queued{% endif %}</strong>. This page updates
+id="stage-name">{% if job.get('active_stages') %}{% for key in job.active_stages %}{{ fallback_label(key) }}{% if not loop.last %} + {% endif %}{% endfor %}{% elif job.stage %}{{ fallback_label(job.stage) }}{% else %}queued{% endif %}</strong>. This page updates
 live.</p>
 <div class="progress-lines" id="progress-lines" aria-live="polite" hidden></div>
 <noscript><p class="muted">JavaScript is disabled —
@@ -32,11 +32,12 @@ live.</p>
 {% set mapped = item is mapping %}
 {% set key = item.key if mapped else item %}
 {% set detail = job.get("stage_details", {}).get(key, {}) %}
-<li class="{% if key in job.stages %}done{% elif key == job.stage and job.status == 'failed' %}failed{% elif key == job.stage %}active{% else %}pending{% endif %}">
+{% set active = key in job.get('active_stages', []) or (not job.get('active_stages') and key == job.stage) %}
+<li class="{% if key in job.stages %}done{% elif active and job.status == 'failed' %}failed{% elif active %}active{% else %}pending{% endif %}">
 <span class="stage-copy"><span class="stage-label">{{ item.label if mapped else fallback_label(key) }}</span>
 <span class="stage-description">{{ item.description if mapped else fallback_description(key, job.get('stage_schema', 1)) }}</span>
 <span class="stage-detail"{% if not detail.summary %} hidden{% endif %}>{{ detail.summary or "" }}</span></span>
-<span class="state">{% if key in job.stages and detail.skipped %}skipped{% elif key in job.stages %}{{ "%.2f"|format(job.stages[key]) }} s{% elif key == job.stage and job.status == 'failed' %}failed{% elif key == job.stage %}running{% else %}pending{% endif %}</span>
+<span class="state">{% if key in job.stages and detail.skipped %}skipped{% elif key in job.stages %}{{ "%.2f"|format(job.stages[key]) }} s{% elif active and job.status == 'failed' %}failed{% elif active %}running{% else %}pending{% endif %}</span>
 </li>
 {% endfor %}
 </ul>

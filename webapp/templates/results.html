@@ -5,6 +5,7 @@
 {% set invalid = res.diagnostics is defined and res.diagnostics.critical %}
 {% set divergence = res.diagnostics.get('divergence') if res.diagnostics is defined else none %}
 {% set current_schema = job.get('stage_schema', 1)|int >= 3 %}
+{% set pipeline_schema = job.get('stage_schema', 1)|int >= 4 %}
 <h1>{{ job.labels.trait1 }} × {{ job.labels.trait2 }}</h1>
 <p class="muted">Job {{ job.id }} — joint bipred fit on
 {{ res.munge.n_kept }} {% if current_schema %}QC'd, harmonized, and screened{% else %}harmonized{% endif %} variants.</p>
@@ -128,6 +129,57 @@ inflated; interpret ratios and sensitivity across specifications first.</p></div
 
 <h2>QC and harmonization{% if current_schema %}, including the mandatory screen{% endif %}</h2>
 {% if res.munge.trait1 is defined and res.munge.trait1 %}
+{% if pipeline_schema and res.munge.trait1.pre_dentist_ldsc is defined %}
+{% set a1 = res.munge.trait1.get('qc_assessment', {}) %}
+{% set a2 = res.munge.trait2.get('qc_assessment', {}) %}
+{% if a1.get('warnings') or a2.get('warnings') %}
+<div class="alert alert-warning compact-alert"><strong>Summary-statistics QC warning.</strong>
+<p>The analysis continued because these are triage diagnostics, not validated
+automatic exclusion rules. Review the following before interpreting the fit:</p>
+<ul>
+{% for key, assessment in (('trait1', a1), ('trait2', a2)) %}
+{% for message in assessment.get('warnings', []) %}
+<li><strong>{{ job.labels[key] }}:</strong> {{ message }}</li>
+{% endfor %}
+{% endfor %}
+</ul></div>
+{% else %}
+<div class="alert alert-info compact-alert"><strong>No summary-statistics QC heuristic was flagged.</strong>
+<p>This is a gross-error screen, not proof that the GWAS or LD reference is
+well calibrated.</p></div>
+{% endif %}
+<table>
+<caption><strong>Table 1.</strong> Pre-DENTIST univariate LD-score QC.</caption>
+<tr><th>Diagnostic</th><th class="num">{{ job.labels.trait1 }}</th>
+    <th class="num">{{ job.labels.trait2 }}</th></tr>
+{% set d1 = res.munge.trait1.pre_dentist_ldsc %}
+{% set d2 = res.munge.trait2.pre_dentist_ldsc %}
+<tr><td>QC status</td><td class="num">{{ a1.get('status', '—') }}</td>
+    <td class="num">{{ a2.get('status', '—') }}</td></tr>
+<tr><td>Aligned / LDSC regression variants</td>
+    <td class="num">{{ "{:,}".format(d1.n_aligned_variants) }} / {{ "{:,}".format(d1.n_regression_variants) }}</td>
+    <td class="num">{{ "{:,}".format(d2.n_aligned_variants) }} / {{ "{:,}".format(d2.n_regression_variants) }}</td></tr>
+<tr><td>Univariate h² ± block-jackknife SE</td>
+    <td class="num">{{ d1.h2|number(".3g") }} ± {{ d1.h2_se|number(".2g") }}</td>
+    <td class="num">{{ d2.h2|number(".3g") }} ± {{ d2.h2_se|number(".2g") }}</td></tr>
+<tr><td>Free intercept ± block-jackknife SE</td>
+    <td class="num">{{ d1.intercept|number(".3g") }} ± {{ d1.intercept_se|number(".2g") }}</td>
+    <td class="num">{{ d2.intercept|number(".3g") }} ± {{ d2.intercept_se|number(".2g") }}</td></tr>
+<tr><td>Mean χ² / attenuation ratio</td>
+    <td class="num">{{ d1.mean_chi2|number(".3g") }} / {{ d1.ratio|number(".3g") }}</td>
+    <td class="num">{{ d2.mean_chi2|number(".3g") }} / {{ d2.ratio|number(".3g") }}</td></tr>
+</table>
+<p class="muted">This quick check uses each reference's precomputed
+full-reference LD scores and original M. The standard high-χ² cap affects only
+these regressions: it does not remove variants from DENTIST or the fit, and
+these pre-screen h² estimates do not initialize the sampler. Absolute warning
+thresholds are labelled heuristics and are not evaluated below 10,000
+regression variants. This is not canonical publication LDSC: per-variant N is
+only as accurate as the input GWAS metadata, and a free intercept can reflect
+confounding, ancestry/LD
+mismatch, or model misspecification. The flags are triage signals, not a
+phenotype-quality verdict.</p>
+{% endif %}
 <p class="muted">Per-trait filters applied on load, then alignment to the LD
 reference. Counts are sequential: each row removes variants from what the
 rows above left. Flip counts are informational (alleles were aligned, not
