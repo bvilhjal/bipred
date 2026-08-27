@@ -19,7 +19,9 @@
     <nav aria-label="Primary navigation">
       <a href="/"{% if request.url.path == "/" %} class="active" aria-current="page"{% endif %}>New analysis</a>
       <a href="/catalog"{% if request.url.path == "/catalog" %} class="active" aria-current="page"{% endif %}>Catalog evidence</a>
-      <a href="/demo">Run demo</a>
+      <form class="nav-form" method="post" action="/demo">
+        <button class="nav-link" type="submit">Run demo</button>
+      </form>
     </nav>
   </div>
 </header>

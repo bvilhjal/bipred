@@ -10,9 +10,6 @@
   /* Required to fit: an id, both alleles, an effect size (beta or OR), SE. */
   const REQUIRED = ["id", "ea", "oa", "se"];
 
-  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => (
-    {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
-
   function sniffDelimiter(line) {
     if (line.indexOf("\t") !== -1) return "\t";
     if (line.indexOf(",") !== -1) return ",";
@@ -62,41 +59,57 @@
   }
 
   function render(el, file, parsed, headerUnavailable) {
-    let html = "";
+    const nodes = [];
+    function message(className, text) {
+      const item = document.createElement("span");
+      item.className = className;
+      item.textContent = text;
+      nodes.push(item);
+    }
     if (MAX_BYTES && file.size > MAX_BYTES) {
-      html += '<div class="warn">' + esc(file.name) + " exceeds the " +
-              (window.BIPRED_MAX_MB) + " MB per-file limit.</div>";
+      message("warn", file.name + " exceeds the " + window.BIPRED_MAX_MB +
+              " MB combined upload limit on its own.");
     }
     if (headerUnavailable) {
-      html += '<span class="muted">Header preview unavailable for this ' +
-              "file in this browser; columns will be detected when the job " +
-              "runs.</span>";
+      message("muted", "Header preview unavailable for this file in this " +
+              "browser; columns will be detected when the job runs.");
     } else if (!parsed || !Object.keys(parsed.map).length) {
-      html += '<span class="warn">No recognized columns in the header. ' +
-              "Use the Advanced column overrides below.</span>";
+      message("warn", "No recognized columns in the header. Use the " +
+              "Advanced column overrides below.");
     } else {
-      const chips = Object.keys(parsed.map).map((field) =>
-        '<span class="chip"><b>' + esc(field) + "</b>&rarr;" +
-        esc(parsed.raw[parsed.map[field]].trim()) + "</span>");
-      html += '<div class="chips">' + chips.join("") + "</div>";
+      const chips = document.createElement("div");
+      chips.className = "chips";
+      for (const field of Object.keys(parsed.map)) {
+        const chip = document.createElement("span");
+        chip.className = "chip";
+        const key = document.createElement("b");
+        key.textContent = field;
+        chip.append(key, document.createTextNode("→" +
+          parsed.raw[parsed.map[field]].trim()));
+        chips.append(chip);
+      }
+      nodes.push(chips);
       const missing = REQUIRED.filter((f) => !(f in parsed.map));
       if (!("beta" in parsed.map) && !("or" in parsed.map)) {
         missing.push("beta (or or)");
       }
       if (missing.length) {
-        html += '<span class="warn">Not recognized: ' +
-                missing.map(esc).join(", ") +
-                " — map them with the Advanced column overrides.</span>";
+        message("warn", "Not recognized: " + missing.join(", ") +
+                " — map them with the Advanced column overrides.");
       } else {
-        html += '<span class="muted">All required columns recognized.</span>';
+        message("muted", "All required columns recognized.");
       }
     }
-    el.innerHTML = html;
+    el.replaceChildren(...nodes);
   }
 
-  async function preview(file, el) {
-    if (!file) { el.innerHTML = ""; return; }
+  async function preview(file, el, isCurrent) {
+    if (!file) {
+      if (isCurrent()) el.replaceChildren();
+      return;
+    }
     const line = await readHeaderLine(file);
+    if (!isCurrent()) return;
     render(el, file, line === null ? null : mapHeader(line), line === null);
   }
 
@@ -105,10 +118,18 @@
     const input = document.getElementById(inputId);
     const el = document.getElementById(previewId);
     if (!input || !el) continue;
+    let generation = 0;
     input.addEventListener("change", () => {
-      preview(input.files[0], el).catch(() => {
-        el.innerHTML = '<span class="muted">Header preview failed; columns ' +
-                       "will be detected when the job runs.</span>";
+      const current = ++generation;
+      const file = input.files[0];
+      const isCurrent = () => current === generation && input.files[0] === file;
+      preview(file, el, isCurrent).catch(() => {
+        if (current !== generation || input.files[0] !== file) return;
+        const message = document.createElement("span");
+        message.className = "muted";
+        message.textContent = "Header preview failed; columns will be " +
+                              "detected when the job runs.";
+        el.replaceChildren(message);
       });
     });
   }

@@ -37,16 +37,17 @@ and fit-stage figures describe the canonical runs only.</p>
       <dt>Numerical backend</dt><dd>{{ evidence.runtime.backend }}</dd>
       <dt>Parallel resources</dt><dd>8 chains, 200 burn-in + 200 retained
       sweeps; {{ evidence.runtime.outer_workers }}; one sweep thread per chain</dd>
-      <dt>LD cache</dt><dd><code>{{ evidence.runtime.ld_cache_sha256[:12] }}…</code></dd>
-      <dt>Recorded source state</dt><dd><code>{{ evidence.runtime.source_commit[:12] }}…</code>,
-      dirty-diff sha256 <code>{{ evidence.runtime.source_diff_sha256[:12] }}…</code></dd>
+      <dt>LD cache</dt><dd>{% if evidence.runtime.ld_cache_sha256 %}<code>{{ evidence.runtime.ld_cache_sha256[:12] }}…</code>{% else %}not recorded{% endif %}</dd>
+      <dt>Recorded source state</dt><dd>{% if evidence.runtime.source_commit %}<code>{{ evidence.runtime.source_commit[:12] }}…</code>{% else %}commit not recorded{% endif %}{% if evidence.runtime.source_diff_sha256 %},
+      dirty-diff sha256 <code>{{ evidence.runtime.source_diff_sha256[:12] }}…</code>{% endif %}</dd>
     </dl>
   </div>
   {% endif %}
   <div class="alert alert-warning compact-alert">
     <strong>Timing comparability.</strong>
-    <p>The 11 current-profile rows share the environment above. The 38 legacy
-    rows were mostly 10 chains with 100/100 inference and retain row runtime,
+    <p>The {{ evidence.current_completed }} completed current-profile rows share
+    the environment above. The {{ evidence.legacy_completed }}
+    legacy completed rows were mostly 10 chains with 100/100 inference and retain row runtime,
     peak RSS, settings, and hashes, but not a complete independent host
     snapshot. Their seconds are historical evidence, not controlled
     cross-profile speed comparisons. Downloads overlapped fitting in the
@@ -54,14 +55,15 @@ and fit-stage figures describe the canonical runs only.</p>
   </div>
   <p class="hash-line">Canonical table SHA-256:
   <code>{{ evidence.table_sha256 }}</code>
-  {% if evidence.table_hash_verified %}<span class="verified">verified against manifest</span>{% else %}<span class="warn">does not match manifest</span>{% endif %}.
+  <span class="verified">verified against manifest</span>.
   Registry SHA-256: <code>{{ evidence.registry_sha256 }}</code>.</p>
 </section>
 {% else %}
 <div class="alert alert-warning" role="alert"><strong>LDpred3 evidence unavailable.</strong>
-<p>Missing {{ evidence.missing|join(', ') }} under
-<code>{{ evidence.path }}</code>. Locally observed server attempts are still
-shown below.</p></div>
+{% if evidence.missing %}<p>Missing {{ evidence.missing|join(', ') }} under
+<code>{{ evidence.path }}</code>.</p>{% elif evidence.error %}<p>{{ evidence.error }}</p>{% endif %}
+<p>Unverified canonical rows are not displayed. Locally observed server
+attempts are still shown below.</p></div>
 {% endif %}
 
 <div class="catalog-tools">
@@ -74,7 +76,8 @@ shown below.</p></div>
 <p>Each canonical entry completed an end-to-end LDpred3 fit. Rows tagged
 <em>server</em> were additionally completed by this bipred deployment.</p>
 {% if works %}
-<div class="table-scroll"><table class="catalog-table">
+<div class="table-scroll" role="region" aria-label="Compatible Catalog inputs" tabindex="0"><table class="catalog-table">
+<caption><strong>Table 1.</strong> Compatible GWAS Catalog inputs.</caption>
 <thead><tr><th>Accession and trait</th><th>Evidence</th>
 <th class="num">Effective N</th><th class="num">Variants fit</th>
 <th class="num">Runtime / peak</th></tr></thead>
@@ -101,7 +104,8 @@ truncated, low reference coverage, missing effect direction, or an interaction
 scan. It does not mean the phenotype itself is bad. One full fit failed after
 all variants were removed by summary-statistic QC.</p>
 {% if failed %}
-<div class="table-scroll"><table class="catalog-table">
+<div class="table-scroll" role="region" aria-label="Rejected or failed Catalog inputs" tabindex="0"><table class="catalog-table">
+<caption><strong>Table 2.</strong> Rejected or failed GWAS Catalog inputs.</caption>
 <thead><tr><th>Accession and trait</th><th>Where rejected</th><th>Recorded reason</th></tr></thead>
 <tbody>
 {% for e in failed %}

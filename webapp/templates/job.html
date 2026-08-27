@@ -17,17 +17,17 @@ results</a>.</div>
 {% endif %}
 
 {% if running %}
-<p id="status-note" aria-live="polite">Current stage: <strong
+<p id="status-note" role="status" aria-live="polite" aria-atomic="true">Current stage: <strong
 id="stage-name">{% if job.get('active_stages') %}{% for key in job.active_stages %}{{ fallback_label(key) }}{% if not loop.last %} + {% endif %}{% endfor %}{% elif job.stage %}{{ fallback_label(job.stage) }}{% else %}queued{% endif %}</strong>. This page updates
 live.</p>
-<div class="progress-lines" id="progress-lines" aria-live="polite" hidden></div>
+<div class="progress-lines" id="progress-lines" hidden></div>
 <noscript><p class="muted">JavaScript is disabled —
 <a href="/jobs/{{ job.id }}">reload this page</a> to update the status.</p>
 </noscript>
 {% endif %}
 
 <h2>Analysis stages</h2>
-<ul class="stages" id="stages" aria-live="polite">
+<ul class="stages" id="stages">
 {% for item in stages %}
 {% set mapped = item is mapping %}
 {% set key = item.key if mapped else item %}
@@ -45,7 +45,9 @@ live.</p>
 <div id="munge"{% if not munge %} hidden{% endif %}>
 {% if current_schema %}
 <h2>Mandatory trait screens</h2>
+<div class="table-scroll" role="region" aria-label="Mandatory trait screen counts" tabindex="0">
 <table id="m-trait-screens">
+<caption><strong>Table 1.</strong> Per-trait mandatory-screen counts.</caption>
 <tr><th>Trait</th><th class="num">Input</th><th class="num">Kept</th>
     <th class="num">Dropped</th></tr>
 {% for key in ("trait1", "trait2") %}
@@ -55,10 +57,12 @@ live.</p>
     <td class="num" id="m-screen-kept-{{ key }}">{{ s.get('n_kept', '—') }}</td>
     <td class="num" id="m-screen-dropped-{{ key }}">{{ s.get('n_dropped', '—') }}</td></tr>
 {% endfor %}
-</table>
+</table></div>
 {% endif %}
 <h2>Joint analysis set</h2>
+<div class="table-scroll" role="region" aria-label="Joint analysis variant counts" tabindex="0">
 <table>
+<caption><strong>Table {{ 2 if current_schema else 1 }}.</strong> Joint analysis-set counts.</caption>
 <tr><td>Variants in LD reference</td>
 <td class="num" id="m-n-cache">{{ munge.n_cache if munge else "—" }}</td></tr>
 {% if current_schema %}
@@ -73,7 +77,7 @@ live.</p>
 <td>Dropped by the LD-consistency screen</td>
 <td class="num" id="m-screen-drop">{{ munge.n_screen_drop if munge else "" }}</td></tr>
 {% endif %}
-</table>
+</table></div>
 </div>
 {% endblock %}
 

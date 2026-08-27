@@ -10,8 +10,9 @@
   <p class="lead">Supply two GWAS summary-statistic datasets. bipred aligns
   both traits to one LD reference, fits them jointly, and returns diagnostic
   genetic-correlation, SNP-heritability, and model-implied overlap estimates.</p>
-  <p><a class="button" href="/demo">Run the synthetic demo</a>
-  <span class="muted">No upload required; posterior weights included.</span></p>
+  <div class="demo-action"><form method="post" action="/demo">
+    <button type="submit">Run the synthetic demo</button>
+  </form><span class="muted">No upload required; posterior weights included.</span></div>
 </section>
 
 {% if error %}
@@ -44,20 +45,23 @@
     <input type="hidden" id="catalog_auto_label{{ trait }}"
            name="catalog_auto_label{{ trait }}"
            value="{{ f.get('catalog_auto_label' ~ trait, '') }}">
-    <p class="field-help">Choose exactly one source: a local file or a GWAS
+    <p class="field-help" id="source-help{{ trait }}">Choose exactly one source: a local file or a GWAS
     Catalog accession.</p>
 
     <label for="sumstats{{ trait }}">Summary-statistics file</label>
     <input type="file" id="sumstats{{ trait }}" name="sumstats{{ trait }}"
-           accept=".tsv,.txt,.gz,text/tab-separated-values,text/plain,application/gzip">
+           aria-describedby="source-help{{ trait }} source-error{{ trait }}"
+           accept=".tsv,.txt,.csv,.gz,.bgz,text/tab-separated-values,text/csv,text/plain,application/gzip">
     <div class="preview" id="preview{{ trait }}" aria-live="polite"></div>
 
     <div class="or"><span>or</span></div>
     <label for="gcst{{ trait }}">GWAS Catalog accession</label>
     <input type="text" id="gcst{{ trait }}" name="gcst{{ trait }}"
            class="gcst" autocomplete="off" placeholder="e.g. GCST90446168"
+           aria-describedby="source-help{{ trait }} source-error{{ trait }}"
            value="{{ f.get('gcst' ~ trait, '') }}">
     <div class="preview" id="catalog{{ trait }}" aria-live="polite"></div>
+    <p class="source-error" id="source-error{{ trait }}" hidden></p>
 
     <label for="label{{ trait }}">Trait label</label>
     <input type="text" id="label{{ trait }}" name="label{{ trait }}"
@@ -89,8 +93,10 @@
 </div>
 
 <p class="catalog-note">See the <a href="/catalog">LDpred3 compatibility
-evidence</a>: 49 completed phenotypes plus documented rejected and failed
-inputs, augmented by this server's own attempts.</p>
+evidence</a>:{% if evidence_available %} {{ evidence_completed }} completed
+phenotypes and {{ evidence_rejected }} documented rejected or failed inputs,
+augmented by this server's own attempts{% else %} canonical counts are
+currently unavailable; locally observed attempts remain listed{% endif %}.</p>
 
 <section class="form-section">
   <h2>Analysis reference</h2>
@@ -101,7 +107,8 @@ inputs, augmented by this server's own attempts.</p>
   {% endfor %}
   </select>
   <p class="field-help">Both datasets must match the reference ancestry and
-  genome build. Upload limit: {{ max_mb }} MB per file.</p>
+  genome build. Combined multipart upload limit: {{ max_mb }} MB, plus a small
+  allowance for form fields.</p>
 </section>
 
 <details class="advanced">
@@ -128,15 +135,18 @@ inputs, augmented by this server's own attempts.</p>
     </div>
     <div>
       <label for="burn_in">Burn-in iterations</label>
-      <input type="number" id="burn_in" name="burn_in" min="0"
+      <input type="number" id="burn_in" name="burn_in" min="{{ min_burn_in }}"
              max="100000" step="1" value="{{ f.get('burn_in', '200') }}">
     </div>
     <div>
       <label for="num_iter">Sampling iterations</label>
-      <input type="number" id="num_iter" name="num_iter" min="1"
+      <input type="number" id="num_iter" name="num_iter" min="{{ min_num_iter }}"
              max="100000" step="1" value="{{ f.get('num_iter', '200') }}">
     </div>
   </div>
+  <p class="field-help">At least {{ min_burn_in }} burn-in and
+  {{ min_num_iter }} retained iterations are required. This floor rejects
+  obviously non-diagnostic schedules; it does not establish convergence.</p>
   <label for="cross_corr">Cross-trait sampling-error correlation</label>
   <input type="number" id="cross_corr" name="cross_corr" min="-0.999999"
          max="0.999999" step="any" value="{{ f.get('cross_corr', '0') }}">

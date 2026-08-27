@@ -56,7 +56,7 @@ code {
   top: 0;
   z-index: 20;
   color: var(--white);
-  background: var(--teal);
+  background: var(--teal-dark);
   box-shadow: 0 1px 3px rgb(0 37 70 / 18%);
 }
 .header-inner {
@@ -90,13 +90,13 @@ code {
 }
 .brand-mark i:first-child { left: 0; }
 .brand-mark i:last-child { right: 0; background: rgb(255 255 255 / 18%); }
-.tag { font-size: 0.88rem; opacity: 0.82; }
+.tag { color: var(--white); font-size: 0.88rem; }
 nav { margin-left: auto; display: flex; align-self: stretch; }
 nav a {
   display: flex;
   align-items: center;
   padding: 0 0.72rem;
-  color: rgb(255 255 255 / 88%);
+  color: var(--white);
   text-decoration: none;
   font-size: 0.88rem;
   font-weight: 600;
@@ -107,6 +107,7 @@ nav a:hover, nav a.active {
   background: rgb(0 37 70 / 14%);
   border-bottom-color: var(--white);
 }
+.nav-form { display: flex; margin: 0; }
 
 main {
   max-width: var(--content);
@@ -164,9 +165,11 @@ input[type="file"], select {
   line-height: 1.3;
 }
 input[type="file"] { padding: 0.35rem; }
-input:focus, select:focus, summary:focus, button:focus, a:focus-visible {
-  outline: 3px solid #78ccda;
-  outline-offset: 2px;
+input:focus, select:focus, summary:focus, button:focus-visible, a:focus-visible,
+.table-scroll:focus-visible {
+  outline: 3px solid var(--navy);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 2px var(--white);
 }
 input:disabled, select:disabled, button:disabled { opacity: 0.56; cursor: not-allowed; }
 .row { display: flex; gap: 1.15rem; align-items: flex-start; }
@@ -176,6 +179,8 @@ input:disabled, select:disabled, button:disabled { opacity: 0.56; cursor: not-al
 .or::before, .or::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
 .preview { min-height: 0.2rem; margin: 0.28rem 0; font-size: 0.85rem; }
 .preview:empty { display: none; }
+.source-error { margin: 0.3rem 0; color: var(--danger); font-size: 0.88rem; font-weight: 650; }
+.source-error[hidden] { display: none; }
 .chips { display: flex; flex-wrap: wrap; gap: 0.3rem; margin: 0.3rem 0; }
 .chip { padding: 0.08rem 0.42rem; border: 1px solid #b9cbd2; border-radius: 3px; background: var(--white); }
 .chip b { color: var(--teal-dark); }
@@ -209,6 +214,22 @@ button, .button {
   cursor: pointer;
 }
 button:hover, .button:hover { color: var(--white); background: var(--teal-dark); }
+.nav-form .nav-link {
+  min-height: 0;
+  margin: 0;
+  padding: 0 0.72rem;
+  color: var(--white);
+  background: transparent;
+  border-bottom: 3px solid transparent;
+  border-radius: 0;
+  font-size: 0.88rem;
+}
+.nav-form .nav-link:hover {
+  background: rgb(0 37 70 / 22%);
+  border-bottom-color: var(--white);
+}
+.demo-action { display: flex; align-items: center; flex-wrap: wrap; gap: 0.35rem; }
+.demo-action form { margin: 0; }
 
 .alert {
   margin: 0.9rem 0;
@@ -228,12 +249,14 @@ button:hover, .button:hover { color: var(--white); background: var(--teal-dark);
 .privacy-note { margin-top: 1.2rem; max-width: 52rem; }
 
 table { width: 100%; margin: 0.7rem 0 1.2rem; border-collapse: collapse; font-size: 0.9rem; }
+caption { padding: 0.25rem 0.75rem 0.45rem; color: var(--muted); text-align: left; }
 th, td { padding: 0.58rem 0.75rem; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
 thead th { color: var(--navy); background: var(--surface); font-size: 0.82rem; letter-spacing: 0.02em; }
+tbody th { font-weight: 600; }
 tbody tr:hover { background: #f8fafb; }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.table-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); }
-.table-scroll table { margin: 0; }
+.table-scroll { margin: 0.7rem 0 1.2rem; overflow-x: auto; overscroll-behavior-inline: contain; border: 1px solid var(--line); border-radius: var(--radius); }
+.table-scroll table { width: max-content; min-width: 100%; margin: 0; }
 
 .badge, .profile {
   display: inline-block;
@@ -295,14 +318,18 @@ dd { margin: 0.05rem 0; }
 .evidence-limits li { margin-bottom: 0.45rem; }
 .diagnostic-estimates { padding: 0.8rem 1rem; border: 1px solid var(--danger); border-radius: var(--radius); }
 
-/* Results-page variant figures (schematic Venn + QC attrition bars). */
+/* Results-page MiXeR overlap and QC attrition figures. */
 .figures { display: flex; gap: 2rem; align-items: flex-start; flex-wrap: wrap; }
 .figures > div { flex: 1; min-width: 300px; }
 .venn { display: block; width: 100%; max-width: 430px; height: auto; }
 .venn .c1 { fill: var(--teal); fill-opacity: 0.25; stroke: var(--teal-dark); stroke-width: 1.5; }
 .venn .c2 { fill: var(--navy); fill-opacity: 0.22; stroke: var(--navy); stroke-width: 1.5; }
+.venn .c2.coincident { fill-opacity: 0.08; stroke-dasharray: 5 3; stroke-width: 2.5; }
 .venn .count { font-size: 15px; font-weight: 650; fill: var(--ink); }
-.venn .region { font-size: 10.5px; fill: var(--muted); }
+.venn .region { font-size: 12px; font-weight: 550; fill: var(--ink); }
+.mixer-overlap { max-width: 47rem; margin: 1rem 0 1.4rem; }
+.mixer-overlap figcaption, .attrition figcaption { color: var(--muted); font-size: 0.88rem; }
+.attrition { margin: 0.8rem 0 1.3rem; }
 .legend { margin: 0.35rem 0 0; padding: 0; list-style: none; color: var(--muted); font-size: 0.88rem; }
 .legend li { margin: 0.12rem 0; }
 .swatch { display: inline-block; width: 0.75em; height: 0.75em; margin-right: 0.4em; border-radius: 2px; }
@@ -315,7 +342,7 @@ dd { margin: 0.05rem 0; }
 .attrition .t2 .bar { background: var(--navy); }
 .attrition .n { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
 
-footer { color: rgb(255 255 255 / 88%); background: var(--teal-dark); }
+footer { color: var(--white); background: var(--teal-dark); }
 .footer-inner { max-width: var(--content); margin: 0 auto; padding: 1.2rem 1.25rem; font-size: 0.84rem; }
 
 @media (max-width: 760px) {
@@ -336,6 +363,8 @@ footer { color: rgb(255 255 255 / 88%); background: var(--teal-dark); }
   .card { padding-left: 0.8rem; padding-right: 0.8rem; }
   .compact-alert p { display: block; margin-left: 0; }
   th, td { padding: 0.48rem 0.55rem; }
+  .nav-form .nav-link { padding: 0 0.43rem; font-size: 0.74rem; }
+  .attrition .arow { grid-template-columns: 8.2em minmax(5rem, 1fr) 4.5em; gap: 0.35rem; font-size: 0.82rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {

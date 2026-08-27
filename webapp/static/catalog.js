@@ -2,9 +2,15 @@
 (function () {
   "use strict";
   const GCST = /^GCST\d{3,}$/i;
-  const states = {1: {seq: 0, auto: {}}, 2: {seq: 0, auto: {}}};
-  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => (
-    {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+  const states = {1: {seq: 0, auto: {}, controller: null},
+                  2: {seq: 0, auto: {}, controller: null}};
+
+  function line(className, text) {
+    const node = document.createElement("span");
+    node.className = className;
+    node.textContent = text;
+    return node;
+  }
 
   function fmtN(meta) {
     if (meta.n_cases && meta.n_controls) {
@@ -12,6 +18,11 @@
              Number(meta.n_controls).toLocaleString() + " controls";
     }
     if (meta.n_eff) return "N ≈ " + Number(meta.n_eff).toLocaleString();
+    if (meta.n_total_reported) {
+      return "Reported total N " +
+             Number(meta.n_total_reported).toLocaleString() +
+             "; ancestry/design unresolved, so effective N was not filled";
+    }
     return null;
   }
 
@@ -39,7 +50,8 @@
     const autoN = document.getElementById("catalog_auto_n" + trait);
     const autoLabel = document.getElementById("catalog_auto_label" + trait);
     if (!accession) {
-      info.innerHTML = "";
+      if (state.controller) state.controller.abort();
+      info.replaceChildren();
       if (autoLabel && autoLabel.value === "1") {
         setAuto(label, state, "label", "Trait " + trait);
         autoLabel.value = "";
@@ -53,38 +65,53 @@
       return;
     }
     if (!GCST.test(accession)) {
-      info.innerHTML = '<span class="warn">Expected a GCST accession like ' +
-                       "GCST90446168.</span>";
+      info.replaceChildren(line("warn", "Expected a GCST accession like " +
+                                     "GCST90446168."));
       return;
     }
-    info.innerHTML = '<span class="muted">Looking up ' + esc(accession) +
-                     "…</span>";
+    if (state.controller) state.controller.abort();
+    const controller = new AbortController();
+    state.controller = controller;
+    const timeout = window.setTimeout(() => controller.abort(), 10000);
+    info.replaceChildren(line("muted", "Looking up " + accession + "…"));
     let meta;
     try {
       const response = await fetch("/catalog/lookup?accession=" +
-                                   encodeURIComponent(accession));
+                                   encodeURIComponent(accession),
+                                   {signal: controller.signal});
       meta = await response.json();
       if (!response.ok) throw new Error(meta.error || "lookup failed");
     } catch (err) {
       if (seq === state.seq) {
-        info.innerHTML = '<span class="warn">' + esc(err.message) + "</span>";
+        const message = err.name === "AbortError" ?
+          "Catalog lookup timed out." : err.message;
+        info.replaceChildren(line("warn", message));
       }
       return;
+    } finally {
+      window.clearTimeout(timeout);
     }
     // A slower response for a previous accession must never populate this form.
     if (seq !== state.seq || input.value.trim().toUpperCase() !== accession) return;
 
-    let html = '<div class="chips"><span class="chip"><b>' +
-               esc(meta.accession) + "</b>→" + esc(meta.trait) +
-               "</span></div>";
+    const nodes = [];
+    const chips = document.createElement("div");
+    chips.className = "chips";
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    const key = document.createElement("b");
+    key.textContent = meta.accession;
+    chip.append(key, document.createTextNode("→" + meta.trait));
+    chips.append(chip);
+    nodes.push(chips);
     const n = fmtN(meta);
-    if (n) html += '<span class="muted">' + esc(n) + ".</span> ";
+    if (n) nodes.push(line("muted", n + ". "));
     if (meta.remote_bytes) {
-      html += '<span class="muted">Harmonised file: ' +
-              Math.round(meta.remote_bytes / 1048576) +
-              " MB; streamed and filtered to the LD reference.</span>";
+      nodes.push(line("muted", "Harmonised file: " +
+        Math.round(meta.remote_bytes / 1048576) +
+        " MB; streamed and filtered to the LD reference."));
     }
-    info.innerHTML = html;
+    info.replaceChildren(...nodes);
 
     if (mayReplace(label, state, "label", "Trait " + trait)) {
       setAuto(label, state, "label", meta.trait);

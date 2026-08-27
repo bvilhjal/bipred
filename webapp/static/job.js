@@ -6,13 +6,20 @@
   if (!cfg || !["queued", "launching", "running"].includes(cfg.status)) return;
 
   const badge = document.getElementById("badge");
-  const stageName = document.getElementById("stage-name");
+  let stageName = document.getElementById("stage-name");
   const stagesEl = document.getElementById("stages");
   const mungeEl = document.getElementById("munge");
   const failure = document.getElementById("failure");
   const failureMsg = document.getElementById("failure-msg");
   const note = document.getElementById("status-note");
   const progressLines = document.getElementById("progress-lines");
+  let timer = null;
+  let controller = null;
+  let retryMs = 2000;
+  let lastAnnouncement = "";
+  const MAX_RETRY_MS = 30000;
+  const HIDDEN_RETRY_MS = 15000;
+  const REQUEST_TIMEOUT_MS = 10000;
 
   const NUM = new Intl.NumberFormat();
   const STAGE_BY_KEY = Object.fromEntries(
@@ -21,6 +28,30 @@
 
   function stageLabel(name) {
     return (STAGE_BY_KEY[name] && STAGE_BY_KEY[name].label) || name;
+  }
+
+  function announce(text) {
+    if (!note || text === lastAnnouncement) return;
+    lastAnnouncement = text;
+    note.textContent = text;
+  }
+
+  function announceStage(label) {
+    const text = "Current stage: " + label + ". This page updates live.";
+    if (!note || text === lastAnnouncement) return;
+    lastAnnouncement = text;
+    const strong = document.createElement("strong");
+    strong.id = "stage-name";
+    strong.textContent = label;
+    note.replaceChildren(document.createTextNode("Current stage: "), strong,
+                         document.createTextNode(". This page updates live."));
+    stageName = strong;
+  }
+
+  function schedule(delay) {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(tick, document.hidden ?
+      Math.max(delay, HIDDEN_RETRY_MS) : delay);
   }
 
   /* A library progress event: {step, done, total, unit, phase?}. `done`
@@ -195,21 +226,42 @@
   }
 
   async function tick() {
-    let s;
-    try {
-      const response = await fetch("/jobs/" + cfg.id + "/status");
-      if (!response.ok) {
-        if (note) note.textContent = "Connection lost; retrying…";
-        setTimeout(tick, 2000);
-        return;
-      }
-      s = await response.json();
-    } catch (err) {
-      if (note) note.textContent = "Connection lost; retrying…";
-      setTimeout(tick, 2000);
+    if (document.hidden) {
+      schedule(HIDDEN_RETRY_MS);
       return;
     }
-    if (!s || !s.status) { setTimeout(tick, 2000); return; }
+    let s;
+    controller = new AbortController();
+    const requestTimeout = window.setTimeout(
+      () => controller.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      const response = await fetch("/jobs/" + cfg.id + "/status",
+                                   {signal: controller.signal});
+      if (!response.ok) {
+        if (response.status >= 400 && response.status < 500 &&
+            ![408, 429].includes(response.status)) {
+          announce("Status updates stopped: this job is no longer available " +
+                   "(HTTP " + response.status + ").");
+          return;
+        }
+        throw new Error("HTTP " + response.status);
+      }
+      s = await response.json();
+      if (!s || !s.status) {
+        throw new Error("invalid status response");
+      }
+      retryMs = 2000;
+    } catch (err) {
+      retryMs = Math.min(MAX_RETRY_MS, retryMs * 2);
+      announce((err.name === "AbortError" ? "Status request timed out" :
+                "Connection lost") + "; retrying in " +
+               Math.round(retryMs / 1000) + " seconds.");
+      schedule(retryMs);
+      return;
+    } finally {
+      window.clearTimeout(requestTimeout);
+      controller = null;
+    }
 
     /* A queued job created by an older server is upgraded to the current
      * workflow when its runner starts. Reload so the server can send the
@@ -224,15 +276,11 @@
       badge.textContent = s.status;
       badge.className = "badge badge-" + s.status;
     }
-    if (stageName) stageName.textContent = activeStageLabel(s);
+    const activeLabel = activeStageLabel(s);
     renderStages(s);
     renderMunge(s.munge);
     renderProgress(s.progress);
-    if (note && !note.hidden) {
-      note.innerHTML = "Current stage: <strong>" +
-                       activeStageLabel(s) +
-                       "</strong>. This page updates live.";
-    }
+    if (note && !note.hidden) announceStage(activeLabel);
 
     if (s.status === "done") {
       window.location.href = "/jobs/" + cfg.id + "/results";
@@ -246,8 +294,16 @@
       }
       return;
     }
-    setTimeout(tick, 2000);
+    schedule(2000);
   }
 
-  setTimeout(tick, 2000);
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) {
+      if (controller) controller.abort();
+      schedule(HIDDEN_RETRY_MS);
+    } else {
+      schedule(0);
+    }
+  });
+  schedule(2000);
 })();
