@@ -222,7 +222,8 @@ def test_config_accepts_a_positive_finite_retention_period(monkeypatch):
 @pytest.mark.integration
 def test_demo_job_end_to_end(web):
     client, root = web
-    redirect = client.get("/demo", follow_redirects=False)
+    assert client.get("/demo", follow_redirects=False).status_code == 405
+    redirect = client.post("/demo", follow_redirects=False)
     assert redirect.status_code == 303
     job_id = redirect.headers["location"].rsplit("/", 1)[-1]
     job = _wait_for_terminal(root, job_id)
@@ -258,7 +259,8 @@ def test_demo_job_end_to_end(web):
     json.dumps(result, allow_nan=False)
     assert result["provenance"]["compute"]["logical_cpus"] >= 1
     assert result["provenance"]["resources"]["wall_s"] > 0
-    assert result["provenance"]["resources"]["peak_rss_gb"] > 0
+    peak_rss = result["provenance"]["resources"]["peak_rss_gb"]
+    assert peak_rss is None or peak_rss > 0
     assert result["provenance"]["sample_size"]["trait1"]["median"] > 0
     ldsc = result["ldsc"]
     assert ldsc["m_snps"] == 1500
@@ -281,7 +283,7 @@ def test_demo_job_end_to_end(web):
     assert "After mandatory screen" in page.text
     assert "joint pre-screen drop" in page.text
     assert "Dropped by the LD-consistency screen" not in page.text
-    assert "<svg" in page.text and "Variant overlap" in page.text
+    assert "<svg" in page.text and "Model-implied MiXeR overlap" in page.text
     for kind in ("result", "munge", "weights1", "weights2"):
         assert client.get(f"/jobs/{job_id}/download/{kind}").status_code == 200
 
@@ -344,6 +346,19 @@ def test_incomplete_case_control_rejected(web):
     assert "Something needs fixing" not in response.text
     assert 'name="screen"' not in response.text
     assert "Mandatory LD-consistency screen" in response.text
+
+
+def test_public_fit_schedule_rejects_non_diagnostic_chain(web):
+    client, root = web
+    with _demo_upload(root, 1)[1] as f1, _demo_upload(root, 2)[1] as f2:
+        response = client.post(
+            "/jobs",
+            files={"sumstats1": ("t1.tsv", f1, "text/tab-separated-values"),
+                   "sumstats2": ("t2.tsv", f2, "text/tab-separated-values")},
+            data={"cache_key": "TEST", "n_eff1": "100000",
+                  "n_eff2": "100000", "burn_in": "0", "num_iter": "1"})
+    assert response.status_code == 400
+    assert "burn-in: must be between 50" in response.text
 
 
 def test_obsolete_screen_form_field_cannot_disable_mandatory_screen(web):
@@ -489,7 +504,7 @@ def test_status_endpoint(web):
 
     client, root = web
     assert client.get("/jobs/nope/status").status_code == 404
-    redirect = client.get("/demo", follow_redirects=False)
+    redirect = client.post("/demo", follow_redirects=False)
     job_id = redirect.headers["location"].rsplit("/", 1)[-1]
     job = _wait_for_terminal(root, job_id)
     response = client.get(f"/jobs/{job_id}/status")
@@ -790,7 +805,9 @@ def test_results_page_tolerates_pre_qc_report_munge(web):
     page = client.get(f"/jobs/{job['id']}/results")
     assert page.status_code == 200
     assert "predates the per-step QC report" in page.text
-    assert "<svg" not in page.text         # no figures without per-trait counts
+    assert "<svg" in page.text              # MiXeR overlap needs no QC counts
+    assert "Model-implied MiXeR overlap" in page.text
+    assert "Variant processing" not in page.text
 
 
 def _full_munge_result(n_usable=True, stage_schema=1):
@@ -854,8 +871,31 @@ def test_figure_data_from_munge():
     assert _figure_data({"munge": {"n_kept": 5}}) is None
 
 
-def test_results_page_draws_variant_figures(web):
-    """A full munge report renders the Venn and QC-attrition figures."""
+def test_mixer_figure_data_uses_model_implied_overlap():
+    from webapp.app import _mixer_figure_data
+
+    partial = _mixer_figure_data(_full_munge_result())
+    assert partial == {
+        "trait1_total": 10.0, "trait2_total": 20.0, "shared": 5.0,
+        "trait1_only": 5.0, "trait2_only": 15.0,
+        "fraction_trait1": 0.5, "fraction_trait2": 0.25,
+    }
+    full = _full_munge_result()
+    full["joint"]["mixer"].update(
+        {"n_causal": [5, 5], "n_shared": 5})
+    assert _mixer_figure_data(full)["trait1_only"] == 0
+    empty = _full_munge_result()
+    empty["joint"]["mixer"].update(
+        {"n_causal": [0, 0], "n_shared": 0})
+    assert _mixer_figure_data(empty) is None
+    impossible = _full_munge_result()
+    impossible["joint"]["mixer"].update(
+        {"n_causal": [4, 5], "n_shared": 6})
+    assert _mixer_figure_data(impossible) is None
+
+
+def test_results_page_draws_mixer_overlap_and_qc_attrition(web):
+    """MiXeR overlap and observed QC attrition remain distinct figures."""
     from webapp import jobs
     client, root = web
     job = jobs.create_job(root, options={"weights": False},
@@ -868,11 +908,13 @@ def test_results_page_draws_variant_figures(web):
     page = client.get(f"/jobs/{job['id']}/results")
     assert page.status_code == 200
     assert "<svg" in page.text
-    assert "Variant overlap" in page.text
-    assert ">690<" in page.text            # shared count inside the Venn
+    assert "Model-implied MiXeR overlap" in page.text
+    assert 'data-overlap-mode="partial"' in page.text
+    assert ">5<" in page.text              # MiXeR shared count in the Venn
+    assert "Figure 2." in page.text and "Variant-count attrition" in page.text
     assert "After mandatory screen" in page.text
-    assert "750 after the mandatory screen" in page.text
-    assert "not as a joint pre-screen drop" in page.text
+    assert ">750<" in page.text
+    assert "joint pre-screen drop" in page.text
     assert "Dropped by the LD-consistency screen" not in page.text
 
     status_page = client.get(f"/jobs/{job['id']}")
@@ -882,6 +924,37 @@ def test_results_page_draws_variant_figures(web):
     assert 'id="m-screen-kept-trait1">750<' in status_page.text
     assert 'id="m-screen-dropped-trait1">30<' in status_page.text
     assert "Observed in both GWAS" not in status_page.text
+
+
+@pytest.mark.parametrize(
+    ("totals", "shared", "mode"),
+    [([10, 20], 0, "empty"), ([10, 20], 5, "partial"),
+     ([5, 10], 5, "complete"), ([5, 5], 5, "identical")],
+)
+def test_results_page_mixer_overlap_geometries(web, totals, shared, mode):
+    from webapp import jobs
+
+    client, root = web
+    job = jobs.create_job(
+        root, options={"weights": False},
+        labels={"trait1": "A", "trait2": "B"})
+    jobs.update_job(root, job["id"], status="done", finished=time.time())
+    result = _full_munge_result(stage_schema=3)
+    result["joint"]["mixer"].update(
+        {"n_causal": totals, "n_shared": shared})
+    (root / "jobs" / job["id"] / "result.json").write_text(
+        json.dumps(result))
+
+    page = client.get(f"/jobs/{job['id']}/results")
+
+    assert page.status_code == 200
+    assert f'data-overlap-mode="{mode}"' in page.text
+    if mode == "complete":
+        assert "shared (smaller set)" in page.text
+        assert "trait 2 only" in page.text
+    if mode == "identical":
+        assert "identical modeled sets" in page.text
+        assert "The two modeled sets are identical and fully shared" in page.text
 
 
 def test_legacy_results_keep_fitted_panel_ldsc_description(web):
@@ -1394,21 +1467,18 @@ def test_concurrent_same_store_fetch_downloads_once(tmp_path, monkeypatch):
     assert _rows(tmp_path / "owner.gz") == _rows(tmp_path / "waiter.gz")
 
 
-def test_stale_store_owner_cannot_unlink_successor_lock(tmp_path, monkeypatch):
+def test_store_process_lock_cannot_be_stolen_or_unlinked(tmp_path):
     from webapp import gwascat
     path = tmp_path / "store.lock"
     first = gwascat._StoreLock(path)
     assert first.acquire()
-    old = time.time() - gwascat.LOCK_STALE - 1
-    os.utime(path, (old, old))
     second = gwascat._StoreLock(path)
-    assert second.acquire()
-    successor_identity = second.identity
+    assert not second.acquire()
     first.release()
-    stat = path.stat()
-    assert (stat.st_dev, stat.st_ino) == successor_identity
+    assert path.exists()
+    assert second.acquire()
     second.release()
-    assert not path.exists()
+    assert path.exists()
 
 
 def test_concurrent_different_urls_never_reuses_old_content(
@@ -1785,7 +1855,7 @@ def test_rerunning_an_analysis_reuses_the_download(web, monkeypatch, tmp_path):
         return _wait_for_terminal(
             root, response.headers["location"].rsplit("/", 1)[-1])
 
-    first = submit(burn_in=20, num_iter=20, cross_corr=0)
+    first = submit(burn_in=50, num_iter=40, cross_corr=0)
     assert first["status"] == "done", first.get("error")
     assert set(first["stages"]) >= {
         "acquire", "prepare", "screen", "pair", "fit"}
@@ -1803,7 +1873,7 @@ def test_rerunning_an_analysis_reuses_the_download(web, monkeypatch, tmp_path):
     # Deleting the deposits is the assertion: a re-fetch would now fail.
     for accession in ("GCST000010", "GCST000011"):
         os.unlink(_FAKE_URLS[accession])
-    second = submit(burn_in=12, num_iter=15, cross_corr=0.1)
+    second = submit(burn_in=60, num_iter=45, cross_corr=0.1)
     assert second["status"] == "done", second.get("error")
     assert second["stage_details"]["acquire"]["traits"] == {
         "trait1": "reused stored data", "trait2": "reused stored data"}
@@ -1824,7 +1894,7 @@ def test_rerunning_an_analysis_reuses_the_download(web, monkeypatch, tmp_path):
             first["options"][f"catalog{trait}"]["sha256"]
     with open(root / "jobs" / second["id"] / "result.json") as fh:
         provenance = json.load(fh)["provenance"]
-    assert provenance["burn_in"] == 12 and provenance["num_iter"] == 15
+    assert provenance["burn_in"] == 60 and provenance["num_iter"] == 45
     assert provenance["cross_corr"] == 0.1
     assert provenance["catalog"]["trait1"]["prepared_reused"] is True
     assert "LD-consistency-screened" in \
@@ -2027,11 +2097,133 @@ def test_staging_jobs_are_not_launched(tmp_path):
     assert app.state.procs == {}
 
 
+def test_supervisor_stops_owned_fit_at_runtime_limit(tmp_path):
+    from webapp import jobs
+    from webapp.app import _sweep_once, create_app
+
+    class FakeProcess:
+        def __init__(self):
+            self.returncode = None
+            self.terminated = False
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.terminated = True
+            self.returncode = -15
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+
+    app = create_app()
+    app.state.root = tmp_path
+    (tmp_path / "jobs").mkdir()
+    app.state.config["job_timeout_s"] = 1
+    app.state.last_purge = time.time()
+    job = jobs.create_job(tmp_path, options={}, labels={}, status="running")
+    jobs.update_job(tmp_path, job["id"], started=time.time() - 10)
+    proc = FakeProcess()
+    app.state.procs = {job["id"]: proc}
+    app.state.orphans = {}
+
+    _sweep_once(app)
+
+    saved = jobs.load_job(tmp_path, job["id"])
+    assert proc.terminated is True
+    assert saved["status"] == "failed"
+    assert "runtime limit" in saved["error"]
+
+
 def test_webapp_defaults_to_one_memory_heavy_fit(monkeypatch):
     from webapp.app import _config
 
     monkeypatch.delenv("BIPRED_WEB_CONCURRENCY", raising=False)
     assert _config()["concurrency"] == 1
+
+
+def test_webapp_rejects_invalid_resource_limits(monkeypatch):
+    from webapp.app import _config
+
+    for name, value in (("BIPRED_WEB_CONCURRENCY", "0"),
+                        ("BIPRED_WEB_QUEUE_MAX", "nope"),
+                        ("BIPRED_WEB_JOB_TIMEOUT_HOURS", "inf"),
+                        ("BIPRED_WEB_MAX_ROWS", "0"),
+                        ("BIPRED_WEB_MAX_EXPANDED_GB", "nan")):
+        monkeypatch.setenv(name, value)
+        with pytest.raises(ValueError, match=name):
+            _config()
+        monkeypatch.delenv(name)
+    for name in ("BIPRED_WEB_STORE_GB", "BIPRED_WEB_PREPARED_GB"):
+        monkeypatch.setenv(name, "0")
+        assert _config()["store_gb" if name.endswith("STORE_GB")
+                         else "prepared_gb"] == 0
+        monkeypatch.delenv(name)
+
+
+def test_body_limit_rejects_before_route_parsing():
+    from fastapi import FastAPI
+    from webapp.app import _BodyLimitMiddleware
+
+    small = FastAPI()
+
+    @small.post("/upload")
+    async def upload():
+        return {"unexpected": True}
+
+    small.add_middleware(_BodyLimitMiddleware, limit=8)
+    with TestClient(small) as client:
+        response = client.post(
+            "/upload", content=b"0123456789",
+            headers={"content-type": "application/octet-stream"})
+    assert response.status_code == 413
+
+
+def test_runner_input_work_guard_bounds_rows_and_gzip_expansion(tmp_path):
+    from webapp.runner import _input_work_guard
+
+    plain = tmp_path / "sumstats.tsv"
+    plain.write_text("id\tbeta\nrs1\t.1\nrs2\t.2\n", encoding="utf-8")
+    report = _input_work_guard(
+        plain, max_rows=2, max_expanded_bytes=1024)
+    assert report["rows"] == 2
+    with pytest.raises(ValueError, match="1-row limit"):
+        _input_work_guard(
+            plain, max_rows=1, max_expanded_bytes=1024)
+
+    compressed = tmp_path / "sumstats.tsv.gz"
+    with gzip.open(compressed, "wb") as fh:
+        fh.write(b"id\tbeta\n" + b"rs1\t0.1\n" * 20)
+    with pytest.raises(ValueError, match="decompressed input"):
+        _input_work_guard(
+            compressed, max_rows=100, max_expanded_bytes=32)
+
+
+def test_demo_is_post_only_same_origin_and_queue_bounded(web):
+    from webapp import jobs
+
+    client, root = web
+    assert client.get("/demo", follow_redirects=False).status_code == 405
+    refused = client.post(
+        "/demo", headers={"origin": "https://attacker.invalid"},
+        follow_redirects=False)
+    assert refused.status_code == 403
+
+    old_limit = client.app.state.config["queue_max"]
+    client.app.state.config["queue_max"] = 1
+    blocker = jobs.create_job(
+        root, options={}, labels={}, status="running")
+    try:
+        full = client.post("/demo", follow_redirects=False)
+        assert full.status_code == 503
+        assert full.headers["retry-after"] == "30"
+    finally:
+        jobs.update_job(root, blocker["id"], status="failed",
+                        finished=time.time(), error="test cleanup")
+        client.app.state.config["queue_max"] = old_limit
 
 
 def test_restart_reconciles_interrupted_but_not_queued_jobs(tmp_path):
@@ -2049,6 +2241,41 @@ def test_restart_reconciles_interrupted_but_not_queued_jobs(tmp_path):
     assert jobs.load_job(tmp_path, running["id"])["status"] == "failed"
     assert "server restarted" in jobs.load_job(tmp_path, running["id"])["error"]
     assert jobs.load_job(tmp_path, queued["id"])["status"] == "queued"
+
+
+def test_restart_preserves_live_runner_and_counts_its_slot(tmp_path):
+    from webapp import jobs
+    from webapp.app import _sweep_once, create_app
+
+    (tmp_path / "jobs").mkdir()
+    running = jobs.create_job(
+        tmp_path, options={}, labels={}, status="running")
+    token = jobs.new_runner_token()
+    running = jobs.update_job(
+        tmp_path, running["id"], pid=os.getpid(),
+        pid_identity=jobs.process_identity(os.getpid()), runner_token=token)
+    lease = jobs.ProcessFileLock(
+        jobs.runner_lease_path(tmp_path, running["id"], token))
+    assert lease.acquire()
+    queued = jobs.create_job(
+        tmp_path, options={}, labels={}, status="queued")
+    try:
+        recovered, live = jobs.recover_interrupted_jobs(
+            tmp_path, preserve_live=True)
+        assert recovered == [] and live == {running["id"]: os.getpid()}
+
+        app = create_app()
+        app.state.root = tmp_path
+        app.state.config["concurrency"] = 1
+        app.state.procs = {}
+        app.state.orphans = live
+        app.state.last_purge = time.time()
+        _sweep_once(app)
+    finally:
+        lease.release()
+
+    assert jobs.load_job(tmp_path, queued["id"])["status"] == "queued"
+    assert app.state.procs == {}
 
 
 def test_parse_columns():

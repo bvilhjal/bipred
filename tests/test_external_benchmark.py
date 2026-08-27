@@ -97,11 +97,12 @@ def test_probes_fail_closed_on_missing_tools(monkeypatch):
 
 def test_run_logged_captures_and_raises(tmp_path):
     log = tmp_path / "ok.log"
-    dt = ec.run_logged(["/bin/echo", "hello"],
+    dt = ec.run_logged([sys.executable, "-c", "print('hello')"],
                        timeout=60, log_path=str(log))
     assert dt >= 0 and "hello" in log.read_text()
     with pytest.raises(RuntimeError, match="command failed"):
-        ec.run_logged(["/bin/sh", "-c", "exit 3"], timeout=60)
+        ec.run_logged(
+            [sys.executable, "-c", "raise SystemExit(3)"], timeout=60)
 
 
 def test_provenance_records_actual_tree_state(tmp_path):

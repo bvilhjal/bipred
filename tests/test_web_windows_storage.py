@@ -5,7 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
+import sys
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -43,49 +46,74 @@ def test_cache_hash_still_detects_same_path_payload_mutation(tmp_path):
     assert second == hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def test_prepared_lock_closes_before_unlink_and_reacquires(
+def test_prepared_lock_is_persistent_and_reacquires_without_unlink(
         tmp_path, monkeypatch):
     lock = prepared_store._Lock(tmp_path / "prepared.lock")
     assert lock.acquire()
-    original_unlink = Path.unlink
-    descriptors_at_unlink = []
+    unlinks = []
 
     def checked_unlink(path, *args, **kwargs):
-        if path == lock.path:
-            descriptors_at_unlink.append(lock.fd)
-        return original_unlink(path, *args, **kwargs)
+        unlinks.append(path)
+        raise AssertionError("process locks must never unlink their pathname")
 
     monkeypatch.setattr(Path, "unlink", checked_unlink)
     lock.release()
 
-    assert descriptors_at_unlink == [None]
+    assert unlinks == []
+    assert lock.path.exists()
     successor = prepared_store._Lock(lock.path)
     assert successor.acquire()
     successor.release()
-    assert not lock.path.exists()
+    assert lock.path.exists()
 
 
-def test_prepared_lock_heartbeat_falls_back_from_fd_to_path(
-        tmp_path, monkeypatch):
+def test_prepared_lock_cannot_be_stolen_from_a_live_process(tmp_path):
+    first = prepared_store._Lock(tmp_path / "prepared.lock")
+    assert first.acquire()
+    successor = prepared_store._Lock(first.path)
+    assert not successor.acquire()
+
+    first.release()
+    assert successor.acquire()
+    successor.release()
+    assert successor.path.exists()
+
+
+def test_prepared_kernel_lock_needs_no_heartbeat(tmp_path):
     lock = prepared_store._Lock(tmp_path / "prepared.lock")
     assert lock.acquire()
-    real_utime = os.utime
-    touched = []
-
-    def windows_utime(target, *args, **kwargs):
-        touched.append(target)
-        if isinstance(target, int):
-            raise TypeError("Windows does not support fd utime")
-        return real_utime(target, *args, **kwargs)
-
-    monkeypatch.setattr(prepared_store.os, "utime", windows_utime)
     try:
+        descriptor = lock.fd
         lock.touch()
+        assert lock.fd == descriptor
+        assert lock.owned()
     finally:
         lock.release()
+    assert lock.path.exists()
 
-    assert touched[0] != lock.path
-    assert touched[1] == lock.path
+
+def test_process_lock_is_released_by_os_when_owner_exits(tmp_path):
+    path = tmp_path / "process.lock"
+    code = (
+        "import sys,time; from webapp.jobs import ProcessFileLock; "
+        "lock=ProcessFileLock(sys.argv[1]); assert lock.acquire(); "
+        "print('locked', flush=True); time.sleep(60)"
+    )
+    proc = subprocess.Popen(
+        [sys.executable, "-c", code, str(path)],
+        cwd=Path(__file__).resolve().parent.parent,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        assert proc.stdout.readline().strip() == "locked"
+        probe = jobs.ProcessFileLock(path)
+        assert not probe.acquire()
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)
+
+    probe = jobs.ProcessFileLock(path)
+    assert probe.acquire()
+    probe.release()
 
 
 def test_concurrent_job_writers_use_independent_temp_files(
@@ -187,15 +215,24 @@ def test_restart_can_preserve_and_report_a_live_runner(tmp_path):
     (tmp_path / "jobs").mkdir()
     live_job = jobs.create_job(
         tmp_path, options={}, labels={}, status="running")
-    jobs.update_job(tmp_path, live_job["id"], pid=os.getpid())
+    token = jobs.new_runner_token()
+    live_job = jobs.update_job(
+        tmp_path, live_job["id"], pid=os.getpid(),
+        pid_identity=jobs.process_identity(os.getpid()), runner_token=token)
+    lease = jobs.ProcessFileLock(
+        jobs.runner_lease_path(tmp_path, live_job["id"], token))
+    assert lease.acquire()
     dead_job = jobs.create_job(
         tmp_path, options={}, labels={}, status="launching")
     jobs.update_job(tmp_path, dead_job["id"], pid=4_000_000_000)
     queued = jobs.create_job(
         tmp_path, options={}, labels={}, status="queued")
 
-    recovered, live = jobs.recover_interrupted_jobs(
-        tmp_path, preserve_live=True)
+    try:
+        recovered, live = jobs.recover_interrupted_jobs(
+            tmp_path, preserve_live=True)
+    finally:
+        lease.release()
 
     assert jobs.pid_is_alive(os.getpid())
     assert not jobs.pid_is_alive(None)
@@ -204,6 +241,41 @@ def test_restart_can_preserve_and_report_a_live_runner(tmp_path):
     assert jobs.load_job(tmp_path, live_job["id"])["status"] == "running"
     assert jobs.load_job(tmp_path, dead_job["id"])["status"] == "failed"
     assert jobs.load_job(tmp_path, queued["id"])["status"] == "queued"
+
+
+def test_recovery_does_not_overwrite_completion_after_dead_pid_observation(
+        tmp_path, monkeypatch):
+    (tmp_path / "jobs").mkdir()
+    running = jobs.create_job(
+        tmp_path, options={}, labels={}, status="running")
+
+    def completes_while_checked(root, snapshot):
+        jobs.update_job(root, snapshot["id"], status="done", finished=time.time())
+        return False
+
+    monkeypatch.setattr(jobs, "runner_is_verified", completes_while_checked)
+    recovered, live = jobs.recover_interrupted_jobs(
+        tmp_path, preserve_live=True)
+
+    assert recovered == []
+    assert live == {}
+    assert jobs.load_job(tmp_path, running["id"])["status"] == "done"
+
+
+def test_recent_launch_handshake_is_counted_before_pid_publication(tmp_path):
+    (tmp_path / "jobs").mkdir()
+    launching = jobs.create_job(
+        tmp_path, options={}, labels={}, status="launching")
+    jobs.update_job(
+        tmp_path, launching["id"], started=time.time(),
+        runner_token=jobs.new_runner_token())
+
+    recovered, live = jobs.recover_interrupted_jobs(
+        tmp_path, preserve_live=True)
+
+    assert recovered == []
+    assert live == {launching["id"]: 0}
+    assert jobs.load_job(tmp_path, launching["id"])["status"] == "launching"
 
 
 @pytest.mark.parametrize("pid", [True, False, 0, -1, "123"])

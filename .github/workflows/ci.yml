@@ -5,16 +5,17 @@ on:
     branches: [main, "claude/**"]
   pull_request:
     branches: [main]
-  # Weekly current-sibling drift check, plus manual runs.
+  # Weekly reproducibility check of the compatible sibling pin, plus manual runs.
   schedule:
     - cron: "17 5 * * 1"
   workflow_dispatch:
 
 env:
-  # The sibling development line supplies the public interoperability API that
-  # bipred 0.3.9.dev0 requires. Archived real-data benchmarks retain their own
-  # immutable 0.4.5 source pin in benchmarks/real_data_inputs.py.
-  LDPRED3_REV: "master"
+  # Exact compatible sibling revision. The default branch is now outside
+  # bipred's declared <0.6 range, so following it would make CI test dependency
+  # drift rather than this checkout. Archived real-data benchmarks retain their
+  # own immutable 0.4.5 source pin in benchmarks/real_data_inputs.py.
+  LDPRED3_REV: "aba8b55d7c8c083e4d2dd5715e995786bbf14599"
   # The floor bipred supports -- NOT a prediction about what `master` is at.
   # Those are different facts, and the workflow used to assert the installed
   # version equalled this one, which held only while master sat exactly on the

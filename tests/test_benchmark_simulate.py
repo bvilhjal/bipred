@@ -422,21 +422,25 @@ def test_runtime_ci_and_frozen_benchmark_use_explicit_distinct_sources():
     ci = (root / ".github" / "workflows" / "ci.yml").read_text(
         encoding="utf-8")
     pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
+    project_readme = (root / "README.md").read_text(encoding="utf-8")
     benchmark_readme = (root / "benchmarks" / "README.md").read_text(
         encoding="utf-8")
     match = re.search(r'ldpred3>=([^,<"\s]+)', pyproject)
     assert match is not None
     floor = match.group(1)
-    assert 'LDPRED3_REV: "master"' in ci
+    ci_revision = re.search(r'LDPRED3_REV: "([0-9a-f]{40})"', ci)
+    assert ci_revision is not None
+    ci_revision = ci_revision.group(1)
+    assert ci_revision != LDPRED3_REV
+    assert ci_revision in project_readme
     assert f'LDPRED3_FLOOR: "{floor}"' in ci
     assert LDPRED3_REV in benchmark_readme
     assert LDPRED3_VERSION == "0.6.1"
 
-    # CI installs ldpred3 from `master` but supports a *range*, so it must not
+    # CI installs a tested commit within a supported *range*, so it must not
     # assert equality between the installed version and the declared floor.
-    # That check passed only while master sat exactly on the floor and failed
-    # every leg once LDpred3 reached 0.5.4 -- a red build caused by the guard,
-    # not by a real incompatibility.
+    # The immutable real-data benchmark pin remains independent because moving
+    # it would re-base archived numerical evidence.
     assert "__version__ == " not in ci, (
         "ci.yml pins an exact ldpred3 version again; it installs from "
         f"{LDPRED3_REV!r} and declares a range, so it must check membership "
@@ -497,6 +501,7 @@ def test_real_data_provenance_requires_clean_source_and_writes_sidecar(tmp_path)
 
 def test_run_all_refuses_an_untracked_source_file(tmp_path):
     """HEAD provenance excludes untracked code, not only unstaged diffs."""
+    import os
     import pathlib
     import shutil
 
@@ -530,8 +535,10 @@ def test_run_all_refuses_an_untracked_source_file(tmp_path):
         assert git_executable is not None, "git.exe not on PATH"
         bash = None
         for root in pathlib.Path(git_executable).parents:
-            for candidate in (root / "bin" / "bash.exe",
-                              root / "usr" / "bin" / "bash.exe"):
+            # Prefer usr/bin so sibling coreutils (notably dirname) remain
+            # discoverable even in restricted Windows process environments.
+            for candidate in (root / "usr" / "bin" / "bash.exe",
+                              root / "bin" / "bash.exe"):
                 if candidate.is_file():
                     bash = candidate
                     break
@@ -539,8 +546,11 @@ def test_run_all_refuses_an_untracked_source_file(tmp_path):
                 break
     assert bash is not None and pathlib.Path(bash).is_file(), (
         f"no usable bash found (git at {shutil.which('git')!r})")
+    env = os.environ.copy()
+    if sys.platform == "win32":
+        env["PATH"] = str(pathlib.Path(bash).parent) + os.pathsep + env["PATH"]
     proc = subprocess.run(
-        [str(bash), "benchmarks/run_all.sh"], cwd=repo,
+        [str(bash), "benchmarks/run_all.sh"], cwd=repo, env=env,
         capture_output=True, text=True)
     assert proc.returncode == 2
     assert "dirty source tree" in proc.stderr

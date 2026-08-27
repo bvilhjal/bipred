@@ -10,20 +10,24 @@ the full traceback lands in ``runner.log``.
 
 from __future__ import annotations
 
+import gzip
 import json
 import math
 import numbers
 import os
 import platform
 import hashlib
+import re
 import subprocess
 import sys
 import threading
 import time
 import traceback
 import warnings
+import zlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from importlib import metadata as importlib_metadata
 from pathlib import Path
 
 from . import caches, jobs
@@ -161,7 +165,15 @@ class _Stages:
                 normalised_sha256=info["normalised_sha256"], source=source,
                 has_per_variant_n=info["has_per_variant_n"],
                 per_variant_n_usable_frac=info[
-                    "per_variant_n_usable_frac"])
+                    "per_variant_n_usable_frac"],
+                n_source_column=info.get("n_source_column"),
+                n_source_kind=info.get("n_source_kind", "unknown"),
+                sample_size_transform=info.get("sample_size_transform"),
+                sample_size_safe_for_effective_n=info.get(
+                    "sample_size_safe_for_effective_n", True),
+                reference_population=info.get("reference_population"),
+                sample_size_population_agreement=info.get(
+                    "sample_size_population_agreement"))
             outcomes[f"trait{trait}"] = (
                 "downloaded" if source == "download"
                 else "reused stored data")
@@ -174,8 +186,10 @@ class _Stages:
             # Catalog metadata is an advisory scalar fallback. When the file
             # has an almost-complete positive per-variant N column, preserve it
             # unless the submitter explicitly overrode N.
-            if info["has_per_variant_n"] and not options.get(
-                    f"catalog_n_user_supplied{trait}"):
+            if (info["has_per_variant_n"]
+                    and info.get("sample_size_safe_for_effective_n", True)
+                    and not options.get(
+                        f"catalog_n_user_supplied{trait}")):
                 options[f"n_eff{trait}"] = None
                 options[f"n_cases{trait}"] = None
                 options[f"n_controls{trait}"] = None
@@ -223,6 +237,7 @@ _QC_WARNING_THRESHOLDS = {
     "minimum_reference_match_fraction": 0.5,
     "maximum_screen_drop_fraction": 0.01,
     "minimum_screen_warning_variants": 1_000,
+    "minimum_af_corr": 0.85,
 }
 
 
@@ -404,6 +419,54 @@ def _assess_trait_quality(trait, ldsc, *, screen=None):
     }
 
 
+def _assess_allele_frequency(af_corr) -> dict:
+    """Classify GWAS/reference allele-frequency agreement for both traits."""
+    threshold = float(_QC_WARNING_THRESHOLDS["minimum_af_corr"])
+    values = {}
+    failed = []
+    unavailable = []
+    for trait in ("trait1", "trait2"):
+        value = (af_corr or {}).get(trait)
+        try:
+            value = float(value)
+        except (TypeError, ValueError, OverflowError):
+            value = float("nan")
+        values[trait] = value if math.isfinite(value) else None
+        if not math.isfinite(value):
+            unavailable.append(trait)
+        elif value < threshold:
+            failed.append(trait)
+    if failed:
+        status = "warning"
+        summary = (
+            "Allele-frequency mismatch: " + ", ".join(
+                f"{trait} correlation={values[trait]:.3f}" for trait in failed)
+            + f" is below the {threshold:g} safety threshold; weights are "
+              "withheld because allele inversion or reference-population "
+              "mismatch is plausible.")
+    elif unavailable:
+        status = "not_evaluated"
+        summary = (
+            "Allele-frequency agreement was not evaluable for "
+            + ", ".join(unavailable)
+            + "; fewer than 10 varying finite EAF/reference-AF pairs may be "
+              "available.")
+    else:
+        status = "pass"
+        summary = (
+            f"Both GWAS EAF correlations met the {threshold:g} reference-AF "
+            "threshold.")
+    return {
+        "status": status,
+        "critical": bool(failed),
+        "correlations": values,
+        "failed_traits": failed,
+        "unavailable_traits": unavailable,
+        "threshold": threshold,
+        "summary": summary,
+    }
+
+
 def _screen_parallelism():
     """Whether this process may run two DENTIST eigensolvers concurrently."""
     from bipred._ldpred3_compat import _blas_pool_safe, _blas_runtime_info
@@ -539,6 +602,47 @@ def _sha256(path):
     return digest.hexdigest()
 
 
+def _input_work_guard(path, *, max_rows, max_expanded_bytes) -> dict:
+    """Bound decompressed input work before a parser allocates full columns."""
+    path = Path(path)
+    max_rows = int(max_rows)
+    max_expanded_bytes = int(max_expanded_bytes)
+    if max_rows <= 0 or max_expanded_bytes <= 0:
+        raise ValueError("input work limits must be positive")
+    opener = gzip.open if path.name.lower().endswith((".gz", ".bgz")) else open
+    expanded = newlines = 0
+    final_byte = b""
+    try:
+        with opener(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                expanded += len(chunk)
+                if expanded > max_expanded_bytes:
+                    raise ValueError(
+                        f"{path.name}: decompressed input exceeds the "
+                        f"{max_expanded_bytes / 1024 ** 3:.3g} GiB limit")
+                newlines += chunk.count(b"\n")
+                final_byte = chunk[-1:]
+                # One line is the header; a final unterminated data row is
+                # checked after EOF.
+                if max(newlines - 1, 0) > max_rows:
+                    raise ValueError(
+                        f"{path.name}: input exceeds the {max_rows:,}-row "
+                        "limit")
+    except ValueError:
+        raise
+    except (OSError, EOFError, zlib.error) as exc:
+        raise ValueError(f"{path.name}: cannot inspect compressed input: {exc}") \
+            from exc
+    lines = newlines + int(expanded > 0 and final_byte != b"\n")
+    rows = max(lines - 1, 0)
+    if rows > max_rows:
+        raise ValueError(
+            f"{path.name}: input exceeds the {max_rows:,}-row limit")
+    return {"rows": rows, "expanded_bytes": expanded,
+            "max_rows": max_rows,
+            "max_expanded_bytes": max_expanded_bytes}
+
+
 def _load_stable_ld_cache(cache, root, *, expected_sha256):
     """Load exactly the LD generation selected when this job began."""
     from ldpred3.interop import prepare_ld_cache
@@ -625,15 +729,44 @@ def _threadpools():
 
 def _git_state():
     try:
+        repo = Path(__file__).parent.parent
         commit = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=Path(__file__).parent.parent,
+            ["git", "rev-parse", "HEAD"], cwd=repo,
             text=True, timeout=5).strip()
-        dirty = bool(subprocess.check_output(
-            ["git", "status", "--porcelain"],
-            cwd=Path(__file__).parent.parent, text=True, timeout=5).strip())
-        return {"commit": commit, "dirty": dirty}
+        status = subprocess.check_output(
+            ["git", "status", "--porcelain"], cwd=repo,
+            text=True, timeout=5)
+        diff = subprocess.check_output(
+            ["git", "diff", "--binary", "HEAD"], cwd=repo, timeout=5)
+        untracked = [line[3:] for line in status.splitlines()
+                     if line.startswith("?? ")]
+        return {
+            "commit": commit,
+            "dirty": bool(status.strip()),
+            "tracked_diff_sha256": hashlib.sha256(diff).hexdigest(),
+            "untracked_files": untracked,
+        }
     except (OSError, subprocess.SubprocessError):
-        return {"commit": None, "dirty": None}
+        return {"commit": None, "dirty": None,
+                "tracked_diff_sha256": None, "untracked_files": None}
+
+
+def _distribution_source(name: str) -> dict:
+    """Installed-distribution identity, including PEP 610 VCS metadata."""
+    try:
+        distribution = importlib_metadata.distribution(name)
+    except importlib_metadata.PackageNotFoundError:
+        return {"version": None, "direct_url": None}
+    direct_url = None
+    try:
+        text = distribution.read_text("direct_url.json")
+        if text:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                direct_url = parsed
+    except (OSError, ValueError):
+        pass
+    return {"version": distribution.version, "direct_url": direct_url}
 
 
 def _warning_rows(stage, caught):
@@ -647,10 +780,148 @@ def _warnings_are_critical(rows, divergence=None):
     The structured divergence flag is authoritative when available; warning
     text remains as the compatibility path for results from older fit code.
     """
+    critical_phrases = (
+        "do not interpret",
+        "appears to have diverged",
+        "implausible bivariate fit",
+        "invalid bivariate fit result",
+    )
     return bool(divergence and divergence.get("flagged")) or any(
-        "do not interpret" in item["message"].lower()
-        or "appears to have diverged" in item["message"].lower()
+        bool(item.get("critical"))
+        or any(phrase in item.get("message", "").lower()
+               for phrase in critical_phrases)
         for item in rows)
+
+
+def _fit_result_issues(result, joint) -> list:
+    """Structural validity checks that must pass before releasing weights."""
+    import numpy as np
+
+    issues = []
+    h2 = np.asarray(joint.get("h2"), dtype=float)
+    if h2.shape != (2,) or not np.all(np.isfinite(h2)) \
+            or np.any(h2 <= 0.0) or np.any(h2 > 1.0):
+        issues.append("h2 must contain two finite values in (0, 1]")
+    rg = joint.get("rg")
+    if not _is_finite_number(rg) or not -1.0 <= float(rg) <= 1.0:
+        issues.append("rg must be finite and lie in [-1, 1]")
+    p = joint.get("p")
+    if not _is_finite_number(p) or not 0.0 <= float(p) <= 1.0:
+        issues.append("causal fraction p must be finite and lie in [0, 1]")
+    pi = joint.get("pi")
+    if pi is not None:
+        pi = np.asarray(pi, dtype=float)
+        if (pi.shape != (4,) or not np.all(np.isfinite(pi))
+                or np.any(pi < 0.0) or np.any(pi > 1.0)
+                or not math.isclose(float(pi.sum()), 1.0,
+                                    rel_tol=1e-6, abs_tol=1e-6)):
+            issues.append(
+                "the four-state overlap mixture pi must be finite, bounded, "
+                "and sum to one")
+    if (not isinstance(joint.get("retained_iterations"), numbers.Integral)
+            or isinstance(joint.get("retained_iterations"), bool)
+            or int(joint["retained_iterations"]) <= 0):
+        issues.append("no post-burn-in fit iterations were retained")
+    beta_lengths = []
+    for name in ("beta1_est", "beta2_est"):
+        if not hasattr(result, name):
+            continue
+        values = np.asarray(getattr(result, name), dtype=float)
+        beta_lengths.append(int(values.size) if values.ndim == 1 else None)
+        if values.ndim != 1 or values.size == 0 or not np.all(
+                np.isfinite(values)):
+            issues.append(f"{name} contains no finite prediction vector")
+    fitted_m = None
+    if len(beta_lengths) == 2:
+        if (None not in beta_lengths and beta_lengths[0] > 0
+                and beta_lengths[0] == beta_lengths[1]):
+            fitted_m = beta_lengths[0]
+        else:
+            issues.append("trait prediction vectors have different lengths")
+    noise = joint.get("noise_scale")
+    if noise is not None:
+        noise = np.asarray(noise, dtype=float)
+        if noise.shape != (2,) or not np.all(np.isfinite(noise)) \
+                or np.any(noise <= 0.0):
+            issues.append("noise_scale must contain two finite positive values")
+    mixer = joint.get("mixer") or {}
+    for name, value in mixer.items():
+        values = np.asarray(value, dtype=float)
+        if values.size == 0 or not np.all(np.isfinite(values)):
+            issues.append(f"MiXeR overlap field {name} is non-finite")
+    strict_mixer = joint.get("pi") is not None or fitted_m is not None
+    if strict_mixer:
+        required = ("polygenicity", "n_causal", "n_shared", "frac_shared",
+                    "rho_beta", "rg_from_overlap")
+        missing = [name for name in required if name not in mixer]
+        if missing:
+            issues.append("MiXeR overlap summary lacks " + ", ".join(missing))
+        else:
+            poly = np.asarray(mixer["polygenicity"], dtype=float)
+            counts = np.asarray(mixer["n_causal"], dtype=float)
+            shared = float(mixer["n_shared"])
+            frac = float(mixer["frac_shared"])
+            rho = float(mixer["rho_beta"])
+            overlap_rg = float(mixer["rg_from_overlap"])
+            if poly.shape != (2,) or np.any(poly < 0.0) \
+                    or np.any(poly > 1.0):
+                issues.append(
+                    "MiXeR polygenicity must contain two values in [0, 1]")
+            if counts.shape != (2,) or np.any(counts < 0.0):
+                issues.append(
+                    "MiXeR n_causal must contain two non-negative totals")
+            elif shared < 0.0 or shared > float(counts.min()) + 1e-6:
+                issues.append(
+                    "MiXeR n_shared must lie between zero and both n_causal "
+                    "totals")
+            if not 0.0 <= frac <= 1.0:
+                issues.append("MiXeR frac_shared must lie in [0, 1]")
+            if not -1.0 <= rho <= 1.0:
+                issues.append("MiXeR rho_beta must lie in [-1, 1]")
+            if not -1.0 <= overlap_rg <= 1.0:
+                issues.append("MiXeR rg_from_overlap must lie in [-1, 1]")
+            if counts.shape == (2,) and fitted_m is not None:
+                count_tol = max(1e-6, fitted_m * 1e-6)
+                if np.any(counts > fitted_m + count_tol):
+                    issues.append(
+                        "MiXeR n_causal exceeds the fitted variant panel")
+                if poly.shape == (2,) and not np.allclose(
+                        counts, poly * fitted_m, rtol=1e-6,
+                        atol=count_tol):
+                    issues.append(
+                        "MiXeR n_causal is inconsistent with polygenicity "
+                        "and fitted panel size")
+                minimum = float(counts.min())
+                expected_frac = shared / minimum if minimum > 0.0 else 0.0
+                if not math.isclose(frac, expected_frac, rel_tol=1e-6,
+                                    abs_tol=1e-8):
+                    issues.append(
+                        "MiXeR frac_shared is inconsistent with its counts")
+                union_fraction = float(poly.sum() - shared / fitted_m)
+                if _is_finite_number(p) and not math.isclose(
+                        float(p), union_fraction, rel_tol=1e-6,
+                        abs_tol=1e-8):
+                    issues.append(
+                        "MiXeR overlap is inconsistent with causal fraction p")
+                if (pi is not None and pi.shape == (4,)
+                        and poly.shape == (2,)):
+                    expected_poly = np.array(
+                        [pi[1] + pi[3], pi[2] + pi[3]])
+                    if (not np.allclose(poly, expected_poly, rtol=1e-6,
+                                        atol=1e-8)
+                            or not math.isclose(
+                                shared / fitted_m, float(pi[3]),
+                                rel_tol=1e-6, abs_tol=1e-8)):
+                        issues.append(
+                            "MiXeR overlap is inconsistent with mixture pi")
+    return issues
+
+
+def _is_finite_number(value) -> bool:
+    try:
+        return math.isfinite(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return False
 
 
 def _attribute_to_catalog(exc, job):
@@ -684,6 +955,36 @@ def _n_summary(values, basis):
             "min": float(values.min()) if len(values) else None,
             "median": float(np.median(values)) if len(values) else None,
             "max": float(values.max()) if len(values) else None}
+
+
+def _n_basis(options, trait) -> str:
+    """Auditable description of the sample-size values actually fitted."""
+    meta = options.get(f"catalog{trait}") or {}
+    per_variant_safe = bool(
+        meta.get("has_per_variant_n")
+        and meta.get("sample_size_safe_for_effective_n", True))
+    if per_variant_safe and not options.get(
+            f"catalog_n_user_supplied{trait}"):
+        transform = meta.get("sample_size_transform")
+        if transform is not None:
+            return (
+                "per-variant Catalog sample-size pattern rescaled to "
+                f"ancestry-matched effective N (factor "
+                f"{transform.get('factor', 1.0):.6g}; source median "
+                f"{transform.get('source_median', 0):,.0f}; target "
+                f"{transform.get('target_effective_n', 0):,.0f})")
+        return ("per-variant n column in the harmonised GWAS Catalog "
+                f"file ({meta.get('per_variant_n_usable_frac', 0):.1%} "
+                "usable among retained rows)")
+    if options.get(f"n_eff{trait}") is not None:
+        suffix = " (explicit user override)" if options.get(
+            f"catalog_n_user_supplied{trait}") else ""
+        return f"constant effective N{suffix}"
+    if options.get(f"n_cases{trait}") is not None:
+        suffix = " (explicit user override)" if options.get(
+            f"catalog_n_user_supplied{trait}") else ""
+        return f"4/(1/n_cases + 1/n_controls){suffix}"
+    return "per-variant N column detected in the uploaded file"
 
 
 def _validated_cache_indices(prep, prepared_ld):
@@ -725,6 +1026,63 @@ def _n_semantics(options, trait):
                 float(n_cases), float(n_controls))),
         }
     return {"mode": "per_variant"}
+
+
+_REFERENCE_POPULATION_TOKENS = {
+    "eur": "European", "europe": "European", "european": "European",
+    "afr": "African", "africa": "African", "african": "African",
+    "eas": "East Asian", "eastasia": "East Asian",
+    "sas": "South Asian", "southasia": "South Asian",
+}
+
+
+def _reference_population(cache_key) -> str | None:
+    """Population explicitly encoded in an LD-reference registry key.
+
+    The registry currently stores only key/label/path.  Until it has a
+    first-class ancestry field, accept automatic Catalog N only for keys that
+    say what population they represent; an arbitrary name is not evidence.
+    """
+    key = str(cache_key or "").strip().lower()
+    if not key:
+        return None
+    compact = re.sub(r"[^a-z0-9]+", "-", key).strip("-")
+    tokens = set(compact.split("-"))
+    candidates = {
+        population for token, population in _REFERENCE_POPULATION_TOKENS.items()
+        if token in tokens
+    }
+    if {"east", "asian"} <= tokens:
+        candidates.add("East Asian")
+    if {"south", "asian"} <= tokens:
+        candidates.add("South Asian")
+    return candidates.pop() if len(candidates) == 1 else None
+
+
+def _population_agrees(catalog_population, reference_population) -> bool:
+    """Whether Catalog sample metadata and the LD reference explicitly agree."""
+    if not isinstance(catalog_population, str) \
+            or not isinstance(reference_population, str):
+        return False
+    return catalog_population.strip().casefold() == \
+        reference_population.strip().casefold()
+
+
+def _catalog_n_requires_explicit(options, trait, info,
+                                 population_agreement) -> bool:
+    """Whether using this Catalog file would otherwise assume ancestry."""
+    if options.get(f"catalog_n_user_supplied{trait}"):
+        return False
+    auto_scalar_retained = (
+        not info.get("has_per_variant_n")
+        or not info.get("sample_size_safe_for_effective_n", True)
+    ) and any(options.get(name) is not None for name in (
+        f"n_eff{trait}", f"n_cases{trait}", f"n_controls{trait}"))
+    source_requires_interpretation = (
+        info.get("n_source_kind") in ("reported_total", "unknown")
+        and not info.get("sample_size_safe_for_effective_n", True))
+    return bool(not population_agreement and (
+        auto_scalar_retained or source_requires_interpretation))
 
 
 class _TraitPipelineCancelled(RuntimeError):
@@ -807,6 +1165,7 @@ def run(job_dir: Path, job: dict) -> None:
     # sensitivity option. It also upgrades a queued schema-2 job safely.
     opt["screen"] = True
     cache = caches.cache_path(opt["cache_key"], root)
+    reference_population = _reference_population(opt["cache_key"])
     stage = _Stages(root, job)
     expected_ld_sha256 = caches.sha256_cached(cache, root)
 
@@ -824,6 +1183,16 @@ def run(job_dir: Path, job: dict) -> None:
         acquire_outcomes = {}
 
         def acquire_one(trait, meta):
+            n_user_supplied = bool(
+                opt.get(f"catalog_n_user_supplied{trait}"))
+            population_agreement = _population_agrees(
+                meta.get("sample_size_population"), reference_population)
+            target_effective_n = (
+                meta.get("n_eff")
+                if not n_user_supplied and population_agreement else None)
+            target_total_n = (
+                meta.get("n_total_selected")
+                if not n_user_supplied and population_agreement else None)
             if not gwascat.stored_copy_available(
                     root, accession=meta["accession"], url=meta["url"],
                     fingerprint=fingerprint,
@@ -867,6 +1236,8 @@ def run(job_dir: Path, job: dict) -> None:
                     remote_bytes=meta.get("remote_bytes") or 0,
                     remote_etag=meta.get("remote_etag"),
                     remote_last_modified=meta.get("remote_last_modified"),
+                    target_effective_n=target_effective_n,
+                    target_total_n=target_total_n,
                     on_bytes=on_bytes,
                     on_filter=on_filter, on_wait=on_wait)
             except Exception as exc:
@@ -874,6 +1245,32 @@ def run(job_dir: Path, job: dict) -> None:
                     f"{job['labels'][f'trait{trait}']} "
                     f"({meta['accession']}): summary-statistics preparation "
                     f"failed: {exc}")
+            info["reference_population"] = reference_population
+            info["sample_size_population_agreement"] = population_agreement
+            if _catalog_n_requires_explicit(
+                    opt, trait, info, population_agreement):
+                catalog_population = meta.get("sample_size_population")
+                raise ValueError(
+                    f"{job['labels'][f'trait{trait}']} "
+                    f"({meta['accession']}): automatic Catalog sample-size "
+                    f"metadata identify {catalog_population or 'no explicit'} "
+                    "ancestry, while the selected LD-reference key identifies "
+                    f"{reference_population or 'no explicit'} ancestry; "
+                    "supply N_eff or case/control counts explicitly")
+            if (info.get("n_source_kind") in (
+                        "reported_total", "unknown")
+                    and not info.get(
+                        "sample_size_safe_for_effective_n", True)
+                    and not n_user_supplied
+                    and opt.get(f"n_eff{trait}") is None
+                    and opt.get(f"n_cases{trait}") is None):
+                raise ValueError(
+                    f"{job['labels'][f'trait{trait}']} "
+                    f"({meta['accession']}): the deposited "
+                    f"{info.get('n_source_column') or 'sample-size'} column "
+                    "is a reported total, but the Catalog metadata does not "
+                    "identify an ancestry-matched effective N; supply N_eff "
+                    "or case/control counts explicitly")
             source = ("legacy stored copy" if info["reused"] and
                       info.get("store_origin") == "legacy job" else
                       "stored copy" if info["reused"] else "download")
@@ -961,7 +1358,13 @@ def run(job_dir: Path, job: dict) -> None:
             checkpoint()
             stage.progress(
                 trait=trait, accession=accession, phase="prepare",
-                step=f"Validate and hash trait {trait}")
+                step=f"Validate input work budget and hash trait {trait}")
+            input_work = _input_work_guard(
+                path,
+                max_rows=opt.get("max_input_rows", 50_000_000),
+                max_expanded_bytes=opt.get(
+                    "max_input_expanded_bytes", 16 * 1024 ** 3),
+            )
             try:
                 detect_columns(str(path), **opt[f"columns{trait}"])
             except Exception as exc:
@@ -1010,6 +1413,8 @@ def run(job_dir: Path, job: dict) -> None:
                     "warnings": list(pre_quality["warnings"]),
                     "ldsc_h2": ldsc_qc.get("h2"),
                     "ldsc_intercept": ldsc_qc.get("intercept"),
+                    "input_rows": input_work["rows"],
+                    "input_expanded_bytes": input_work["expanded_bytes"],
                 })
 
                 stage.activate("screen")
@@ -1070,6 +1475,8 @@ def run(job_dir: Path, job: dict) -> None:
                     "warnings": list(quality["warnings"]),
                     "ldsc_h2": ldsc_qc.get("h2"),
                     "ldsc_intercept": ldsc_qc.get("intercept"),
+                    "input_rows": input_work["rows"],
+                    "input_expanded_bytes": input_work["expanded_bytes"],
                     "reused": True,
                 })
                 stage.activate("screen")
@@ -1107,6 +1514,7 @@ def run(job_dir: Path, job: dict) -> None:
                     "prepared_numerical_environment":
                         spec["numerical_environment"],
                     "ld_score_qc_identity": ldsc_qc_identity,
+                    "input_work": input_work,
                 },
                 "catalog_update": ({
                     "prepared_key": prepared_key,
@@ -1231,6 +1639,14 @@ def run(job_dir: Path, job: dict) -> None:
             raise attributed from exc
         raise
     captured_warnings.extend(_warning_rows("pair", caught))
+    af_quality = _assess_allele_frequency(prep.log.get("af_corr") or {})
+    if af_quality["status"] != "pass":
+        captured_warnings.append({
+            "stage": "pair",
+            "category": "QCWarning",
+            "message": af_quality["summary"],
+            "critical": af_quality["critical"],
+        })
     try:
         # Top-level scalar counts drive the status page; the nested per-trait
         # QC and harmonization logs feed the results page's per-step report.
@@ -1239,6 +1655,7 @@ def run(job_dir: Path, job: dict) -> None:
                  and not isinstance(value, bool)}
         munge["screen"] = bool(prep.log.get("screen"))
         munge["af_corr"] = _json_safe(prep.log.get("af_corr") or {})
+        munge["af_quality"] = _json_safe(af_quality)
         for trait in ("trait1", "trait2"):
             tlog = prep.log.get(trait) or {}
             screen_log = tlog.get("ld_consistency_screen") or {}
@@ -1369,6 +1786,21 @@ def run(job_dir: Path, job: dict) -> None:
             "retained_iterations": res.retained_iterations,
             "stopped_early": bool(res.stopped_early),
         }
+        try:
+            joint["mixer_uncertainty"] = _json_safe(
+                res.mixer_iterate_summary())
+            joint["mixer_uncertainty_basis"] = (
+                "empirical variability across retained hyperparameter "
+                "iterates; not a convergence certificate or a confidence/"
+                "credible interval")
+        except (AttributeError, TypeError, ValueError, FloatingPointError):
+            # Older compatible ldpred3/bipred seams may not retain the traces.
+            # The point estimate remains available and provenance states that
+            # no iterate summary was produced.
+            joint["mixer_uncertainty"] = None
+            joint["mixer_uncertainty_basis"] = (
+                "unavailable: retained hyperparameter iterates were not "
+                "exposed by this fit")
         divergence = _json_safe(
             getattr(res, "divergence_diagnostics", None))
         # Uncertainty for the headline numbers: posterior SD across the
@@ -1398,6 +1830,13 @@ def run(job_dir: Path, job: dict) -> None:
         stage.detail("fit", fit_summary + ".")
         stage.done("fit")
 
+        for issue in _fit_result_issues(res, joint):
+            captured_warnings.append({
+                "stage": "fit",
+                "category": "RuntimeWarning",
+                "message": f"Invalid bivariate fit result: {issue}.",
+                "critical": True,
+            })
         critical = _warnings_are_critical(captured_warnings, divergence)
         written = []
         if opt["weights"] and not critical:
@@ -1434,24 +1873,9 @@ def run(job_dir: Path, job: dict) -> None:
     import numpy
     user1, system1, peak_gb = _usage()
 
-    def n_basis(trait):
-        meta = opt.get(f"catalog{trait}") or {}
-        if meta.get("has_per_variant_n") and not opt.get(
-                f"catalog_n_user_supplied{trait}"):
-            return ("per-variant n column in the harmonised GWAS Catalog "
-                    f"file ({meta.get('per_variant_n_usable_frac', 0):.1%} "
-                    "usable among retained rows)")
-        if opt.get(f"n_eff{trait}") is not None:
-            suffix = " (explicit user override)" if opt.get(
-                f"catalog_n_user_supplied{trait}") else ""
-            return f"constant effective N{suffix}"
-        if opt.get(f"n_cases{trait}") is not None:
-            return "4/(1/n_cases + 1/n_controls)"
-        return "per-variant N column detected in the uploaded file"
-
     n_info = {
-        "trait1": _n_summary(prep.n_eff1, n_basis(1)),
-        "trait2": _n_summary(prep.n_eff2, n_basis(2)),
+        "trait1": _n_summary(prep.n_eff1, _n_basis(opt, 1)),
+        "trait2": _n_summary(prep.n_eff2, _n_basis(opt, 2)),
     }
     diagnostics = {
         "valid_for_interpretation": not critical,
@@ -1459,6 +1883,7 @@ def run(job_dir: Path, job: dict) -> None:
         "warnings": captured_warnings,
         "weights_withheld": bool(opt["weights"] and critical),
         "divergence": divergence,
+        "allele_frequency": _json_safe(af_quality),
     }
     thread_vars = ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS",
                    "MKL_NUM_THREADS", "NUMBA_NUM_THREADS",
@@ -1473,6 +1898,10 @@ def run(job_dir: Path, job: dict) -> None:
             "bipred": bipred.__version__,
             "ldpred3": ldpred3.__version__,
             "numpy": numpy.__version__,
+            "installed_distributions": {
+                "bipred": _distribution_source("bipred"),
+                "ldpred3": _distribution_source("ldpred3"),
+            },
             "python": platform.python_version(),
             "cache_key": opt["cache_key"],
             "cache_sha256": ld_sha256,
@@ -1506,6 +1935,8 @@ def run(job_dir: Path, job: dict) -> None:
                         "prepared_scope"],
                     "prepared_numerical_environment": prepared_info[
                         f"trait{trait}"]["prepared_numerical_environment"],
+                    "input_work": prepared_info[f"trait{trait}"][
+                        "input_work"],
                     "column_overrides": opt.get(f"columns{trait}", {}),
                 } for trait in (1, 2)
             },
@@ -1543,11 +1974,19 @@ def run(job_dir: Path, job: dict) -> None:
     }
     catalog = {f"trait{t}": {k: opt[f"catalog{t}"].get(k) for k in
                              ("accession", "trait", "pmid", "n_basis",
+                              "sample", "sample_size_population",
+                              "sample_size_design", "n_eff", "n_cases",
+                              "n_controls", "n_total_selected",
                               "kept", "seen", "effect_from", "sha256",
                               "normalised_sha256", "source",
                               "remote_etag", "remote_last_modified",
                               "prepared_key", "prepared_reused",
                               "prepared_scope",
+                              "n_source_column", "n_source_kind",
+                              "sample_size_transform",
+                              "sample_size_safe_for_effective_n",
+                              "reference_population",
+                              "sample_size_population_agreement",
                               "has_per_variant_n",
                               "per_variant_n_usable_frac")}
                for t in (1, 2) if opt.get(f"catalog{t}")}

@@ -425,7 +425,10 @@ def test_trait_failure_joins_peer_before_shared_ld_close(monkeypatch, tmp_path):
     assert peer_exited.is_set()
     assert close_calls == [True]
     assert not list(prepared_store.store_dir(root).glob("*.part"))
-    assert not list(prepared_store.store_dir(root).glob("*.lock"))
+    for path in prepared_store.store_dir(root).glob("*.lock"):
+        probe = prepared_store._Lock(path)
+        assert probe.acquire(), f"prepared lock leaked: {path}"
+        probe.release()
 
 
 def test_structured_nonpositive_variance_withholds_weights(

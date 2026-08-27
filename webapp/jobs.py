@@ -15,6 +15,8 @@ import logging
 import os
 import secrets
 import shutil
+import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -190,12 +192,100 @@ def stage_label(key: str, schema: int | None = None) -> str:
 # Files a job directory starts with; the runner adds result.json, munge.json,
 # runner.log and optionally weights*.tsv.
 JOB_JSON = "job.json"
+RUNNER_LEASE_PREFIX = "runner-"
+RUNNER_HANDSHAKE_GRACE = 30.0
 
 _IO_ATTEMPTS = 5
 _IO_RETRY_SECONDS = 0.01
 _WINDOWS_SHARING_ERRORS = frozenset({5, 32, 33})
 
 logger = logging.getLogger(__name__)
+
+
+class ProcessFileLock:
+    """Dependency-free inter-process lock held by an open file descriptor.
+
+    POSIX ``flock`` and Windows CRT byte-range locks are released by the OS
+    when their process exits.  The pathname is deliberately persistent:
+    unlinking a pathname lock creates an unavoidable check/delete race in
+    which an old owner can remove a successor's newly-created lock.
+    """
+
+    def __init__(self, path):
+        self.path = Path(path)
+        self.fd = None
+
+    @staticmethod
+    def _lock(fd):
+        if os.name == "nt":
+            import msvcrt
+
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            return
+        import fcntl
+
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    @staticmethod
+    def _unlock(fd):
+        if os.name == "nt":
+            import msvcrt
+
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            return
+        import fcntl
+
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+    def acquire(self) -> bool:
+        if self.fd is not None:
+            return True
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(self.path), os.O_CREAT | os.O_RDWR, 0o644)
+        try:
+            if os.fstat(fd).st_size == 0:
+                os.write(fd, b"\0")
+            self._lock(fd)
+        except OSError:
+            os.close(fd)
+            return False
+        self.fd = fd
+        return True
+
+    def owned(self) -> bool:
+        if self.fd is None:
+            return False
+        try:
+            os.fstat(self.fd)
+        except OSError:
+            return False
+        return True
+
+    def touch(self) -> None:
+        """Compatibility no-op: kernel ownership needs no heartbeat."""
+
+    def release(self) -> None:
+        if self.fd is None:
+            return
+        fd = self.fd
+        self.fd = None
+        try:
+            self._unlock(fd)
+        except OSError:
+            pass
+        finally:
+            os.close(fd)
+
+    def __enter__(self):
+        if not self.acquire():
+            raise BlockingIOError(f"lock is already held: {self.path}")
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.release()
+        return False
 
 
 def data_root() -> Path:
@@ -237,6 +327,9 @@ def create_job(root: Path, *, options: dict, labels: dict,
         "labels": labels,
         "files": {},
         "pid": None,
+        "pid_identity": None,
+        "runner_token": None,
+        "runtime_limit_s": None,
     }
     save_job(root, job)
     return job
@@ -376,44 +469,94 @@ def purge_jobs(root: Path, ttl_days: float) -> list[str]:
     return removed
 
 
-def pid_is_alive(pid) -> bool:
-    """Return whether an integer PID still identifies a live process.
+def _valid_pid(pid) -> bool:
+    return (not isinstance(pid, bool) and isinstance(pid, int) and pid > 0)
 
-    ``os.kill(pid, 0)`` is the conventional POSIX probe, but on Windows a
-    non-control signal is implemented with ``TerminateProcess``.  Querying a
-    handle avoids turning a liveness check into a surprisingly literal kill.
-    """
-    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
-        return False
-    if os.name == "nt":
-        if pid > 0xFFFFFFFF:
-            return False
-        import ctypes
-        from ctypes import wintypes
 
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        open_process = kernel32.OpenProcess
-        open_process.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
-        open_process.restype = wintypes.HANDLE
-        get_exit_code = kernel32.GetExitCodeProcess
-        get_exit_code.argtypes = (wintypes.HANDLE,
-                                  ctypes.POINTER(wintypes.DWORD))
-        get_exit_code.restype = wintypes.BOOL
-        close_handle = kernel32.CloseHandle
-        close_handle.argtypes = (wintypes.HANDLE,)
-        close_handle.restype = wintypes.BOOL
+def _windows_process_info(pid):
+    """Return ``(alive, creation identity)`` without signalling a PID."""
+    if not _valid_pid(pid) or pid > 0xFFFFFFFF:
+        return False, None
+    import ctypes
+    from ctypes import wintypes
 
-        handle = open_process(0x1000, False, pid)  # QUERY_LIMITED_INFORMATION
-        if not handle:
-            # Access can be denied for a protected but genuinely live process.
-            return ctypes.get_last_error() == 5
+    class _FileTime(ctypes.Structure):
+        _fields_ = (("low", wintypes.DWORD), ("high", wintypes.DWORD))
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    open_process = kernel32.OpenProcess
+    open_process.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    open_process.restype = wintypes.HANDLE
+    get_exit_code = kernel32.GetExitCodeProcess
+    get_exit_code.argtypes = (wintypes.HANDLE,
+                              ctypes.POINTER(wintypes.DWORD))
+    get_exit_code.restype = wintypes.BOOL
+    get_times = kernel32.GetProcessTimes
+    get_times.argtypes = (wintypes.HANDLE, ctypes.POINTER(_FileTime),
+                          ctypes.POINTER(_FileTime), ctypes.POINTER(_FileTime),
+                          ctypes.POINTER(_FileTime))
+    get_times.restype = wintypes.BOOL
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = (wintypes.HANDLE,)
+    close_handle.restype = wintypes.BOOL
+
+    handle = open_process(0x1000, False, pid)  # QUERY_LIMITED_INFORMATION
+    if not handle:
+        # A protected process can be alive but is never a runner owned by this
+        # user, so it deliberately has no verifiable creation identity.
+        return ctypes.get_last_error() == 5, None
+    try:
+        exit_code = wintypes.DWORD()
+        if (not get_exit_code(handle, ctypes.byref(exit_code))
+                or exit_code.value != 259):            # STILL_ACTIVE
+            return False, None
+        created = _FileTime()
+        exited, kernel, user = _FileTime(), _FileTime(), _FileTime()
+        if not get_times(handle, ctypes.byref(created), ctypes.byref(exited),
+                         ctypes.byref(kernel), ctypes.byref(user)):
+            return True, None
+        ticks = (created.high << 32) | created.low
+        return True, f"windows-filetime:{ticks}"
+    finally:
+        close_handle(handle)
+
+
+def _procfs_process_identity(pid):
+    try:
+        text = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        close = text.rfind(")")
+        fields = text[close + 2:].split()
+        start_ticks = fields[19]                 # proc(5) field 22
         try:
-            exit_code = wintypes.DWORD()
-            if not get_exit_code(handle, ctypes.byref(exit_code)):
-                return False
-            return exit_code.value == 259             # STILL_ACTIVE
-        finally:
-            close_handle(handle)
+            boot = Path("/proc/sys/kernel/random/boot_id").read_text(
+                encoding="ascii").strip()
+        except OSError:
+            boot = str(Path("/proc/1").stat().st_ctime_ns)
+        return f"procfs:{boot}:{start_ticks}"
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+def process_identity(pid) -> str | None:
+    """Stable creation identity for a live PID where the OS exposes one."""
+    if not _valid_pid(pid):
+        return None
+    if os.name == "nt":
+        return _windows_process_info(pid)[1]
+    return _procfs_process_identity(pid)
+
+
+def pid_is_alive(pid, identity: str | None = None) -> bool:
+    """Return whether a PID is live and, when supplied, the same process."""
+    if not _valid_pid(pid):
+        return False
+    current = process_identity(pid)
+    if identity is not None:
+        return current == identity
+    if current is not None:
+        return True
+    if os.name == "nt":
+        return _windows_process_info(pid)[0]
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -423,6 +566,69 @@ def pid_is_alive(pid) -> bool:
     except (OSError, OverflowError, ValueError):
         return False
     return True
+
+
+def new_runner_token() -> str:
+    return secrets.token_urlsafe(18)
+
+
+def runner_lease_path(root: Path, job_id: str, token: str) -> Path:
+    if (not isinstance(token, str) or not token
+            or any(c not in "-_0123456789abcdefghijklmnopqrstuvwxyz"
+                   "ABCDEFGHIJKLMNOPQRSTUVWXYZ" for c in token)):
+        raise ValueError("invalid runner lease token")
+    return job_dir(root, job_id) / f"{RUNNER_LEASE_PREFIX}{token}.lock"
+
+
+def runner_lease_held(root: Path, job: dict) -> bool:
+    try:
+        path = runner_lease_path(root, job["id"], job.get("runner_token"))
+    except (KeyError, TypeError, ValueError):
+        return False
+    probe = ProcessFileLock(path)
+    if not probe.acquire():
+        return True
+    probe.release()
+    return False
+
+
+def runner_is_verified(root: Path, job: dict) -> bool:
+    """Bind active state to both an OS lease and the original process."""
+    pid = job.get("pid")
+    identity = job.get("pid_identity")
+    token = job.get("runner_token")
+    lease_only = identity == f"lease-only:{token}"
+    if (not isinstance(identity, str) or not identity
+            or not runner_lease_held(root, job)):
+        return False
+    if not (pid_is_alive(pid) if lease_only else pid_is_alive(pid, identity)):
+        return False
+    # Close the small lease-exit/PID-exit observation window.
+    return runner_lease_held(root, job)
+
+
+def runner_handshake_pending(job: dict, now: float | None = None) -> bool:
+    """A newly launched wrapper gets a short window to publish its lease."""
+    if job.get("status") != "launching" or not job.get("runner_token"):
+        return False
+    started = job.get("started")
+    if isinstance(started, bool) or not isinstance(started, (int, float)):
+        return False
+    elapsed = (time.time() if now is None else now) - float(started)
+    return -1.0 <= elapsed <= RUNNER_HANDSHAKE_GRACE
+
+
+def fail_active_job(root: Path, job_id: str, *, error: str,
+                    finished: float | None = None) -> dict | None:
+    """Fail only freshly-read active state after its runner has exited."""
+    job = load_job(root, job_id)
+    if job is None or job.get("status") not in ("launching", "running"):
+        return job
+    job.update(status="failed", stage=None,
+               finished=_now() if finished is None else finished,
+               error=error)
+    save_job(root, job)
+    return job
 
 
 def recover_interrupted_jobs(
@@ -449,14 +655,87 @@ def recover_interrupted_jobs(
             recovered.append(job["id"])
             continue
         pid = job.get("pid")
-        if preserve_live and pid_is_alive(pid):
-            live[job["id"]] = pid
+        if preserve_live and (runner_is_verified(root, job)
+                              or runner_handshake_pending(job)):
+            live[job["id"]] = pid if _valid_pid(pid) else 0
             continue
-        update_job(root, job["id"], status="failed", stage=None,
-                   finished=_now(),
-                   error=(f"server restarted while job was {previous}; "
-                          "submit it again"))
-        recovered.append(job["id"])
+        # Re-read after observing lease/process exit.  The runner may have
+        # published ``done`` between list_jobs() and that observation.
+        current = load_job(root, job["id"])
+        if current is not None and current.get("status") in (
+                "launching", "running"):
+            fail_active_job(
+                root, job["id"],
+                error=(f"server restarted while job was {previous}; "
+                       "submit it again"),
+            )
+            recovered.append(job["id"])
     if preserve_live:
         return recovered, live
     return recovered
+
+
+def _runner_watchdog(stop: threading.Event, root: Path, job_id: str) -> None:
+    job = load_job(root, job_id)
+    if job is None:
+        return
+    started = job.get("started")
+    limit = job.get("runtime_limit_s")
+    if (isinstance(started, bool) or not isinstance(started, (int, float))
+            or isinstance(limit, bool) or not isinstance(limit, (int, float))
+            or limit <= 0):
+        return
+    remaining = max(0.0, float(started) + float(limit) - time.time())
+    if not stop.wait(remaining):
+        # The supervisor converts exit 124 into the persisted timeout reason.
+        # os._exit is intentional: it stops native code that cannot observe a
+        # Python cancellation flag, while the lease proves which process died.
+        os._exit(124)
+
+
+def run_runner_with_lease(job_dir_path) -> int:
+    """Run ``webapp.runner`` while holding its kernel-backed lifetime lease."""
+    target = Path(job_dir_path).resolve()
+    root = target.parent.parent
+    job = load_job(root, target.name)
+    if job is None:
+        print(f"no job.json in {target}", file=sys.stderr)
+        return 2
+    try:
+        lease_path = runner_lease_path(root, job["id"], job["runner_token"])
+    except (KeyError, TypeError, ValueError) as exc:
+        print(f"invalid runner lease: {exc}", file=sys.stderr)
+        return 2
+    lease = ProcessFileLock(lease_path)
+    if not lease.acquire():
+        print(f"runner lease is already held for {job['id']}", file=sys.stderr)
+        return 3
+    stop = threading.Event()
+    watchdog = threading.Thread(
+        target=_runner_watchdog, args=(stop, root, job["id"]), daemon=True,
+        name="bipred-runner-timeout")
+    try:
+        identity = process_identity(os.getpid()) or (
+            f"lease-only:{job['runner_token']}")
+        update_job(root, job["id"], pid=os.getpid(), pid_identity=identity)
+        watchdog.start()
+        from . import runner
+
+        return runner.main([str(target)])
+    finally:
+        stop.set()
+        if watchdog.is_alive():
+            watchdog.join(timeout=1.0)
+        lease.release()
+
+
+def _main(argv=None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if len(args) == 2 and args[0] == "run-runner":
+        return run_runner_with_lease(args[1])
+    print("usage: python -m webapp.jobs run-runner JOB_DIR", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":                    # pragma: no cover
+    raise SystemExit(_main())

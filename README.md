@@ -12,11 +12,12 @@ LD representations and sampler utilities.
 
 Python 3.9–3.14 is supported. Numba is strongly recommended. The current
 Bipred development line requires LDpred3 0.5. Neither package is on PyPI, so a
-Git install requires authenticated GitHub read access. Until the coordinated
-0.5 release is tagged, install the sibling development line tested by CI:
+Git install requires authenticated GitHub read access. Install the exact
+LDpred3 revision tested by CI; its private interoperability seam is not stable
+on the sibling repository's moving default branch:
 
 ```bash
-python -m pip install "ldpred3[fast] @ git+https://github.com/bvilhjal/ldpred3.git@master"
+python -m pip install "ldpred3[fast] @ git+https://github.com/bvilhjal/ldpred3.git@aba8b55d7c8c083e4d2dd5715e995786bbf14599"
 python -m pip install "bipred[fast] @ git+https://github.com/bvilhjal/bipred.git"
 ```
 
@@ -27,9 +28,10 @@ python -m pip install -e "../ldpred3[fast]"
 python -m pip install -e ".[fast,test]"
 ```
 
-CI installs Bipred through its declared `ldpred3>=0.5.5.dev0,<0.6` dependency
-contract rather than bypassing the resolver. The private sampler seam in
-`bipred/_ldpred3_compat.py` still has behavioural tests. Archived real-data
+CI preinstalls that immutable revision, then installs Bipred through its
+declared `ldpred3>=0.5.5.dev0,<0.6` dependency contract rather than bypassing
+the resolver. The private sampler seam in `bipred/_ldpred3_compat.py` still has
+behavioural tests. Archived real-data
 benchmarks deliberately retain their immutable LDpred3 0.4.5 provenance in
 `benchmarks/real_data_inputs.py`; do not rewrite historical evidence when the
 runtime dependency moves.

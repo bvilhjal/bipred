@@ -27,6 +27,32 @@ MANIFEST = "real_gwas_pipeline_catalog.manifest.json"
 REGISTRY = "gwas_catalog_traits.toml"
 
 
+def _unavailable(base: Path, *, missing=None, error=None, table_sha=None,
+                 expected_sha=None) -> dict:
+    """Return one stable, fail-closed shape for untrusted evidence."""
+    return {
+        "available": False,
+        "trusted": False,
+        "path": str(base),
+        "missing": list(missing or []),
+        "error": error,
+        "good": [],
+        "bad": [],
+        "counts": {"good": 0, "bad": 0, "preflight_bad": 0,
+                   "failed_fit": 0},
+        "table_sha256": table_sha,
+        "expected_table_sha256": expected_sha,
+        "table_hash_verified": False,
+        "registry_sha256": None,
+        "manifest_settings": {},
+        "known_limits": [],
+        "current_traits": 0,
+        "current_completed": 0,
+        "legacy_completed": 0,
+        "runtime": {},
+    }
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with open(path, "rb") as fh:
@@ -55,18 +81,50 @@ def load() -> dict:
     paths = {name: base / name for name in (TABLE, MANIFEST, REGISTRY)}
     missing = [name for name, path in paths.items() if not path.exists()]
     if missing:
-        return {"available": False, "path": str(base), "missing": missing,
-                "good": [], "bad": []}
+        return _unavailable(base, missing=missing)
 
-    with open(paths[MANIFEST], encoding="utf-8") as fh:
-        manifest = json.load(fh)
-    with open(paths[REGISTRY], "rb") as fh:
-        registry = tomllib.load(fh).get("traits", {})
-    with open(paths[TABLE], encoding="utf-8", newline="") as fh:
-        rows = list(csv.DictReader(fh))
+    try:
+        with open(paths[MANIFEST], encoding="utf-8") as fh:
+            manifest = json.load(fh)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return _unavailable(base, error=f"Manifest could not be read: {exc}")
+    if not isinstance(manifest, dict):
+        return _unavailable(base, error="Manifest must be a JSON object")
+    row_source = manifest.get("row_source", {})
+    if not isinstance(row_source, dict):
+        return _unavailable(
+            base, error="Manifest row_source must be a JSON object")
 
-    current = {name for name, source in manifest.get("row_source", {}).items()
-               if "catalog-current-profile" in source}
+    try:
+        table_sha = _sha256(paths[TABLE])
+    except OSError as exc:
+        return _unavailable(base, error=f"Canonical table could not be read: {exc}")
+    expected_sha = manifest.get("table_sha256")
+    if not isinstance(expected_sha, str) or table_sha != expected_sha.lower():
+        return _unavailable(
+            base, table_sha=table_sha, expected_sha=expected_sha,
+            error=("Canonical table SHA-256 does not match its manifest; "
+                   "canonical rows were quarantined."))
+
+    try:
+        with open(paths[REGISTRY], "rb") as fh:
+            registry_document = tomllib.load(fh)
+            registry = registry_document.get("traits", {})
+            if (not isinstance(registry, dict)
+                    or any(not isinstance(value, dict)
+                           for value in registry.values())):
+                raise ValueError("registry traits must be a TOML table")
+        with open(paths[TABLE], encoding="utf-8", newline="") as fh:
+            rows = list(csv.DictReader(fh))
+    except (OSError, UnicodeError, ValueError, csv.Error,
+            tomllib.TOMLDecodeError) as exc:
+        return _unavailable(
+            base, table_sha=table_sha, expected_sha=expected_sha,
+            error=f"Verified evidence files could not be parsed: {exc}")
+
+    current = {name for name, source in row_source.items()
+               if isinstance(source, str)
+               and "catalog-current-profile" in source}
     good = []
     failed_fit = []
     for row in rows:
@@ -119,8 +177,9 @@ def load() -> dict:
         })
 
     runtime_candidates = []
-    for source in manifest.get("row_source", {}).values():
-        if "catalog-current-profile" not in source:
+    for source in row_source.values():
+        if (not isinstance(source, str)
+                or "catalog-current-profile" not in source):
             continue
         relative = Path(source)
         if relative.parts and relative.parts[0] == "benchmarks":
@@ -132,31 +191,34 @@ def load() -> dict:
         if runtime_candidates else base / "missing.runtime.json"
     runtime = {}
     if runtime_path.exists():
-        with open(runtime_path, encoding="utf-8") as fh:
-            sidecar = json.load(fh)
-        rt = sidecar.get("runtime", {})
-        env = sidecar.get("environment", {})
-        runtime = {
-            "host": "Apple M2 Pro, arm64, 10 CPU cores, 16 GiB RAM",
-            "platform": rt.get("platform"),
-            "python": (rt.get("python") or "").split(" | ", 1)[0],
-            "numpy": rt.get("numpy"), "scipy": rt.get("scipy"),
-            "numba": rt.get("numba"), "llvmlite": rt.get("llvmlite"),
-            "backend": "Apple Accelerate",
-            "numba_threads": rt.get("numba_threads"),
-            "sweep_threads": env.get("LDPRED3_SWEEP_NCORES"),
-            "outer_workers": "up to 8 (ncores setting 8 or 10)",
-            "source_commit": sidecar.get("source", {}).get("git_commit"),
-            "source_diff_sha256": sidecar.get("source", {}).get(
-                "git_diff_sha256"),
-            "ld_cache_sha256": sidecar.get("inputs", {}).get(
-                "ld_cache", {}).get("sha256"),
-        }
+        try:
+            with open(runtime_path, encoding="utf-8") as fh:
+                sidecar = json.load(fh)
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            sidecar = {}
+        if sidecar:
+            rt = sidecar.get("runtime", {})
+            env = sidecar.get("environment", {})
+            runtime = {
+                "host": "Apple M2 Pro, arm64, 10 CPU cores, 16 GiB RAM",
+                "platform": rt.get("platform"),
+                "python": (rt.get("python") or "").split(" | ", 1)[0],
+                "numpy": rt.get("numpy"), "scipy": rt.get("scipy"),
+                "numba": rt.get("numba"), "llvmlite": rt.get("llvmlite"),
+                "backend": "Apple Accelerate",
+                "numba_threads": rt.get("numba_threads"),
+                "sweep_threads": env.get("LDPRED3_SWEEP_NCORES"),
+                "outer_workers": "up to 8 (ncores setting 8 or 10)",
+                "source_commit": sidecar.get("source", {}).get("git_commit"),
+                "source_diff_sha256": sidecar.get("source", {}).get(
+                    "git_diff_sha256"),
+                "ld_cache_sha256": sidecar.get("inputs", {}).get(
+                    "ld_cache", {}).get("sha256"),
+            }
 
-    table_sha = _sha256(paths[TABLE])
     registry_sha = _sha256(paths[REGISTRY])
     return {
-        "available": True, "path": str(base),
+        "available": True, "trusted": True, "path": str(base),
         "good": sorted(good, key=lambda e: (e["trait"] or "").lower()),
         "bad": sorted(unusable + failed_fit,
                       key=lambda e: (e["trait"] or "").lower()),
@@ -164,10 +226,13 @@ def load() -> dict:
                    "preflight_bad": len(unusable),
                    "failed_fit": len(failed_fit)},
         "table_sha256": table_sha,
-        "table_hash_verified": table_sha == manifest.get("table_sha256"),
+        "expected_table_sha256": expected_sha,
+        "table_hash_verified": True,
         "registry_sha256": registry_sha,
         "manifest_settings": manifest.get("settings", {}),
         "known_limits": manifest.get("known_limits", []),
         "current_traits": len(current),
+        "current_completed": sum(e["profile"] == "current" for e in good),
+        "legacy_completed": sum(e["profile"] == "legacy" for e in good),
         "runtime": runtime,
     }

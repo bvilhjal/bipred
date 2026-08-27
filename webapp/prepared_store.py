@@ -37,6 +37,7 @@ import numpy as np
 
 import bipred
 from bipred.prepare import PreparedTrait
+from .jobs import ProcessFileLock
 
 
 __all__ = [
@@ -49,8 +50,6 @@ DEFAULT_ALGORITHM_SCHEMA = "prepared-trait-v5"
 FORMAT = "bipred-prepared-trait"
 FORMAT_VERSION = 5
 
-LOCK_STALE = 900.0
-LOCK_TOUCH = 30.0
 WAIT_LIMIT = 3600.0
 WAIT_POLL = 0.5
 PART_STALE = 3600.0
@@ -674,117 +673,20 @@ def _paths(root: Path, key: str) -> _Paths:
     )
 
 
-def _stat_identity(stat):
-    return stat.st_dev, stat.st_ino
-
-
-class _Lock:
-    """Heartbeated O_EXCL lock whose owner cannot unlink a successor."""
-
-    def __init__(self, path):
-        self.path = Path(path)
-        self.fd = None
-        self.identity = None
-
-    def acquire(self):
-        for attempt in (0, 1):
-            try:
-                self.fd = os.open(
-                    str(self.path), os.O_CREAT | os.O_EXCL | os.O_WRONLY,
-                    0o644)
-                stat = os.fstat(self.fd)
-                self.identity = _stat_identity(stat)
-                os.write(self.fd, f"{os.getpid()}\n".encode("ascii"))
-                return True
-            except FileExistsError:
-                if attempt or not self._steal_if_stale():
-                    return False
-        return False
-
-    def _steal_if_stale(self):
-        try:
-            first = self.path.stat()
-            if time.time() - first.st_mtime <= LOCK_STALE:
-                return False
-            second = self.path.stat()
-            if (_stat_identity(first) != _stat_identity(second)
-                    or first.st_mtime_ns != second.st_mtime_ns):
-                return False
-            self.path.unlink()
-            return True
-        except OSError:
-            return False
-
-    def touch(self):
-        if self.fd is None:
-            return
-        try:
-            os.utime(self.fd, None)
-            return
-        except (OSError, TypeError, ValueError):
-            # Windows does not accept a raw file descriptor in os.utime().
-            # Fall back to the pathname only while it still names our lock;
-            # otherwise we could refresh a successor owner's heartbeat.
-            pass
-        if not self.owned():
-            return
-        try:
-            os.utime(self.path, None)
-        except OSError:
-            pass
-
-    def owned(self):
-        if self.fd is None:
-            return False
-        try:
-            return _stat_identity(self.path.stat()) == self.identity
-        except OSError:
-            return False
-
-    def release(self):
-        if self.fd is None:
-            return
-        fd = self.fd
-        identity = self.identity
-        self.fd = None
-        self.identity = None
-        try:
-            owned = False
-            try:
-                owned = _stat_identity(self.path.stat()) == identity
-            except OSError:
-                pass
-        finally:
-            # Windows normally refuses to unlink a file while this descriptor
-            # is open.  Close first, then re-check the pathname identity before
-            # removing it so a stale owner cannot unlink a successor's lock.
-            os.close(fd)
-        if owned:
-            try:
-                if _stat_identity(self.path.stat()) == identity:
-                    self.path.unlink()
-            except OSError:
-                pass
+class _Lock(ProcessFileLock):
+    """Kernel-backed prepared-artifact lock; released on process exit."""
 
 
 class _Heartbeat:
+    """Compatibility context; kernel locks require no heartbeat thread."""
+
     def __init__(self, lock):
         self.lock = lock
-        self.stop = threading.Event()
-        self.thread = None
 
     def __enter__(self):
-        def beat():
-            while not self.stop.wait(LOCK_TOUCH):
-                self.lock.touch()
-        self.thread = threading.Thread(target=beat, daemon=True,
-                                       name="bipred-prepared-store-lock")
-        self.thread.start()
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        self.stop.set()
-        self.thread.join(timeout=min(1.0, LOCK_TOUCH))
         return False
 
 

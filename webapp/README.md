@@ -147,6 +147,8 @@ The job page updates live: a small poller hits `GET /jobs/<id>/status`
 counts, `error`) every 2 s and redirects to the results on completion. The
 visible stages follow the reusable-data boundaries:
 
+**Table 1. Web job stages.**
+
 | Stage | Reported |
 |---|---|
 | **Get Catalog data** (Catalog inputs only) | The two independent traits are fetched/reused concurrently. Each trait keeps its own live line with network MB, percent, and MB/s; stored-copy reuse and waits are explicit. The completed row retains downloaded/reused outcomes for both traits. |
@@ -178,9 +180,12 @@ each pinned to one numerical thread (the same BLAS pins as the test suite, so
 N jobs never oversubscribe the host and numerics stay deterministic).
 `job.json` tracks acquire → (prepare and screen per trait) → pair → ldsc → fit
 → (weights) with per-stage seconds; pairing starts only after both trait workers
-join. A persisted `launching` claim prevents duplicate starts,
-and startup reconciliation deletes unpublished staging uploads and fails
-interrupted running jobs rather than leaving either stuck. The runner writes
+join. A persisted `launching` claim prevents duplicate starts. Startup
+reconciliation deletes unpublished staging uploads, fails jobs whose runner
+has disappeared, and continues to count a surviving runner against the
+concurrency cap until it exits. The bounded queue refuses excess work with a
+retryable response, and the supervisor terminates runners it owns after the
+configured runtime ceiling. The runner writes
 `result.json`, `munge.json`, and optional weight files. Results record
 input/cache hashes, N basis and range, column
 overrides, screen and sampling-error assumptions, source revision, CPU/OS/
@@ -200,12 +205,18 @@ The cache fingerprint covers both NPZ metadata and all numerical mmap payloads.
 
 ## Configuration (environment variables)
 
+**Table 2. Web-service environment variables.**
+
 | Variable | Default | Meaning |
 |---|---|---|
 | `BIPRED_WEB_DATA` | `./webapp_data` | uploads, job dirs, demo cache |
 | `BIPRED_WEB_CACHES` | — | real LD caches: `EUR=/path/eur.ld.npz;AFR=/path/afr.ld.npz` |
 | `BIPRED_WEB_CONCURRENCY` | `1` | simultaneous fit subprocesses; raise only when the host can hold one private paired LD panel per job |
-| `BIPRED_WEB_MAX_UPLOAD_MB` | `500` | per-file upload cap |
+| `BIPRED_WEB_QUEUE_MAX` | `max(8, 4 × concurrency)` | accepted staging, queued, launching, and running jobs before new submissions receive HTTP 503 |
+| `BIPRED_WEB_JOB_TIMEOUT_HOURS` | `6` | runtime ceiling for a fit subprocess owned by this supervisor |
+| `BIPRED_WEB_MAX_UPLOAD_MB` | `500` | combined upload budget; the request is rejected before multipart parsing when its declared body exceeds this budget plus 1 MiB of form overhead |
+| `BIPRED_WEB_MAX_ROWS` | `50000000` | maximum data rows in either expanded input before parsing and allocation |
+| `BIPRED_WEB_MAX_EXPANDED_GB` | `16` | maximum decompressed bytes in either input; applies to gzip/BGZF as well as plain text |
 | `BIPRED_WEB_TTL_DAYS` | `7` | retention of finished jobs and stale staging uploads; must be finite and greater than zero |
 | `BIPRED_WEB_STORE_GB` | `20` | byte budget for stored catalog downloads (`0` disables the cap) |
 | `BIPRED_WEB_PREPARED_GB` | `20` | byte budget for QC'd, LD-aligned, screened traits, including uploads (`0` disables the cap) |

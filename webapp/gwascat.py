@@ -45,9 +45,12 @@ import urllib.error
 import urllib.request
 import uuid
 import zlib
+from array import array
 from pathlib import Path
 
 import numpy as np
+
+from .jobs import ProcessFileLock
 
 FTP = "https://ftp.ebi.ac.uk/pub/databases/gwas"
 SUMSTATS = f"{FTP}/summary_statistics"
@@ -142,6 +145,11 @@ _ALIASES = {
     "pval": ("p_value", "pvalue", "p"),
     "n": ("n", "sample_size", "n_total"),
 }
+# GWAS Catalog's standard ``sample_size`` field is the number contributing to
+# that variant, not a case/control effective sample size.  Keep the column so
+# its relative missingness pattern can be retained, but label its semantics so
+# the runner can put it on an ancestry-matched effective-N scale before fitting.
+_TOTAL_N_COLUMNS = frozenset(("sample_size", "n_total"))
 _ODDS = ("hm_odds_ratio", "odds_ratio")
 # A z-score with a standard error IS an effect: beta = z * se, sign included.
 _ZSCORE = ("hm_z_score", "z_score", "zscore", "z")
@@ -153,6 +161,50 @@ _CASES = re.compile(r"([\d,]+)\s+European[^,;]*?cases", re.I)
 _CONTROLS = re.compile(r"([\d,]+)\s+European[^,;]*?controls", re.I)
 _EUR_INDIVIDUALS = re.compile(r"([\d,]+)\s+European[^,;]*?individuals", re.I)
 _INDIVIDUALS = re.compile(r"([\d,]+)\s+[^,;]*?individuals", re.I)
+
+
+def _sample_metadata_fields(sample: str) -> dict:
+    """Conservative, ancestry-labelled sample-size facts from study text."""
+    out = {}
+    cases = _CASES.search(sample)
+    controls = _CONTROLS.search(sample)
+    if cases and controls:
+        out["n_cases"] = int(cases.group(1).replace(",", ""))
+        out["n_controls"] = int(controls.group(1).replace(",", ""))
+        out["n_total_selected"] = out["n_cases"] + out["n_controls"]
+        out["n_eff"] = round(4.0 / (1.0 / out["n_cases"]
+                                    + 1.0 / out["n_controls"]), 1)
+        out["n_basis"] = ("4/(1/ncase+1/nctrl) from catalog European "
+                          "case/control counts")
+        out["sample_size_population"] = "European"
+        out["sample_size_design"] = "case_control"
+        return out
+
+    eur = [int(match.group(1).replace(",", ""))
+           for match in _EUR_INDIVIDUALS.finditer(sample)]
+    if eur:
+        out.update({
+            "n_eff": float(sum(eur)),
+            "n_total_selected": int(sum(eur)),
+            "n_basis": "catalog European initial sample size",
+            "sample_size_population": "European",
+            "sample_size_design": "individuals",
+            "sample_size_components": eur,
+        })
+        return out
+
+    numbers = [int(match.group(1).replace(",", ""))
+               for match in _INDIVIDUALS.finditer(sample)]
+    if numbers:
+        out.update({
+            "n_total_reported": int(max(numbers)),
+            "n_basis": ("largest N in the catalog's initial sample-size "
+                        "text; not used automatically because ancestry/design "
+                        "are unresolved"),
+            "sample_size_population": "unresolved",
+            "sample_size_design": "unresolved",
+        })
+    return out
 
 
 def _resolve_schema(fieldnames):
@@ -302,7 +354,15 @@ def _study_metadata(accession: str, root: Path) -> dict:
     """Trait name and sample size from the GWAS Catalog REST API (cached)."""
     cache = _meta_dir(root) / f"{accession}.json"
     if cache.exists():
-        return json.loads(cache.read_text())
+        meta = json.loads(cache.read_text())
+        # Re-derive fields when semantics improve: an old cache must not keep
+        # the former unsafe unknown-ancestry ``n_eff`` interpretation alive.
+        for name in ("n_eff", "n_cases", "n_controls", "n_total_selected",
+                     "n_total_reported", "n_basis", "sample_size_population",
+                     "sample_size_design", "sample_size_components"):
+            meta.pop(name, None)
+        meta.update(_sample_metadata_fields(meta.get("sample", "")))
+        return meta
     url = REST_STUDY.format(accession=accession)
     try:
         with urllib.request.urlopen(url, timeout=60) as resp:
@@ -320,29 +380,7 @@ def _study_metadata(accession: str, root: Path) -> dict:
     meta = {"accession": accession, "trait": trait.strip(),
             "title": (pub.get("title") or "").strip(),
             "pmid": str(pub.get("pubmedId") or ""), "sample": sample}
-    cases = _CASES.search(sample)
-    controls = _CONTROLS.search(sample)
-    if cases and controls:
-        meta["n_cases"] = int(cases.group(1).replace(",", ""))
-        meta["n_controls"] = int(controls.group(1).replace(",", ""))
-        meta["n_eff"] = round(4.0 / (1.0 / meta["n_cases"]
-                                     + 1.0 / meta["n_controls"]), 1)
-        meta["n_basis"] = ("4/(1/ncase+1/nctrl) from catalog European "
-                           "case/control counts")
-    else:
-        eur = [int(m.group(1).replace(",", ""))
-               for m in _EUR_INDIVIDUALS.finditer(sample)]
-        if eur:
-            meta["n_eff"] = float(sum(eur))
-            meta["n_basis"] = "catalog European initial sample size"
-        else:
-            numbers = [int(m.group(1).replace(",", ""))
-                       for m in _INDIVIDUALS.finditer(sample)]
-            if numbers:
-                meta["n_eff"] = float(max(numbers))
-                meta["n_basis"] = ("largest N in the catalog's initial "
-                                   "sample size text; check ancestry before "
-                                   "trusting it")
+    meta.update(_sample_metadata_fields(sample))
     tmp = str(cache) + ".part"
     with open(tmp, "w") as fh:
         json.dump(meta, fh, indent=1)
@@ -425,9 +463,17 @@ def stream_filter(url_or_path: str, keep_ids: set, dest: Path,
             reader = csv.DictReader(src, delimiter="\t")
             mapping, odds, zscore = _resolve_schema(reader.fieldnames)
             has_beta = "beta" in mapping
+            n_source_column = mapping.get("n")
+            n_source_kind = (
+                "reported_total" if n_source_column is not None
+                and n_source_column.strip().lower() in _TOTAL_N_COLUMNS
+                else "variant_n" if n_source_column is not None else "none"
+            )
             info = {"schema": ("hm_prefixed" if "hm_rsid" in
                                (reader.fieldnames or []) else "unprefixed"),
                     "has_n": "n" in mapping,
+                    "n_source_column": n_source_column,
+                    "n_source_kind": n_source_kind,
                     "effect_from": ("beta" if has_beta else
                                     "log(odds_ratio)" if odds is not None
                                     else "z * se")}
@@ -496,8 +542,6 @@ def stream_filter(url_or_path: str, keep_ids: set, dest: Path,
 # silently filtering against a reference the store never covered.
 
 STORE_DIRNAME = "catalog"
-LOCK_STALE = 900.0          # a lock unheartbeaten this long is abandoned
-LOCK_TOUCH = 30.0           # heartbeat interval while downloading
 WAIT_LIMIT = 3600.0         # give up waiting on another job's download
 EVICT_GRACE = 3600.0        # never evict a copy used this recently
 PART_STALE = 3600.0         # abandoned partial downloads older than this go
@@ -554,6 +598,10 @@ def _load_build(meta_path: Path, fingerprint: str | None = None) -> dict | None:
                 "beta", "log(odds_ratio)", "z * se")
             or not isinstance(build.get("has_n"), bool)):
         return None
+    n_kind = build.get("n_source_kind")
+    if n_kind is not None and n_kind not in (
+            "reported_total", "variant_n", "none", "unknown"):
+        return None
     for name in ("seen", "kept", "bytes"):
         value = build.get(name)
         if (isinstance(value, bool) or not isinstance(value, int)
@@ -606,96 +654,8 @@ def _matching_build(meta_path: Path, url: str, fingerprint: str,
     return build
 
 
-class _StoreLock:
-    """Best-effort exclusive lock so two jobs do not fetch the same file.
-
-    Ownership is a file created with ``O_EXCL``; the owner touches it while
-    downloading, and a lock left unheartbeaten for ``LOCK_STALE`` is treated
-    as abandoned by a dead process. A waiter reuses only an exact published
-    match and otherwise loops until it owns the lock; publishing uses atomic
-    renames.
-    """
-
-    def __init__(self, path):
-        self.path = Path(path)
-        self.fd = None
-        self.identity = None
-        self._touched = 0.0
-
-    def acquire(self) -> bool:
-        for attempt in (0, 1):
-            try:
-                self.fd = os.open(str(self.path),
-                                  os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-                stat = os.fstat(self.fd)
-                self.identity = (stat.st_dev, stat.st_ino)
-                self._touched = time.time()
-                return True
-            except FileExistsError:
-                stale_identity = self.stale_identity()
-                if attempt or stale_identity is None:
-                    return False
-                self.steal(stale_identity)
-        return False
-
-    def stale_identity(self) -> tuple | None:
-        try:
-            first = self.path.stat()
-            if time.time() - first.st_mtime <= LOCK_STALE:
-                return None
-            second = self.path.stat()
-            first_identity = (first.st_dev, first.st_ino)
-            if (first_identity != (second.st_dev, second.st_ino)
-                    or first.st_mtime_ns != second.st_mtime_ns):
-                return None
-            return first_identity
-        except OSError:
-            return None                     # gone: the owner released it
-
-    def stale(self) -> bool:
-        return self.stale_identity() is not None
-
-    def steal(self, identity=None) -> None:
-        try:
-            current = self.path.stat()
-            if identity is None or (current.st_dev, current.st_ino) == identity:
-                os.unlink(self.path)
-        except OSError:
-            pass
-
-    def touch(self) -> None:
-        now = time.time()
-        if self.fd is None or now - self._touched < LOCK_TOUCH:
-            return
-        self._touched = now
-        try:
-            os.utime(self.fd, None)
-        except OSError:
-            pass
-
-    def owned(self) -> bool:
-        if self.fd is None:
-            return False
-        try:
-            current = self.path.stat()
-            return (current.st_dev, current.st_ino) == self.identity
-        except OSError:
-            return False
-
-    def release(self) -> None:
-        if self.fd is None:
-            return
-        try:
-            try:
-                current = self.path.stat()
-                if (current.st_dev, current.st_ino) == self.identity:
-                    os.unlink(self.path)
-            except OSError:
-                pass
-        finally:
-            os.close(self.fd)
-            self.fd = None
-            self.identity = None
+class _StoreLock(ProcessFileLock):
+    """Kernel-backed Catalog lock, automatically released on process exit."""
 
 
 def _file_identity(path: Path) -> tuple | None:
@@ -716,15 +676,11 @@ def _file_sha256(path: Path) -> str:
 
 
 def _wait_for_unlock(lock: _StoreLock, on_wait=None) -> None:
-    """Wait until the current owner releases, or safely steal a stale lock."""
+    """Acquire after the current process owner releases its kernel lock."""
     start = time.time()
     while time.time() - start < WAIT_LIMIT:
         time.sleep(2.0)
-        if not lock.path.exists():
-            return
-        stale_identity = lock.stale_identity()
-        if stale_identity is not None:
-            lock.steal(stale_identity)
+        if lock.acquire():
             return
         if on_wait is not None:
             on_wait(round(time.time() - start))
@@ -800,6 +756,8 @@ def _build_store(url: str, data: Path, meta_path: Path, accession: str,
                  "seen": info["seen"], "kept": info["kept"],
                  "sha256": info["sha256"], "schema": info["schema"],
                  "effect_from": info["effect_from"], "has_n": info["has_n"],
+                 "n_source_column": info.get("n_source_column"),
+                 "n_source_kind": info.get("n_source_kind", "unknown"),
                  "covers": covers, "bytes": size,
                  "store_sha256": store_sha256,
                  "origin": "download"}
@@ -1093,6 +1051,10 @@ def adopt_legacy_job_file(root: Path, *, accession: str, url: str,
                         "schema": "legacy-normalised",
                         "effect_from": candidate["effect_from"],
                         "has_n": checked["has_n"],
+                        # Historical job provenance did not distinguish a
+                        # reported total from an effective/unspecified ``n``.
+                        "n_source_column": None,
+                        "n_source_kind": "unknown",
                         "covers": {fingerprint: cache_label},
                         "bytes": part.stat().st_size,
                         "origin": "legacy job",
@@ -1123,8 +1085,44 @@ def adopt_legacy_job_file(root: Path, *, accession: str, url: str,
         return False
 
 
+def _sample_size_transform(values, target_effective_n=None,
+                           target_total_n=None) -> dict | None:
+    """A downward-only scale preserving relative per-variant sample size.
+
+    For a case/control study, ``target_effective_n / target_total_n`` first
+    converts a cohort total to effective N. If the deposited median is larger
+    than the selected ancestry total, the same factor also corrects that
+    ancestry level. Values are never scaled upward: missing-cohort variants
+    must not be credited with information they did not contain.
+    """
+    if len(values) == 0 or not _is_number(target_effective_n) \
+            or float(target_effective_n) <= 0:
+        return None
+    observed = np.asarray(values, dtype=np.float64)
+    median = float(np.median(observed))
+    if not math.isfinite(median) or median <= 0:
+        return None
+    target = float(target_effective_n)
+    total = (float(target_total_n) if _is_number(target_total_n)
+             and float(target_total_n) > 0 else target)
+    design_factor = min(1.0, target / total)
+    ancestry_factor = min(1.0, total / median)
+    factor = design_factor * ancestry_factor
+    return {
+        "method": "downward median rescale",
+        "source_median": median,
+        "target_effective_n": target,
+        "target_total_n": total,
+        "factor": factor,
+        "applied": bool(factor < 1.0 - 1e-12),
+        "upward_scaling_refused": bool(target > median and factor == 1.0),
+    }
+
+
 def _filter_normalised(store: Path, keep_ids: set, dest: Path,
-                       on_bytes=None, expected_sha256=None) -> tuple:
+                       on_bytes=None, expected_sha256=None,
+                       target_effective_n=None,
+                       target_total_n=None) -> tuple:
     """Copy rows; return counts plus logical and compressed SHA-256.
 
     Rows are written byte-for-byte, so the result is exactly what a download
@@ -1138,6 +1136,7 @@ def _filter_normalised(store: Path, keep_ids: set, dest: Path,
     compressed = hashlib.sha256()
     tmp = str(dest) + ".part"
     kept = n_usable = 0
+    n_values = array("d")
     identity = None
     finished = False
     try:
@@ -1166,6 +1165,7 @@ def _filter_normalised(store: Path, keep_ids: set, dest: Path,
                     if len(fields) > n_col and _is_number(fields[n_col]) \
                             and float(fields[n_col]) > 0:
                         n_usable += 1
+                        n_values.append(float(fields[n_col]))
         store_sha256 = compressed.hexdigest()
         if expected_sha256 is not None and store_sha256 != expected_sha256:
             raise _StoreGzipError(
@@ -1183,8 +1183,37 @@ def _filter_normalised(store: Path, keep_ids: set, dest: Path,
     if kept == 0:
         raise ValueError("no variants overlap the LD reference — wrong "
                          "genome build or a hits-only deposition?")
+    transform = _sample_size_transform(
+        n_values, target_effective_n, target_total_n)
+    if transform is not None and transform["applied"]:
+        scaled = tmp + ".scaled"
+        scaled_digest = hashlib.sha256()
+        try:
+            with gzip.open(tmp, "rt", encoding="utf-8",
+                           errors="strict") as src, \
+                    gzip.open(scaled, "wt", encoding="utf-8",
+                              newline="") as dst:
+                header = src.readline()
+                dst.write(header)
+                scaled_digest.update(header.encode("utf-8"))
+                for line in src:
+                    fields = line.rstrip("\n").split("\t")
+                    if len(fields) > n_col and _is_number(fields[n_col]) \
+                            and float(fields[n_col]) > 0:
+                        fields[n_col] = repr(
+                            float(fields[n_col]) * transform["factor"])
+                    output = "\t".join(fields) + "\n"
+                    dst.write(output)
+                    scaled_digest.update(output.encode("utf-8"))
+            os.replace(scaled, tmp)
+            digest = scaled_digest
+        finally:
+            try:
+                os.unlink(scaled)
+            except OSError:
+                pass
     os.replace(tmp, dest)
-    return kept, n_usable, digest.hexdigest(), store_sha256
+    return kept, n_usable, digest.hexdigest(), store_sha256, transform
 
 
 def fetch_filtered(url: str, dest: Path, *, accession: str, root: Path,
@@ -1192,6 +1221,8 @@ def fetch_filtered(url: str, dest: Path, *, accession: str, root: Path,
                    remote_bytes: int = 0,
                    remote_etag: str | None = None,
                    remote_last_modified: str | None = None,
+                   target_effective_n: float | None = None,
+                   target_total_n: float | None = None,
                    on_bytes=None, on_filter=None, on_wait=None) -> dict:
     """One accession's variants, filtered to ``keep_ids``, without re-downloading.
 
@@ -1271,10 +1302,23 @@ def fetch_filtered(url: str, dest: Path, *, accession: str, root: Path,
                     if identity[2] != build["bytes"]:
                         raise _StoreGzipError(
                             "byte count does not match its metadata", identity)
-                    kept, n_usable, normalised_sha256, store_sha256 = \
+                    (kept, n_usable, normalised_sha256, store_sha256,
+                     n_transform) = \
                         _filter_normalised(
                             data, keep_ids, dest, filter_progress,
-                            expected_sha256=build.get("store_sha256"))
+                            expected_sha256=build.get("store_sha256"),
+                            # Only Catalog's explicitly total-N aliases need
+                            # conversion.  A canonical ``n`` column is already
+                            # the per-variant effective-N contract and must not
+                            # be case/control-scaled a second time.
+                            target_effective_n=(
+                                target_effective_n
+                                if build.get("n_source_kind") ==
+                                "reported_total" else None),
+                            target_total_n=(
+                                target_total_n
+                                if build.get("n_source_kind") ==
+                                "reported_total" else None))
                 except _StoreReadError as exc:
                     if not use_lock.owned():
                         retry = True
@@ -1304,11 +1348,19 @@ def fetch_filtered(url: str, dest: Path, *, accession: str, root: Path,
                         "schema": build["schema"],
                         "effect_from": build["effect_from"],
                         "has_n": build["has_n"], "seen": build["seen"],
+                        "n_source_column": build.get("n_source_column"),
+                        "n_source_kind": build.get(
+                            "n_source_kind", "unknown"),
                         "sha256": build["sha256"], "kept": kept,
                         "normalised_sha256": normalised_sha256,
                         "per_variant_n_usable_frac": n_frac,
                         "has_per_variant_n": bool(
                             build["has_n"] and n_frac >= 0.99),
+                        "sample_size_transform": n_transform,
+                        "sample_size_safe_for_effective_n": bool(
+                            build["has_n"] and n_frac >= 0.99 and (
+                                build.get("n_source_kind") == "variant_n"
+                                or n_transform is not None)),
                         "reused": not downloaded,
                         "store_kept": build["kept"],
                         "store_origin": build.get("origin", "download"),
