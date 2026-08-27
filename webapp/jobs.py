@@ -11,10 +11,12 @@ detected by the supervisor instead of hanging forever.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import secrets
 import shutil
 import time
+import uuid
 from pathlib import Path
 
 STATES = ("staging", "queued", "launching", "running", "done", "failed")
@@ -189,6 +191,12 @@ def stage_label(key: str, schema: int | None = None) -> str:
 # runner.log and optionally weights*.tsv.
 JOB_JSON = "job.json"
 
+_IO_ATTEMPTS = 5
+_IO_RETRY_SECONDS = 0.01
+_WINDOWS_SHARING_ERRORS = frozenset({5, 32, 33})
+
+logger = logging.getLogger(__name__)
+
 
 def data_root() -> Path:
     """Root for all mutable web-service state (env ``BIPRED_WEB_DATA``)."""
@@ -243,20 +251,72 @@ def job_dir(root: Path, job_id: str) -> Path:
     return root / "jobs" / job_id
 
 
+def _retry_delay(attempt: int) -> None:
+    time.sleep(_IO_RETRY_SECONDS * (attempt + 1))
+
+
+def _transient_io_error(exc: OSError) -> bool:
+    return (isinstance(exc, PermissionError)
+            or getattr(exc, "winerror", None) in _WINDOWS_SHARING_ERRORS)
+
+
+def _read_job_json(path: Path):
+    """Read one state file, tolerating brief Windows sharing/replace races."""
+    for attempt in range(_IO_ATTEMPTS):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                return json.load(fh)
+        except FileNotFoundError:
+            return None
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            # Atomic writers cannot expose partial JSON, but an older web or
+            # runner process may still be using the pre-v5 fixed temporary
+            # file during a rolling restart.  Retry briefly before reporting
+            # persistent corruption to the caller.
+            if attempt + 1 == _IO_ATTEMPTS:
+                raise
+        except OSError as exc:
+            if (not _transient_io_error(exc)
+                    or attempt + 1 == _IO_ATTEMPTS):
+                raise
+        _retry_delay(attempt)
+    raise AssertionError("unreachable")
+
+
 def load_job(root: Path, job_id: str) -> dict | None:
     path = job_dir(root, job_id) / JOB_JSON
-    if not path.exists():
+    job = _read_job_json(path)
+    if job is None:
         return None
-    with open(path) as fh:
-        return json.load(fh)
+    if not isinstance(job, dict):
+        raise ValueError(f"job state {path} must be a JSON object")
+    if job.get("id") != job_id:
+        raise ValueError(f"job state {path} has a mismatched id")
+    return job
 
 
 def save_job(root: Path, job: dict) -> None:
     path = job_dir(root, job["id"]) / JOB_JSON
-    tmp = path.with_suffix(".tmp")
-    with open(tmp, "w") as fh:
-        json.dump(job, fh, indent=1)
-    os.replace(tmp, path)
+    wire = json.dumps(job, indent=1) + "\n"
+    tmp = path.with_name(
+        f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.part")
+    try:
+        with open(tmp, "x", encoding="utf-8") as fh:
+            fh.write(wire)
+        for attempt in range(_IO_ATTEMPTS):
+            try:
+                os.replace(tmp, path)
+                return
+            except OSError as exc:
+                if (not _transient_io_error(exc)
+                        or attempt + 1 == _IO_ATTEMPTS):
+                    raise
+                _retry_delay(attempt)
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
 
 
 def update_job(root: Path, job_id: str, **fields) -> dict | None:
@@ -274,9 +334,28 @@ def list_jobs(root: Path) -> list[dict]:
     if not base.exists():
         return out
     for entry in sorted(base.iterdir()):
-        job = load_job(root, entry.name)
+        try:
+            if not entry.is_dir():
+                logger.warning("Skipping stray job-store entry %s", entry)
+                continue
+            job = load_job(root, entry.name)
+            if job is not None:
+                status = job.get("status")
+                created = job.get("created")
+                if status not in STATES:
+                    raise ValueError(f"unknown job status {status!r}")
+                if (isinstance(created, bool)
+                        or not isinstance(created, (int, float))):
+                    raise ValueError("job created time is missing or invalid")
+        except (OSError, ValueError, TypeError, UnicodeError) as exc:
+            logger.warning("Skipping unreadable job-store entry %s: %s",
+                           entry, exc)
+            continue
         if job is not None:
             out.append(job)
+        else:
+            logger.warning("Skipping job-store directory without %s: %s",
+                           JOB_JSON, entry)
     return out
 
 
@@ -297,13 +376,67 @@ def purge_jobs(root: Path, ttl_days: float) -> list[str]:
     return removed
 
 
-def recover_interrupted_jobs(root: Path) -> list[str]:
+def pid_is_alive(pid) -> bool:
+    """Return whether an integer PID still identifies a live process.
+
+    ``os.kill(pid, 0)`` is the conventional POSIX probe, but on Windows a
+    non-control signal is implemented with ``TerminateProcess``.  Querying a
+    handle avoids turning a liveness check into a surprisingly literal kill.
+    """
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        return False
+    if os.name == "nt":
+        if pid > 0xFFFFFFFF:
+            return False
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        open_process = kernel32.OpenProcess
+        open_process.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        open_process.restype = wintypes.HANDLE
+        get_exit_code = kernel32.GetExitCodeProcess
+        get_exit_code.argtypes = (wintypes.HANDLE,
+                                  ctypes.POINTER(wintypes.DWORD))
+        get_exit_code.restype = wintypes.BOOL
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = (wintypes.HANDLE,)
+        close_handle.restype = wintypes.BOOL
+
+        handle = open_process(0x1000, False, pid)  # QUERY_LIMITED_INFORMATION
+        if not handle:
+            # Access can be denied for a protected but genuinely live process.
+            return ctypes.get_last_error() == 5
+        try:
+            exit_code = wintypes.DWORD()
+            if not get_exit_code(handle, ctypes.byref(exit_code)):
+                return False
+            return exit_code.value == 259             # STILL_ACTIVE
+        finally:
+            close_handle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except (OSError, OverflowError, ValueError):
+        return False
+    return True
+
+
+def recover_interrupted_jobs(
+        root: Path, *, preserve_live: bool = False):
     """Reconcile jobs whose owning web/runner process vanished on restart.
 
     Queued jobs are preserved for the new supervisor.  Unpublished staging
-    directories are deleted; launching and running jobs become failed.
+    directories are deleted; launching and running jobs become failed.  A
+    restart-aware supervisor can pass ``preserve_live=True`` to retain jobs
+    whose recorded runner PID is still alive and receive ``(recovered,
+    live_by_job_id)``.  The default return remains the historical list.
     """
     recovered = []
+    live = {}
     for job in list_jobs(root):
         if job["status"] not in ("staging", "launching", "running"):
             continue
@@ -315,9 +448,15 @@ def recover_interrupted_jobs(root: Path) -> list[str]:
             shutil.rmtree(job_dir(root, job["id"]), ignore_errors=True)
             recovered.append(job["id"])
             continue
+        pid = job.get("pid")
+        if preserve_live and pid_is_alive(pid):
+            live[job["id"]] = pid
+            continue
         update_job(root, job["id"], status="failed", stage=None,
                    finished=_now(),
                    error=(f"server restarted while job was {previous}; "
                           "submit it again"))
         recovered.append(job["id"])
+    if preserve_live:
+        return recovered, live
     return recovered

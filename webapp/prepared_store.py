@@ -720,6 +720,16 @@ class _Lock:
             return
         try:
             os.utime(self.fd, None)
+            return
+        except (OSError, TypeError, ValueError):
+            # Windows does not accept a raw file descriptor in os.utime().
+            # Fall back to the pathname only while it still names our lock;
+            # otherwise we could refresh a successor owner's heartbeat.
+            pass
+        if not self.owned():
+            return
+        try:
+            os.utime(self.path, None)
         except OSError:
             pass
 
@@ -734,16 +744,27 @@ class _Lock:
     def release(self):
         if self.fd is None:
             return
+        fd = self.fd
+        identity = self.identity
+        self.fd = None
+        self.identity = None
         try:
+            owned = False
             try:
-                if _stat_identity(self.path.stat()) == self.identity:
-                    self.path.unlink()
+                owned = _stat_identity(self.path.stat()) == identity
             except OSError:
                 pass
         finally:
-            os.close(self.fd)
-            self.fd = None
-            self.identity = None
+            # Windows normally refuses to unlink a file while this descriptor
+            # is open.  Close first, then re-check the pathname identity before
+            # removing it so a stale owner cannot unlink a successor's lock.
+            os.close(fd)
+        if owned:
+            try:
+                if _stat_identity(self.path.stat()) == identity:
+                    self.path.unlink()
+            except OSError:
+                pass
 
 
 class _Heartbeat:

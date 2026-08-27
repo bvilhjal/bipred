@@ -47,7 +47,7 @@ UKB_EUR_LABEL = _REAL_CACHES[1][2]
 _HASH_CACHE = {}
 _HASH_CACHE_LOCK = threading.Lock()
 
-_HASH_RECORD_SCHEMA = 2
+_HASH_RECORD_SCHEMA = 3
 _RAW_HASH_KIND = "raw-file-sha256"
 _MMAP_HASH_KIND = "ldpred3-mmap-generation-sha256-v1"
 _MMAP_PAYLOAD_FIELDS = ("payload_file", "payload_file_i8")
@@ -137,8 +137,14 @@ def cache_path(key: str, root: Path | None = None) -> Path:
 
 
 def _identity(stat):
+    # ``st_ctime`` is not a portable change counter.  In particular, Python
+    # 3.14 reports Windows creation time for ``Path.stat()`` while CRT-backed
+    # ``fstat()`` can expose a different value for the same open file.  That
+    # made an unchanged cache look as if it had been replaced while hashing.
+    # Device/inode bind the pathname to the opened file; size and mtime bind
+    # in-place payload changes.  The content digest remains the final identity.
     return {name: int(getattr(stat, f"st_{name}")) for name in
-            ("dev", "ino", "size", "mtime_ns", "ctime_ns")}
+            ("dev", "ino", "size", "mtime_ns")}
 
 
 def _safe_payload_path(cache_path, value, field):
