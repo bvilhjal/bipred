@@ -23,6 +23,7 @@ import sys
 import threading
 import time
 import traceback
+import uuid
 import warnings
 import zlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -31,6 +32,27 @@ from importlib import metadata as importlib_metadata
 from pathlib import Path
 
 from . import caches, jobs
+
+
+def _write_json_atomic(path: Path, text: str) -> None:
+    """Publish JSON by unique-temp rename so readers never see a partial file.
+
+    The runner can be killed at any instant (the watchdog's ``os._exit(124)``,
+    supervisor termination), and the web process parses these files while
+    polling job state; a truncated write would surface as a JSON error on a
+    job that actually finished.
+    """
+    tmp = path.with_name(
+        f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.part")
+    try:
+        with open(tmp, "x", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
 
 
 class _Stages:
@@ -1674,7 +1696,7 @@ def run(job_dir: Path, job: dict) -> None:
                 # intersection. Pre-screen indices are not persisted.
                 "n_usable": int(n_usable) if n_usable is not None else None,
             }
-        (job_dir / "munge.json").write_text(json.dumps(munge, indent=1))
+        _write_json_atomic(job_dir / "munge.json", json.dumps(munge, indent=1))
         pair_summary = (
             f"Combined the screened traits: {munge['n_kept']:,} shared "
             "variants kept for fitting"
@@ -1838,6 +1860,11 @@ def run(job_dir: Path, job: dict) -> None:
                 "critical": True,
             })
         critical = _warnings_are_critical(captured_warnings, divergence)
+        # Persist the quarantine verdict on the job itself: the supervisor's
+        # catalog track record reads job state, not result.json, and a
+        # critically flagged fit must not be recorded as a working accession.
+        job["valid_for_interpretation"] = not critical
+        jobs.save_job(root, job)
         written = []
         if opt["weights"] and not critical:
             stage.start("weights")
@@ -1992,8 +2019,8 @@ def run(job_dir: Path, job: dict) -> None:
                for t in (1, 2) if opt.get(f"catalog{t}")}
     if catalog:
         result["provenance"]["catalog"] = catalog
-    (job_dir / "result.json").write_text(
-        json.dumps(_json_safe(result), indent=1, allow_nan=False))
+    _write_json_atomic(job_dir / "result.json",
+                       json.dumps(_json_safe(result), indent=1, allow_nan=False))
 
 
 def main(argv=None) -> int:
@@ -2003,8 +2030,18 @@ def main(argv=None) -> int:
     if job is None:
         print(f"no job.json in {job_dir}", file=sys.stderr)
         return 2
+    if job.get("status") != "launching":
+        # The supervisor owns the lifecycle claim. If it already failed this
+        # job (handshake grace or runtime limit expired during interpreter
+        # startup), running anyway would resurrect a state the user was told
+        # is terminal.
+        print(f"job {job_dir.name} is not launching (status "
+              f"{job.get('status')!r}); refusing to run", file=sys.stderr)
+        return 2
     job["status"] = "running"
-    job["started"] = time.time()
+    # Keep the supervisor's launch-claim ``started``: the lease wrapper's
+    # watchdog already anchored its deadline to it, and resetting it here
+    # would give the supervisor a later timeout than the watchdog's hard kill.
     job["pid"] = os.getpid()
     jobs.save_job(root, job)
     try:

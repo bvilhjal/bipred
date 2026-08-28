@@ -218,7 +218,11 @@ def test_restart_can_preserve_and_report_a_live_runner(tmp_path):
     token = jobs.new_runner_token()
     live_job = jobs.update_job(
         tmp_path, live_job["id"], pid=os.getpid(),
-        pid_identity=jobs.process_identity(os.getpid()), runner_token=token)
+        # Production falls back to a lease-only identity where the OS exposes
+        # no creation identity (macOS); mirror that or verification fails.
+        pid_identity=(jobs.process_identity(os.getpid())
+                      or f"lease-only:{token}"),
+        runner_token=token)
     lease = jobs.ProcessFileLock(
         jobs.runner_lease_path(tmp_path, live_job["id"], token))
     assert lease.acquire()

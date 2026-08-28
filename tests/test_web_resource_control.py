@@ -30,7 +30,12 @@ def _leased_job(root, *, status="running"):
     token = jobs.new_runner_token()
     job = jobs.update_job(
         root, job["id"], pid=os.getpid(),
-        pid_identity=jobs.process_identity(os.getpid()), runner_token=token,
+        # Mirror the production wrapper's fallback (run_runner_with_lease):
+        # process_identity is None where the OS exposes no creation identity
+        # (macOS), and the runner runs under a lease-only identity there.
+        pid_identity=(jobs.process_identity(os.getpid())
+                      or f"lease-only:{token}"),
+        runner_token=token,
         started=time.time(), runtime_limit_s=3600.0)
     lease = jobs.ProcessFileLock(
         jobs.runner_lease_path(root, job["id"], token))

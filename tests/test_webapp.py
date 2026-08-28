@@ -103,8 +103,13 @@ def test_interrupted_submit_removes_the_staging_job(
         def __init__(self, filename):
             self.filename = filename
 
+    class StubRequest:
+        # The endpoint's same-origin guard reads headers only; an absent
+        # Origin header is the non-browser case and passes.
+        headers = {}
+
     kwargs.update({
-        "request": None,
+        "request": StubRequest(),
         "sumstats1": NamedUpload("private1.tsv"),
         "sumstats2": NamedUpload("private2.tsv"),
         "cache_key": "TEST",
@@ -1185,6 +1190,27 @@ def test_accession_registry_semantics(tmp_path):
     assert not gwascat.worth_recording("catalog lookup failed (timeout)")
 
 
+def test_quarantined_fit_is_not_recorded_as_working(tmp_path):
+    """A done-but-quarantined fit must not mark its accessions as working."""
+    from webapp import gwascat
+    from webapp.app import _record_catalog_outcome
+
+    def done_job(**extra):
+        return {"id": "j", "status": "done", "error": None,
+                "options": {"catalog1": {"accession": "GCST9"},
+                            "catalog2": {"accession": "GCST10"}},
+                **extra}
+
+    _record_catalog_outcome(tmp_path, done_job(valid_for_interpretation=False))
+    assert gwascat.accession_registry(tmp_path) == {}
+    _record_catalog_outcome(tmp_path, done_job(valid_for_interpretation=True))
+    # Jobs fitted before the runner published the field keep the historical
+    # behaviour.
+    _record_catalog_outcome(tmp_path, done_job())
+    registry = gwascat.accession_registry(tmp_path)
+    assert registry["GCST9"]["works"] is True
+
+
 def test_stream_filter_schema_variants(tmp_path):
     """OR-only and z-only deposits become betas; non-reference ids drop out."""
     from webapp import gwascat
@@ -2226,6 +2252,19 @@ def test_demo_is_post_only_same_origin_and_queue_bounded(web):
         client.app.state.config["queue_max"] = old_limit
 
 
+def test_submit_is_same_origin(web):
+    """A cross-origin browser POST must not spend queue slots or compute."""
+    client, root = web
+    before = {path.name for path in (root / "jobs").iterdir()}
+    refused = client.post(
+        "/jobs", headers={"origin": "https://attacker.invalid"},
+        data={"gcst1": "GCST000001", "gcst2": "GCST000002",
+              "cache_key": "TEST"},
+        follow_redirects=False)
+    assert refused.status_code == 403
+    assert {path.name for path in (root / "jobs").iterdir()} == before
+
+
 def test_restart_reconciles_interrupted_but_not_queued_jobs(tmp_path):
     from webapp import jobs
     (tmp_path / "jobs").mkdir()
@@ -2253,7 +2292,11 @@ def test_restart_preserves_live_runner_and_counts_its_slot(tmp_path):
     token = jobs.new_runner_token()
     running = jobs.update_job(
         tmp_path, running["id"], pid=os.getpid(),
-        pid_identity=jobs.process_identity(os.getpid()), runner_token=token)
+        # Production falls back to a lease-only identity where the OS exposes
+        # no creation identity (macOS); mirror that or verification fails.
+        pid_identity=(jobs.process_identity(os.getpid())
+                      or f"lease-only:{token}"),
+        runner_token=token)
     lease = jobs.ProcessFileLock(
         jobs.runner_lease_path(tmp_path, running["id"], token))
     assert lease.acquire()

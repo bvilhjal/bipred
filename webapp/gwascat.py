@@ -334,12 +334,21 @@ def _harmonised_paths(root: Path) -> dict:
     """{accession: ftp path} for every study with a harmonised file."""
     path = _meta_dir(root) / "harmonised.txt"
     if not path.exists() or time.time() - path.stat().st_mtime > LIST_TTL:
-        tmp = str(path) + ".part"
-        with urllib.request.urlopen(HARMONISED_LIST, timeout=300) as resp, \
-                open(tmp, "wb") as fh:
-            while chunk := resp.read(1 << 20):
-                fh.write(chunk)
-        os.replace(tmp, path)
+        # Unique temp name: resolve() runs on threadpool threads in the web
+        # process, and two concurrent refreshes sharing one .part path can
+        # interleave writes or replace the other's file mid-stream.
+        tmp = f"{path}.{os.getpid()}.{uuid.uuid4().hex}.part"
+        try:
+            with urllib.request.urlopen(HARMONISED_LIST, timeout=300) as resp, \
+                    open(tmp, "xb") as fh:
+                while chunk := resp.read(1 << 20):
+                    fh.write(chunk)
+            os.replace(tmp, path)
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
     out = {}
     with open(path, encoding="utf-8") as fh:
         for line in fh:
@@ -381,10 +390,16 @@ def _study_metadata(accession: str, root: Path) -> dict:
             "title": (pub.get("title") or "").strip(),
             "pmid": str(pub.get("pubmedId") or ""), "sample": sample}
     meta.update(_sample_metadata_fields(sample))
-    tmp = str(cache) + ".part"
-    with open(tmp, "w") as fh:
-        json.dump(meta, fh, indent=1)
-    os.replace(tmp, cache)
+    tmp = f"{cache}.{os.getpid()}.{uuid.uuid4().hex}.part"
+    try:
+        with open(tmp, "x") as fh:
+            json.dump(meta, fh, indent=1)
+        os.replace(tmp, cache)
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
     return meta
 
 

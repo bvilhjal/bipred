@@ -17,6 +17,7 @@ import csv
 from dataclasses import dataclass
 import hashlib
 import json
+import logging
 import os
 import threading
 import uuid
@@ -25,6 +26,8 @@ from pathlib import Path
 import numpy as np
 
 from . import jobs
+
+LOGGER = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -106,9 +109,16 @@ def real_registry(root: Path | None = None) -> list[dict]:
             raise ValueError(
                 f"BIPRED_WEB_CACHES entry {entry!r} needs name=/path/cache.npz")
         name, path = (part.strip() for part in entry.split("=", 1))
-        if not name or not Path(path).exists():
+        if not name:
             raise ValueError(
-                f"BIPRED_WEB_CACHES entry {entry!r}: file does not exist")
+                f"BIPRED_WEB_CACHES entry {entry!r}: empty name")
+        if not Path(path).exists():
+            # A reference that vanishes after startup (an unmounted drive)
+            # must not fail the index page or other caches' running jobs;
+            # submissions naming this key are rejected at cache_path.
+            LOGGER.warning(
+                "BIPRED_WEB_CACHES entry %r no longer exists; skipping", entry)
+            continue
         out.append({"key": name, "label": name, "path": path})
     return out
 

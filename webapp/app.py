@@ -515,10 +515,11 @@ def _record_catalog_outcome(root, job) -> None:
     """Fold a finished job's catalog accessions into the track-record registry.
 
     Called once per job, when the supervisor reaps its runner process: a
-    *done* job marks its accessions as working; a *failed* job marks only
-    those its error message blames (the runner prefixes per-trait failures —
-    download, or a harmonization failure naming one trait — with the
-    accession).
+    *done* job marks its accessions as working unless the fit was quarantined
+    by a critical warning (a result the runner itself judged uninterpretable
+    is not evidence the accession works); a *failed* job marks only those its
+    error message blames (the runner prefixes per-trait failures — download,
+    or a harmonization failure naming one trait — with the accession).
     """
     opt = job.get("options", {})
     error = job.get("error") or ""
@@ -531,6 +532,10 @@ def _record_catalog_outcome(root, job) -> None:
                 "n_eff": meta.get("n_eff"), "n_cases": meta.get("n_cases"),
                 "n_controls": meta.get("n_controls")}
         if job["status"] == "done":
+            # Jobs fitted before the runner published this field default to
+            # the historical behaviour.
+            if not job.get("valid_for_interpretation", True):
+                continue
             gwascat.record_accession(root, accession, True,
                                      kept=meta.get("kept"),
                                      seen=meta.get("seen"), **base)
@@ -724,9 +729,15 @@ def create_app() -> FastAPI:
             gcst1: str = Form(""), gcst2: str = Form(""),
             catalog_auto_n1: str = Form(""),
             catalog_auto_n2: str = Form(""),
-            catalog_auto_label1: str = Form(""),
-            catalog_auto_label2: str = Form(""),
-            weights: str = Form("")):
+                catalog_auto_label1: str = Form(""),
+                catalog_auto_label2: str = Form(""),
+                weights: str = Form("")):
+        # Same browser cross-origin guard as /demo: a drive-by POST may not
+        # spend queue slots, upload budget, or compute on this server.
+        if not _same_origin(request):
+            return TEMPLATES.TemplateResponse(
+                request, "error.html", {"message": "cross-origin request refused"},
+                status_code=403)
         # Raw values kept for re-rendering the form when validation fails.
         form = {"label1": label1, "label2": label2,
                 "n_eff1": n_eff1, "n_eff2": n_eff2,
@@ -969,12 +980,17 @@ def create_app() -> FastAPI:
                 {"message": "The server queue is full; try again later."},
                 status_code=503, headers={"Retry-After": "30"})
         job_dir = jobs.job_dir(app.state.root, job["id"])
-        for trait in (1, 2):
-            shutil.copy(meta / f"trait{trait}.tsv",
-                        job_dir / f"trait{trait}.tsv")
-            job["files"][f"sumstats{trait}"] = f"trait{trait}.tsv"
-        job["status"] = "queued"
-        jobs.save_job(app.state.root, job)
+        try:
+            for trait in (1, 2):
+                shutil.copy(meta / f"trait{trait}.tsv",
+                            job_dir / f"trait{trait}.tsv")
+                job["files"][f"sumstats{trait}"] = f"trait{trait}.tsv"
+            job["status"] = "queued"
+            jobs.save_job(app.state.root, job)
+        except BaseException:
+            # A failed copy must not leak the reserved staging slot.
+            shutil.rmtree(job_dir, ignore_errors=True)
+            raise
         return RedirectResponse(f"/jobs/{job['id']}", status_code=303)
 
     @app.get("/jobs/{job_id}", response_class=HTMLResponse)

@@ -169,6 +169,18 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 ### Fixed
 
+- Web runner and supervisor housekeeping: `munge.json`/`result.json` are now
+  published by unique-temp rename so a killed runner can no longer leave a
+  truncated file that breaks the job page; the runner refuses to start when
+  the supervisor has already failed its job and no longer resets the
+  launch-claim `started` timestamp the watchdog's deadline is anchored to;
+  a fit quarantined by a critical warning is no longer recorded as a working
+  GWAS Catalog accession; concurrent Catalog metadata refreshes no longer
+  share one fixed `.part` temp path; `/jobs` now applies the same-origin
+  browser guard `/demo` already had; a failed demo staging copy releases the
+  reserved queue slot; and a `BIPRED_WEB_CACHES` entry whose file vanishes
+  after startup is skipped with a warning instead of failing the index page
+  and unrelated running jobs.
 - Concurrent Catalog progress and completion now serialize every `job.json`
   mutation through one lock. The GET body must match the ETag and/or
   Last-Modified generation checked at submission (with one clean retry), and
