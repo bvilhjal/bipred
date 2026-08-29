@@ -5,6 +5,15 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 ## [Unreleased]
 
+### Removed
+
+- **Web service extracted to SMARTpred.** The `webapp/` directory, its ten
+  test modules, the `web` install extra (and the web-only `httpx` test
+  dependencies) moved to the standalone SMARTpred repository, where the
+  package is `smartpred`, configuration variables are `SMARTPRED_*`, and the
+  default data directory is `smartpred_data/`. The web-related Unreleased
+  entries below describe work that continues there.
+
 ### Added
 
 - **Independent trait preparation and QC in the web runner.** The two traits

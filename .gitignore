@@ -29,9 +29,6 @@ benchmarks/.ld_cache/
 # Bivariate rg benchmark population-LD cache (regenerated on demand)
 benchmarks/.rg_cache/
 
-# Web service local state (uploads, job dirs, demo cache; see webapp/)
-webapp_data/
-
 # External-tool benchmark environments and work dir (local-only; see
 # benchmarks/README.md "External tools" section)
 benchmarks/.venv-ldsc/

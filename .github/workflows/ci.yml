@@ -114,11 +114,11 @@ jobs:
 
       - name: Install bipred (with Numba)
         if: matrix.numba == 'with-numba'
-        run: pip install -e ".[test,fast,web]"
+        run: pip install -e ".[test,fast]"
 
       - name: Install bipred (pure NumPy, no Numba)
         if: matrix.numba == 'no-numba'
-        run: pip install -e ".[test,web]"
+        run: pip install -e ".[test]"
 
       # Read the range back from bipred's own installed metadata rather than
       # restating it here, so the gate cannot drift from the dependency it
@@ -213,7 +213,7 @@ jobs:
       - name: Install ldpred3 and bipred with Numba
         run: |
           python -m pip install "ldpred3[fast] @ git+https://github.com/bvilhjal/ldpred3.git@${{ env.LDPRED3_REV }}"
-          python -m pip install -e ".[test,fast,web]"
+          python -m pip install -e ".[test,fast]"
 
       - name: Run tests
         run: python -m pytest -q
