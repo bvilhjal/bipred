@@ -59,11 +59,11 @@ def test_ld_screen_tests_the_window_remainder(monkeypatch):
 
 
 def test_a_sign_flipped_variant_is_caught():
-    """The error harmonisation cannot see: an allele flip inside strong LD.
+    """A residual that is itself genome-wide significant given the neighbours.
 
-    Its own z stays a plausible size, so no per-variant filter (frequency,
-    imputation quality, an LDSC chi-square row cap) can flag it. Only its
-    disagreement with the correlated variants around it gives it away.
+    The planted shift is eight z units, not a weak estimate whose sign is
+    sampling noise. Per-variant filters (frequency, imputation quality, an
+    LDSC chi-square row cap) cannot see it; the neighbourhood can.
     """
     blocks, z = _clean_panel(rho=0.9, seed=1)
     victim = 150
@@ -667,3 +667,89 @@ def test_dentist_alias_forwards_progress():
     events = []
     dentist(blocks, z, rounds=1, progress=events.append)
     assert [e["done"] for e in events] == [1, 2]
+
+
+def test_screen_keeps_a_large_true_effect():
+    """LD-consistent APOE-scale |z| is a signal; split-half flags are not drops."""
+    k, j, n = 400, 200, 20_000
+    R = _ar1(0.9, k)
+
+    def z_from_effect(z_mean):
+        beta = np.zeros(k)
+        beta[j] = z_mean / np.sqrt(n)
+        return R @ beta * np.sqrt(n)
+
+    keep_modest = ld_consistency_screen(
+        [(R.astype(np.float32), np.arange(k))], z_from_effect(10.0),
+        rounds=2, seed=1, window=200)
+    keep_large = ld_consistency_screen(
+        [(R.astype(np.float32), np.arange(k))], z_from_effect(50.0),
+        rounds=2, seed=1, window=200)
+    assert keep_modest[j]
+    assert keep_large[j]
+    assert keep_large.mean() > 0.95
+
+
+def test_screen_keeps_small_noisy_opposite_signs():
+    """A weak z whose sign disagrees with a weak neighbour is sampling noise."""
+    k = 200
+    R = _ar1(0.5, k).astype(np.float32)
+    z = np.zeros(k)
+    z[50] = 1.2
+    z[51] = -0.8
+    keep = ld_consistency_screen(
+        [(R, np.arange(k))], z, rounds=2, seed=0, window=100)
+    assert keep[50] and keep[51]
+
+
+def test_screen_keeps_an_isolated_large_z():
+    """No LD neighbour: T reduces to the association's own z, so keep it."""
+    k = 80
+    R = np.eye(k, dtype=np.float32)
+    z = np.zeros(k)
+    z[40] = 40.0
+    keep = ld_consistency_screen(
+        [(R, np.arange(k))], z, rounds=1, window=50, seed=0)
+    assert keep[40]
+
+
+def test_screen_warns_when_thresholded_ld_drops_null_z():
+    rng = np.random.default_rng(1)
+    k = 400
+    R = _ar1(0.9, k)
+    chol = np.linalg.cholesky(R + 1e-8 * np.eye(k))
+    z = chol @ rng.standard_normal(k)
+    Rt = R.copy()
+    Rt[np.abs(Rt) < 0.2] = 0.0
+    np.fill_diagonal(Rt, 1.0)
+    Rt = np.triu(Rt) + np.triu(Rt, 1).T
+    with pytest.warns(RuntimeWarning, match="thresholded or indefinite"):
+        keep = ld_consistency_screen(
+            [(Rt.astype(np.float32), np.arange(k))], z, rounds=2, seed=0)
+    assert (~keep).mean() > 0.2
+
+
+def test_small_block_is_kept_unevaluated():
+    k = 40
+    R = np.eye(k, dtype=np.float32)
+    z = np.zeros(k)
+    with pytest.warns(RuntimeWarning, match="never entered a window"):
+        keep = ld_consistency_screen([(R, np.arange(k))], z, rounds=1)
+    assert keep.all()
+
+
+def test_overlapping_window_drop_counts_are_unique(capsys):
+    """The last-window slide overlaps the previous tile; count the SNP once."""
+    k, window, victim = 149, 100, 80
+    R = np.eye(k, dtype=np.float32)
+    R[victim, victim + 1] = R[victim + 1, victim] = 0.99
+    z = np.zeros(k)
+    z[victim] = -8.0
+    z[victim + 1] = 8.0
+    keep = ld_consistency_screen(
+        [(R, np.arange(k))], z, rounds=1, window=window, verbose=True, seed=0)
+    n_dropped = int((~keep).sum())
+    assert n_dropped >= 1
+    assert not keep[victim] or not keep[victim + 1]
+    out = capsys.readouterr().out
+    assert f"dropped {n_dropped:,}," in out

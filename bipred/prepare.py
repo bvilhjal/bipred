@@ -10,6 +10,8 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Optional
+import warnings
+
 import numpy as np
 
 from ldpred3 import n_eff_case_control
@@ -290,6 +292,35 @@ def _resolve_n_eff(n_eff, n_cases, n_controls, label):
     return n_eff
 
 
+def _norm_chrom_label(value):
+    """Strip a ``chr`` prefix and canonicalise case; enough to catch build mix-ups."""
+    text = str(value).strip()
+    if text[:3].lower() == "chr":
+        text = text[3:]
+    return text.upper()
+
+
+def _locus_mismatch(sumstats, variants, harmonized):
+    """Rows whose rsID matched a reference variant at a different chrom/pos.
+
+    Current ``harmonize`` already rejects a unique rsID at the wrong locus
+    when both sides carry coordinates. This remains as a defense for older
+    ldpred3 releases that accepted those rows.
+    """
+    src_pos = np.asarray(sumstats.pos, dtype=np.int64)[harmonized.src_index]
+    tgt_pos = np.asarray(variants.pos, dtype=np.int64)[harmonized.var_index]
+    comparable = (src_pos > 0) & (tgt_pos > 0)
+    if not comparable.any():
+        return np.zeros(len(harmonized), dtype=bool)
+    src_chrom = np.asarray(sumstats.chrom, dtype=object)[harmonized.src_index]
+    tgt_chrom = np.asarray(variants.chrom, dtype=object)[harmonized.var_index]
+    chrom_bad = np.fromiter(
+        (_norm_chrom_label(a) != _norm_chrom_label(b)
+         for a, b in zip(src_chrom, tgt_chrom)),
+        dtype=bool, count=len(harmonized))
+    return comparable & ((src_pos != tgt_pos) | chrom_bad)
+
+
 def _align_one(path, variants, *, n_eff, qc, qc_params, columns, label):
     try:
         columns = {} if columns is None else dict(columns)
@@ -335,6 +366,18 @@ def _align_one(path, variants, *, n_eff, qc, qc_params, columns, label):
             eaf = np.where(h.flipped, 1.0 - src, src)
     ok = (np.isfinite(beta) & np.isfinite(se) & np.isfinite(n_vec)
           & (se > 0) & (n_vec > 0))
+    n_invalid = int((~ok).sum()) if len(h) else 0
+    n_locus_mismatch = 0
+    if len(h) and h.src_index is not None:
+        mismatch = _locus_mismatch(ss, variants, h)
+        n_locus_mismatch = int(np.count_nonzero(mismatch & ok))
+        ok = ok & ~mismatch
+        if n_locus_mismatch:
+            warnings.warn(
+                f"{label}: dropped {n_locus_mismatch} rsID match(es) whose "
+                "chrom/pos disagree with the LD reference (possible mixed "
+                "genome build).",
+                RuntimeWarning, stacklevel=3)
     indices = np.asarray(h.var_index, dtype=np.int64)[ok]
     # Keep this boundary correct even if an interoperability backend returns
     # matches in source-file order. Cache-order sorting makes later sparse
@@ -356,6 +399,9 @@ def _align_one(path, variants, *, n_eff, qc, qc_params, columns, label):
             "label": label, "columns": column_log, "qc_enabled": bool(qc),
             "qc_params": effective_qc, "qc": qc_log,
             "harmonize": dict(h.log),
+            "n_harmonized": int(len(h)),
+            "n_invalid": n_invalid,
+            "n_locus_mismatch": n_locus_mismatch,
             "n_matched": int(ok.sum()),
         },
     )
@@ -461,6 +507,11 @@ def _validated_trait(trait, n_cache, fallback):
         arrays[name] = values
     if not np.all(np.isfinite(arrays["beta_hat"])):
         raise ValueError(f"{label}: beta_hat must be finite")
+    if np.any(np.abs(arrays["beta_hat"]) >= 1.0):
+        raise ValueError(
+            f"{label}: beta_hat must satisfy |beta_hat| < 1 "
+            "(ldpred3.standardize_betas returns values in (-1, 1); raw "
+            "z-scores are not standardized effects)")
     if (not np.all(np.isfinite(arrays["n_eff"]))
             or np.any(arrays["n_eff"] <= 0)):
         raise ValueError(f"{label}: n_eff must be finite and positive")
@@ -515,9 +566,11 @@ def screen_prepared_trait(
             "eigenvalue_floor": eigenvalue_floor, "seed": seed,
             "ncores": ncores, "verbose": verbose,
         }
+        stats = {}
         keep = np.asarray(_ld_consistency_screen_selected(
             cache.blocks, indices, arrays["z"], **options, progress=progress,
-            progress_label=f"LD consistency screen, {label}"))
+            progress_label=f"LD consistency screen, {label}",
+            stats_out=stats))
         if keep.dtype != np.bool_ or keep.shape != (n_input,):
             raise ValueError(
                 f"{label}: LD-consistency screen returned an invalid mask")
@@ -531,6 +584,8 @@ def screen_prepared_trait(
         log["screen"] = True
         log["ld_consistency_screen"] = {
             "n_input": n_input,
+            "n_tested": int(stats.get("n_tested", n_input)),
+            "n_untested": int(stats.get("n_untested", 0)),
             "n_kept": n_kept,
             "n_dropped": n_input - n_kept,
             "parameters": dict(options),

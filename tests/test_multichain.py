@@ -13,7 +13,7 @@ from bipred.bivariate import (
 )
 
 
-def _result(m, retained, chain, *, genetic=None):
+def _result(m, retained, chain, *, genetic=None, divergence=None):
     draw = np.arange(retained, dtype=float)
     pi_samples = np.column_stack(
         (
@@ -64,6 +64,7 @@ def _result(m, retained, chain, *, genetic=None):
         genetic_samples=np.asarray(genetic, dtype=float),
         noise_scale=(1.5, 1.6),
         noise_scale_samples=noise_samples,
+        divergence_diagnostics=divergence,
     )
 
 
@@ -177,6 +178,37 @@ def test_default_starts_seeds_shared_prior_and_equal_pool(monkeypatch):
     )
     assert "noise_scale1" in with_noise.basic_split_rhat.rhat
     assert "noise_scale2" in with_noise.basic_split_rhat.rhat
+    assert result.posterior.divergence_diagnostics is None
+
+
+def test_pooled_posterior_keeps_a_diverged_chain_diagnostic(monkeypatch):
+    flagged = {
+        "evaluated": True, "flagged": True, "traits": {},
+    }
+    quiet = {
+        "evaluated": True, "flagged": False, "traits": {},
+    }
+
+    def run(prepared, options, start):
+        chain = len(run.calls)
+        run.calls.append(start)
+        return _result(
+            prepared.m, options.num_iter, chain,
+            divergence=flagged if chain == 1 else quiet,
+        )
+
+    run.calls = []
+    monkeypatch.setattr(multichain, "_ldpred3_auto_bivariate_prepared", run)
+    blocks, beta1, beta2 = _inputs()
+    result = multichain.ldpred3_auto_bivariate_chains(
+        blocks, beta1, beta2, 10_000, 12_000, num_iter=4, seed=3, n_chains=4
+    )
+    diag = result.posterior.divergence_diagnostics
+    assert diag["flagged"] is True
+    assert diag["n_chains"] == 4
+    assert diag["n_flagged"] == 1
+    assert diag["chains"][1]["flagged"] is True
+    assert diag["chains"][0]["flagged"] is False
 
 
 def test_explicit_pi_starts_are_the_alternative(monkeypatch):

@@ -1,11 +1,12 @@
 """Semantic guards on the private ldpred3 symbols bipred reaches into.
 
 bipred centralizes its underscore-prefixed ldpred3 imports in
-``bipred._ldpred3_compat``. The dependency stays within the LDpred3 0.5 line
-because that surface is private and unversioned. Bipred's public API and
-compatibility seam import lazily; these tests force the complete seam to
-resolve and guard its *behaviour*, so a dependency bump fails loudly instead
-of silently changing bivariate numerics or LDSC-rg standard errors.
+``bipred._ldpred3_compat``. The dependency is bounded at
+``>=0.5.5.dev0,<0.7`` because that private surface is unversioned. Bipred's
+public API and compatibility seam import lazily; these tests force the
+complete seam to resolve and guard its *behaviour*, so a dependency bump
+fails loudly instead of silently changing bivariate numerics or LDSC-rg
+standard errors.
 """
 
 import subprocess
@@ -41,6 +42,24 @@ def test_seam_imports_resolve():
     )
 
     from ldpred3 import LowRankLD  # noqa: F401
+
+
+def test_deterministic_chain_seeds_are_distinct_and_stable():
+    """multichain.py borrows this helper outside the private seam.
+
+    An upstream change silently re-seeds every multi-chain posterior, so the
+    contract (distinct uint32 seeds, deterministic in the parent seed) is
+    pinned here even though the import is public.
+    """
+    from ldpred3.diagnostics import deterministic_chain_seeds
+
+    a = deterministic_chain_seeds(17, 4)
+    b = deterministic_chain_seeds(17, 4)
+    c = deterministic_chain_seeds(18, 4)
+    assert a.dtype == np.dtype(np.uint32)
+    assert len(set(int(x) for x in a)) == 4
+    np.testing.assert_array_equal(a, b)
+    assert not np.array_equal(a, c)
 
 
 def test_q8_int8_scale_is_127():

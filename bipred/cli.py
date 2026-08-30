@@ -98,6 +98,10 @@ def build_parser():
         help="write cache-AF/HWE SD_REF columns; an approximation, not an "
              "observed fit-cohort dosage scale. Default weights use target "
              "scaling and omit AF_REF/SD_REF")
+    out.add_argument(
+        "--allow-diverged", action="store_true",
+        help="write weight files even if the fit's divergence diagnostic "
+             "fired; the default is to refuse")
     return p
 
 
@@ -198,10 +202,14 @@ def main(argv=None):
             other_allele=prep.other_allele,
             af=prep.af if args.hwe_frozen_scale else None)
         if args.out_weights1:
-            res.write_weights(args.out_weights1, trait=1, **common)
+            res.write_weights(
+                args.out_weights1, trait=1,
+                allow_diverged=args.allow_diverged, **common)
             print(f"wrote {args.out_weights1}")
         if args.out_weights2:
-            res.write_weights(args.out_weights2, trait=2, **common)
+            res.write_weights(
+                args.out_weights2, trait=2,
+                allow_diverged=args.allow_diverged, **common)
             print(f"wrote {args.out_weights2}")
     finally:
         prep.close()

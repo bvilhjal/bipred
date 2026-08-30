@@ -32,6 +32,32 @@ low-rank representation: other dense floats are first rounded to D32, as in the
 fitter. The legacy in-fit quantisation options create a private D8 copy that the
 screen cannot replay; pre-quantise when exact alignment matters.
 
+The default threshold is chi2_1 at p = 5e-8, which is a **null** calibration
+of the split-half statistic. Split-half leverage is smaller than the
+full-window leverage of published DENTIST, so the same cutoff flags a lower
+|z| -- including a planted true effect at |z| ≈ 10 on AR(1) ρ = 0.9. Those
+flags are not drops. Each flagged variant is confirmed against the
+full-window precision-form statistic
+``T_j = (Ω z)_j² / Ω_jj`` with ``Ω = (R + 0.01 I)^{-1}``, and only if it has
+a neighbour with ``|r| >= 0.1``. A large z whose precision residual is no
+larger than twice its own z is a private effect consistent with the LD
+(APOE-scale hits included). A weak z whose sign happens to disagree with a
+weak neighbour is sampling noise: under the working model ``T_j`` is
+chi²_1, and the default p = 5e-8 cut keeps it. What is dropped is a
+residual that is itself genome-wide significant given the neighbours --
+the LDL × CAD failure mode this screen exists to catch -- not a small
+effect and not a chance sign at |z| ≈ 1. The locus list :data:`APOE_HG19`
+is a separate sensitivity for long-range lipid structure, not a shield
+this screen needs in order to keep a consistent hit.
+
+Blocks (or surviving live sets) smaller than :data:`MIN_WINDOW` are not
+evaluated and are kept. A sparse prepared trait can therefore be largely
+unscreened while the log still records that a screen ran; the returned mask
+and the ``n_tested`` log field say which. Thresholded or indefinite LD
+references can also manufacture a large drop rate of *null* z-scores, because
+the eigenvalue floor and the leverage then disagree; that is a warning, not a
+quiet success.
+
 Why this is in bipred at all, given the package otherwise refuses to touch
 summary statistics: one real LDL x CAD analysis exposed LD inconsistency that
 made the bivariate fit diverge while the corresponding univariate fit remained
@@ -86,8 +112,30 @@ MIN_WINDOW = 50
 DEFAULT_EIGENVALUE_FLOOR = 1e-3
 #: chi2_1 at p = 5e-8. This calibrates the split-half statistic, not the full
 #: screening pipeline; validate the resulting mask for the study at hand.
+#: Confirmed drops additionally require the full-window LOO statistic above
+#: this threshold; LD-consistent large effects are kept.
 DEFAULT_THRESHOLD = 29.72
 DEFAULT_ROUNDS = 4
+#: Confirm a split-half flag only when a surviving neighbour has at least
+#: this absolute correlation. Otherwise ``T_j`` reduces to the association's
+#: own z-score and would reject isolated genuine signals.
+DEFAULT_MIN_NEIGHBOR_R = 0.1
+#: Ridge on the full-window confirmation inverse, matching
+#: ``ldpred3.dentist_outlier_mask``.
+DEFAULT_LOO_RIDGE = 0.01
+#: ``|(Ω z)_j| / |z_j|`` for an LD-consistent private effect is ~1. A
+#: neighbour-inconsistent z (wrong sign relative to the LD prediction, or a
+#: mismatched reference) is several times larger. A flagged variant below
+#: this ratio is kept as signal, not dropped as QC.
+DEFAULT_PRIVATE_Z_RATIO = 2.0
+#: Warn when the screen drops at least this fraction of *tested* variants.
+#: Under the working model at :data:`DEFAULT_THRESHOLD` the expected rate is
+#: near zero; several percent means the LD is not the matrix the z-scores
+#: were drawn against (thresholded or indefinite references are typical).
+DEFAULT_DROP_FRACTION_WARN = 0.05
+#: Warn when at least this fraction of variants never entered a window of
+#: size :data:`MIN_WINDOW`. Untested variants are kept.
+DEFAULT_UNTESTED_FRACTION_WARN = 0.05
 
 #: Long-range LD regions, GRCh37/hg19, as ``(chrom, start, end, label)``.
 #:
@@ -281,6 +329,49 @@ def _selected_window_ld(block, source_rows, local, dense_lowrank):
     return np.asarray(out, dtype=np.float32).astype(np.float64)
 
 
+def _window_has_neighbor(ld, min_neighbor_r):
+    """Whether each window row has an off-diagonal partner above the floor."""
+    off = np.abs(ld, dtype=np.float64)
+    np.fill_diagonal(off, 0.0)
+    return off.max(axis=1) >= min_neighbor_r
+
+
+def _precision_loo(ld, z, ridge):
+    """Full-window ``T_j = (Ω z)_j² / Ω_jj`` and the precision residual ``Ω z``."""
+    k = ld.shape[0]
+    regularized = np.array(ld, dtype=np.float64, order="C")
+    regularized.flat[::k + 1] += ridge
+    try:
+        omega = np.linalg.inv(regularized)
+    except np.linalg.LinAlgError:
+        omega = np.linalg.pinv(regularized)
+    tvec = omega @ z
+    stat = (tvec * tvec) / np.maximum(np.diag(omega), 1e-12)
+    return stat, tvec
+
+
+def _confirmed_drops(ld, z, candidates, threshold, *,
+                     min_neighbor_r=DEFAULT_MIN_NEIGHBOR_R,
+                     ridge=DEFAULT_LOO_RIDGE,
+                     private_z_ratio=DEFAULT_PRIVATE_Z_RATIO):
+    """Split-half flags that fail full-window LOO as LD-inconsistent.
+
+    A large z whose ``|(Ω z)_j|`` is no larger than ``private_z_ratio`` times
+    ``|z_j|`` is a private effect consistent with ``R``. Isolated variants
+    (no neighbour above ``min_neighbor_r``) are kept because ``T_j`` then
+    reduces to the association's own z-score.
+    """
+    if candidates.size == 0:
+        return candidates
+    has_nbr = _window_has_neighbor(ld, min_neighbor_r)
+    stat, tvec = _precision_loo(ld, z, ridge)
+    private = np.abs(tvec) <= private_z_ratio * np.abs(z)
+    take = ((stat[candidates] > threshold)
+            & has_nbr[candidates]
+            & ~private[candidates])
+    return candidates[take]
+
+
 def _settle_block(task, *, z, window, threshold, eigenvalue_floor):
     """Screen one block through every round, and return its own keep-mask.
 
@@ -293,6 +384,7 @@ def _settle_block(task, *, z, window, threshold, eigenvalue_floor):
     """
     block, idx, source_rows, dense_lowrank, round_seeds = task
     keep = np.ones(idx.size, dtype=bool)
+    tested = np.zeros(idx.size, dtype=bool)
     zb = z[idx]
     dropped = np.zeros(len(round_seeds), dtype=np.int64)
     for round_no, round_seed in enumerate(round_seeds):
@@ -300,6 +392,7 @@ def _settle_block(task, *, z, window, threshold, eigenvalue_floor):
         live = np.where(keep)[0]
         if live.size < MIN_WINDOW:
             continue
+        n_before = int(keep.sum())
         # Tile from 0, then slide the last window to live.size - window so a
         # remainder shorter than MIN_WINDOW is still tested in a full
         # neighbourhood instead of being silently treated as consistent.
@@ -311,6 +404,7 @@ def _settle_block(task, *, z, window, threshold, eigenvalue_floor):
             local = live[start:start + window]
             if local.size < MIN_WINDOW:
                 continue
+            tested[local] = True
             if source_rows is None:
                 ld = _window_ld(block, local)
             else:
@@ -320,20 +414,28 @@ def _settle_block(task, *, z, window, threshold, eigenvalue_floor):
             order = rng.permutation(local.size)
             half = local.size // 2
             first, second = order[:half], order[half:]
+            flagged = []
             for targets, predictors in ((first, second), (second, first)):
                 stat = _dentist_statistic(
                     ld, zw, predictors, targets, eigenvalue_floor)
                 bad = targets[stat > threshold]
                 if bad.size:
-                    keep[local[bad]] = False
-                    dropped[round_no] += int(bad.size)
-    return keep, dropped
+                    flagged.append(bad)
+            if flagged:
+                candidates = np.unique(np.concatenate(flagged))
+                drop = _confirmed_drops(ld, zw, candidates, threshold)
+                if drop.size:
+                    keep[local[drop]] = False
+        # Unique drops this round. Overlapping last-window tiles would
+        # otherwise count the same variant twice in the verbose printout.
+        dropped[round_no] = n_before - int(keep.sum())
+    return keep, dropped, tested
 
 
 def _run_consistency_screen(
         specs, z, total, *, rounds, window, threshold, eigenvalue_floor,
         seed, ncores, verbose, progress, progress_label,
-        warning_stacklevel):
+        warning_stacklevel, stats_out=None):
     """Validate controls and run already validated logical block specs."""
     _validate_boolean_controls(verbose=verbose)
     _progress.validate(progress)
@@ -400,19 +502,49 @@ def _run_consistency_screen(
         results = _settled(settle(task) for task in tasks)
 
     keep = np.ones(total, dtype=bool)
+    tested = np.zeros(total, dtype=bool)
     per_round = np.zeros(rounds, dtype=np.int64)
-    for (block_keep, dropped), (_block, idx, _rows, _dense) in zip(
+    for (block_keep, dropped, block_tested), (_block, idx, _rows, _dense) in zip(
             results, specs):
         keep[idx] = block_keep
+        tested[idx] = block_tested
         per_round += dropped
+    n_tested = int(tested.sum())
+    n_untested = int((~tested).sum())
+    n_dropped = int((~keep).sum())
+    if stats_out is not None:
+        stats_out.update(n_tested=n_tested, n_untested=n_untested,
+                         n_dropped=n_dropped)
+    if n_tested and (n_dropped / n_tested) > DEFAULT_DROP_FRACTION_WARN:
+        warnings.warn(
+            f"LD-consistency screen dropped {n_dropped:,} of {n_tested:,} "
+            f"tested variants ({n_dropped / n_tested:.0%}). At the default "
+            "chi2 threshold the expected null rate is near zero; rates of "
+            "several percent usually mean the LD reference is thresholded "
+            "or indefinite (the eigenvalue floor and the leverage then "
+            "disagree). Inspect the reference before treating the mask as QC.",
+            RuntimeWarning, stacklevel=warning_stacklevel)
+    if n_untested and (n_tested == 0
+                       or n_untested / total >= DEFAULT_UNTESTED_FRACTION_WARN):
+        warnings.warn(
+            f"LD-consistency screen tested {n_tested:,} of {total:,} variants "
+            f"({n_untested:,} never entered a window of size {MIN_WINDOW} and "
+            "were kept unevaluated). A sparse panel can be largely unscreened "
+            "while still recording that a screen ran.",
+            RuntimeWarning, stacklevel=warning_stacklevel)
     if verbose:
-        # A variant is dropped at most once -- an earlier round's casualties are
-        # never in a later round's ``live`` -- so the running total is exact.
+        # Unique per-round counts: a variant dropped in an overlapping window
+        # is counted once, and earlier-round casualties are not in later
+        # ``live`` sets, so the running total is exact.
         remaining = total
         for round_no, count in enumerate(per_round):
             remaining -= int(count)
             print(f"  LD screen round {round_no + 1}: dropped {count:,}, "
                   f"{remaining:,} remain", flush=True)
+        extra = (f" ({n_untested:,} untested, kept without evaluation)"
+                 if n_untested else "")
+        print(f"  LD screen tested {n_tested:,} of {total:,} variants{extra}",
+              flush=True)
     return keep
 
 
@@ -421,7 +553,7 @@ def _ld_consistency_screen_selected(
         threshold=DEFAULT_THRESHOLD,
         eigenvalue_floor=DEFAULT_EIGENVALUE_FLOOR, seed=0, ncores=1,
         verbose=False, progress=None,
-        progress_label="LD consistency screen"):
+        progress_label="LD consistency screen", stats_out=None):
     """Screen a sparse principal panel without materialising that panel.
 
     ``selection`` is a strictly increasing vector in the full cache's index
@@ -494,7 +626,8 @@ def _ld_consistency_screen_selected(
         specs, z, int(selection.size), rounds=rounds, window=window,
         threshold=threshold, eigenvalue_floor=eigenvalue_floor, seed=seed,
         ncores=ncores, verbose=verbose, progress=progress,
-        progress_label=progress_label, warning_stacklevel=4)
+        progress_label=progress_label, warning_stacklevel=4,
+        stats_out=stats_out)
 
 
 def ld_consistency_screen(
@@ -555,10 +688,12 @@ def ld_consistency_screen(
     Returns
     -------
     ndarray of bool
-        ``True`` for variants to keep. Counts per round go to stdout under
-        ``verbose``; because each block now runs all of its rounds together,
-        those counts are reported once the screen finishes rather than as each
-        round completes. The numbers are unchanged.
+        ``True`` for variants to keep. Untested variants (live set smaller
+        than :data:`MIN_WINDOW`) stay ``True``. Counts per round go to stdout
+        under ``verbose``; because each block now runs all of its rounds
+        together, those counts are reported once the screen finishes rather
+        than as each round completes. High drop rates and large untested
+        fractions emit :class:`RuntimeWarning`.
     """
     try:
         blocks = list(blocks)

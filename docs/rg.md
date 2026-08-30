@@ -252,6 +252,10 @@ rho_beta        = s12 / sqrt(s1 s2)
 rg_from_overlap = rho_beta pi11 / sqrt(pi1 pi2)
 ```
 
+`.mixer["rho_beta"]` is the ratio of posterior-mean Sigma entries;
+`mixer_iterate_summary` reports the mean of the per-iterate ratios. They
+differ by Jensen's inequality.
+
 Start with `frac_shared`, `rho_beta`, and `rg_from_overlap`. Absolute
 `n_causal` and `n_shared` counts are approximate because LD can spread
 inclusion mass and reference mismatch can inflate it.

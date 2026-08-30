@@ -84,9 +84,27 @@ class MultiChainBivariateResult:
     retained_per_chain: int
 
 
+def _pool_divergence_diagnostics(diagnostics):
+    """Keep per-chain divergence flags on the pooled posterior.
+
+    R-hat never drops a chain, so a single diverged chain would otherwise
+    vanish into ``posterior.divergence_diagnostics is None``.
+    """
+    present = [d for d in diagnostics if isinstance(d, dict)]
+    if not present:
+        return None
+    return {
+        "evaluated": any(d.get("evaluated") for d in present),
+        "flagged": any(d.get("flagged") for d in present),
+        "n_chains": len(diagnostics),
+        "n_flagged": sum(1 for d in present if d.get("flagged")),
+        "chains": tuple(diagnostics),
+    }
+
+
 def _accumulate_chains(chain_args, chain_results, m, retained, beta1_sum,
                        beta2_sum, pi_traces, sigma_traces, genetic_traces,
-                       noise_traces, summaries):
+                       noise_traces, summaries, divergence_diagnostics):
     """Validate and pool chain results in chain order.
 
     ``chain_results`` is consumed lazily. In the serial path that means a chain
@@ -117,6 +135,9 @@ def _accumulate_chains(chain_args, chain_results, m, retained, beta1_sum,
                 sigma=trace["sigma"].copy(),
                 noise_scale=tuple(float(x) for x in chain_result.noise_scale),
             )
+        )
+        divergence_diagnostics.append(
+            getattr(chain_result, "divergence_diagnostics", None)
         )
 
 
@@ -374,6 +395,7 @@ def ldpred3_auto_bivariate_chains(
     genetic_traces = []
     noise_traces = []
     summaries = []
+    divergence_diagnostics = []
 
     def _run_one(index, chain_seed, p_start, pi_start):
         """Fit one chain from shared inputs and chain-local mutable buffers."""
@@ -445,7 +467,8 @@ def ldpred3_auto_bivariate_chains(
     try:
         _accumulate_chains(
             chain_args, chain_results, m, retained, beta1_sum, beta2_sum,
-            pi_traces, sigma_traces, genetic_traces, noise_traces, summaries)
+            pi_traces, sigma_traces, genetic_traces, noise_traces, summaries,
+            divergence_diagnostics)
     finally:
         if pool is not None:
             pool.shutdown(wait=True)
@@ -501,6 +524,8 @@ def ldpred3_auto_bivariate_chains(
         noise_scale_samples=pooled_noise,
         retained_iterations=int(pooled_pi.shape[0]),
         stopped_early=False,
+        divergence_diagnostics=_pool_divergence_diagnostics(
+            divergence_diagnostics),
     )
 
     return MultiChainBivariateResult(

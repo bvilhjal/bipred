@@ -112,9 +112,11 @@ class TestAdaptiveStopping:
         """Thinned effect samples are what that estimator averages over, so
         stopping early would quietly shrink its pair count."""
         blocks, m, b1, b2 = well_conditioned
-        r = ldpred3_auto_bivariate_blocks(blocks, b1, b2, 2e5, 2e5, num_iter=60,
-                                          burn_in=20, tol=1e-1, check_every=10,
-                                          rg_decorrelated=True, seed=3)
+        with pytest.warns(RuntimeWarning, match="tol is ignored"):
+            r = ldpred3_auto_bivariate_blocks(
+                blocks, b1, b2, 2e5, 2e5, num_iter=60,
+                burn_in=20, tol=1e-1, check_every=10,
+                rg_decorrelated=True, seed=3)
         assert r.stopped_early is False
         assert r.retained_iterations == 60
 
@@ -149,9 +151,12 @@ class TestImplausibleFitDiagnostic:
         fraction, which is both statistically wrong and markedly slower."""
         blocks, m = panel(4, 300, 400)
         b1, b2 = sumstats(m, 60, 2e5)
-        with pytest.warns(RuntimeWarning, match="Implausible bivariate fit"):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", RuntimeWarning)
             ldpred3_auto_bivariate_blocks(blocks, b1, b2, 2e5, 2e5,
                                           num_iter=80, burn_in=30, seed=3)
+        messages = [str(w.message) for w in caught]
+        assert any("Implausible bivariate fit" in m for m in messages)
 
     def test_quiet_below_the_variant_threshold(self):
         """Small panels carry no information for the heuristic, so no noise."""

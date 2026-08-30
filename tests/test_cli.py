@@ -92,6 +92,42 @@ def test_cli_rejects_scalar_n_eff_with_case_controls(capsys):
     assert "either --n-eff" in capsys.readouterr().err
 
 
+def test_cli_refuses_diverged_weights_without_the_flag(monkeypatch, tmp_path):
+    prep = _prepared()
+    result = _result()
+    result.divergence_diagnostics = {"evaluated": True, "flagged": True}
+    monkeypatch.setattr(
+        bipred, "prepare_bivariate_sumstats", lambda *a, **k: prep)
+    monkeypatch.setattr(
+        bipred, "ldpred3_auto_bivariate_blocks", lambda *a, **k: result)
+    with pytest.raises(ValueError, match="divergence diagnostic"):
+        main([
+            "--ld-cache", "ld.npz", "--sumstats1", "one.tsv",
+            "--sumstats2", "two.tsv",
+            "--out-weights1", str(tmp_path / "one.weights"),
+        ])
+    assert prep.closed
+
+
+def test_cli_allow_diverged_writes_flagged_weights(monkeypatch, tmp_path):
+    prep = _prepared()
+    result = _result()
+    result.divergence_diagnostics = {"evaluated": True, "flagged": True}
+    monkeypatch.setattr(
+        bipred, "prepare_bivariate_sumstats", lambda *a, **k: prep)
+    monkeypatch.setattr(
+        bipred, "ldpred3_auto_bivariate_blocks", lambda *a, **k: result)
+    out = tmp_path / "one.weights"
+    with pytest.warns(RuntimeWarning, match="divergence diagnostic"):
+        assert main([
+            "--ld-cache", "ld.npz", "--sumstats1", "one.tsv",
+            "--sumstats2", "two.tsv", "--allow-diverged",
+            "--out-weights1", str(out),
+        ]) == 0
+    assert out.exists()
+    assert prep.closed
+
+
 def test_cli_rejects_hwe_scale_without_cache_af_before_fitting(monkeypatch):
     prep = _prepared(af=None)
     fit_called = False

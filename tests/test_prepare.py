@@ -2,8 +2,6 @@
 
 from dataclasses import replace
 
-import warnings
-
 import numpy as np
 import pytest
 
@@ -320,16 +318,94 @@ def test_write_weights_rejects_a_length_mismatch():
                           effect_allele=["A"], other_allele=["G"])
 
 
-def test_unstandardized_z_scores_warn(tmp_path):
+def test_write_weights_refuses_a_diverged_fit_until_allowed(tmp_path):
+    res = BivariateResult(
+        beta1_est=np.ones(2), beta2_est=np.ones(2), h2=(0.1, 0.1),
+        rg=0.0, p=0.02, sigma=np.eye(2),
+        divergence_diagnostics={"evaluated": True, "flagged": True})
+    ids = ["a", "b"]
+    common = dict(
+        trait=1, id=ids, chrom=["1", "1"], pos=[1, 2],
+        effect_allele=["A", "A"], other_allele=["G", "G"])
+    with pytest.raises(ValueError, match="provenance"):
+        res.write_weights("x", trait=1, id=["a"], chrom=["1"], pos=[1],
+                          effect_allele=["A"], other_allele=["G"])
+    with pytest.raises(ValueError, match="divergence diagnostic"):
+        res.write_weights(str(tmp_path / "blocked.weights"), **common)
+    path = tmp_path / "allowed.weights"
+    with pytest.warns(RuntimeWarning, match="divergence diagnostic"):
+        res.write_weights(str(path), allow_diverged=True, **common)
+    assert path.exists()
+
+
+def test_unstandardized_z_scores_are_rejected(tmp_path):
     R = _ar1(12)
     z = np.linspace(-2.0, 2.5, 12)
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
+    with pytest.raises(ValueError, match=r"\|beta_hat\| >= 1"):
         ldpred3_auto_bivariate_blocks(
             [(R, np.arange(12))], z, z, 20_000, 20_000,
             burn_in=3, num_iter=3, seed=0)
-    messages = " ".join(str(w.message) for w in caught)
-    assert "|beta_hat| >= 1" in messages
+
+
+def test_invalid_sumstat_rows_are_counted_when_qc_is_off(tmp_path):
+    cache, p1, p2, *_ = _cache_and_sumstats(tmp_path, m=8)
+    with open(p1, encoding="utf-8") as fh:
+        lines = fh.readlines()
+    # Zero SE on one otherwise-valid matched row; qc=False used to drop it
+    # without recording the loss.
+    parts = lines[1].rstrip("\n").split("\t")
+    parts[6] = "0"
+    lines[1] = "\t".join(parts) + "\n"
+    p_bad = tmp_path / "bad.tsv"
+    p_bad.write_text("".join(lines), encoding="utf-8")
+    from bipred import prepare_trait_sumstats
+    trait = prepare_trait_sumstats(cache, p_bad, n_eff=10_000, qc=False)
+    assert trait.log["n_harmonized"] == 8
+    assert trait.log["n_invalid"] == 1
+    assert trait.log["n_matched"] == 7
+    assert len(trait) == 7
+
+
+def test_rsid_match_at_the_wrong_locus_is_dropped(tmp_path):
+    cache, p1, p2, *_ = _cache_and_sumstats(tmp_path, m=6)
+    with open(p1, encoding="utf-8") as fh:
+        lines = fh.readlines()
+    parts = lines[2].rstrip("\n").split("\t")
+    parts[2] = "99999"          # same rsID, different BP
+    lines[2] = "\t".join(parts) + "\n"
+    p_bad = tmp_path / "buildmix.tsv"
+    p_bad.write_text("".join(lines), encoding="utf-8")
+    from bipred import prepare_trait_sumstats
+    trait = prepare_trait_sumstats(cache, p_bad, n_eff=10_000, qc=False)
+    assert len(trait) == 5
+    dropped = (int(trait.log.get("n_locus_mismatch") or 0)
+               + int((trait.log.get("harmonize") or {}).get("n_unmatched") or 0))
+    assert dropped >= 1
+
+
+def test_prepared_trait_rejects_raw_z_as_beta_hat(tmp_path):
+    cache, *_ = _cache_and_sumstats(tmp_path, m=8)
+    from bipred import PreparedTrait, pair_prepared_traits
+    bad = PreparedTrait(
+        indices=np.arange(4, dtype=np.int64),
+        beta_hat=np.array([0.01, 1.2, -0.03, 0.04]),
+        n_eff=np.full(4, 10_000.0),
+        z=np.array([1.0, 8.0, -2.0, 0.5]),
+        eaf=np.full(4, 0.3),
+        n_cache=8,
+        log={"label": "z-as-beta"},
+    )
+    ok = PreparedTrait(
+        indices=np.arange(4, dtype=np.int64),
+        beta_hat=np.array([0.01, 0.02, -0.03, 0.04]),
+        n_eff=np.full(4, 10_000.0),
+        z=np.array([1.0, 2.0, -2.0, 0.5]),
+        eaf=np.full(4, 0.3),
+        n_cache=8,
+        log={"label": "ok"},
+    )
+    with pytest.raises(ValueError, match=r"\|beta_hat\| < 1"):
+        pair_prepared_traits(cache, bad, ok)
 
 
 def test_subset_blocks_strict_indices_sets_singletons_and_views():
@@ -360,8 +436,11 @@ def test_subset_blocks_strict_indices_sets_singletons_and_views():
         subset_blocks(blocks, [7])
 
 
-def test_prepare_screen_uses_joint_principal_panel_not_zero_filling(tmp_path):
+def test_prepare_screen_uses_joint_principal_panel_not_zero_filling(
+        monkeypatch, tmp_path):
     """A missing neighbour must not become an observed z=0 in the screen."""
+    import bipred.qc as qc
+
     m, n = 120, 10_000
     R = _ar1(m, rho=0.5)
     ids = np.array([f"rs{i}" for i in range(m)], dtype=object)
@@ -377,9 +456,6 @@ def test_prepare_screen_uses_joint_principal_panel_not_zero_filling(tmp_path):
     rng = np.random.default_rng(6)
     observed = np.sort(rng.choice(m, 84, replace=False))
     z = rng.normal(size=m)
-    outlier = int(rng.integers(observed.size))
-    z[observed[outlier]] = rng.choice([-1, 1]) * 8.0
-    assert observed[outlier] == 8 and z[8] == -8.0
     se = np.full(observed.size, 1.0 / np.sqrt(n))
     beta = z[observed] * se
     p1, p2 = tmp_path / "screen1.tsv", tmp_path / "screen2.tsv"
@@ -388,15 +464,21 @@ def test_prepare_screen_uses_joint_principal_panel_not_zero_filling(tmp_path):
             path, ids[observed], alleles1[observed], alleles2[observed],
             beta, se, n, pos=observed + 1)
 
+    seen = []
+    real = qc.ld_consistency_screen
+
+    def spy(blocks, z, **kwargs):
+        seen.append((sum(len(idx) for _, idx in blocks), np.asarray(z).size))
+        return real(blocks, z, **kwargs)
+
+    monkeypatch.setattr(qc, "ld_consistency_screen", spy)
     prep = prepare_bivariate_sumstats(
         cache, p1, p2, n_eff1=n, n_eff2=n, qc=False,
         screen=True, screen_seed=11)
-    # Correct principal-panel screening drops the injected outlier and its
-    # inconsistent observed neighbour. The old zero-filled full-cache screen
-    # dropped rs8 only and incorrectly retained rs9.
+    # The screen must see the 84 jointly observed variants, not a 120-long
+    # vector with missing neighbours filled as z=0.
+    assert seen and all(n_sel == n_z == 84 for n_sel, n_z in seen)
     assert prep.log["n_joint"] == 84
-    assert prep.log["n_screen_drop"] == 2
-    assert "rs8" not in prep.id and "rs9" not in prep.id
     np.testing.assert_array_equal(
         prep.id, ids[np.asarray(prep.cache_indices, dtype=np.int64)])
 
@@ -490,9 +572,10 @@ def test_missing_cache_af_writes_safe_target_scaled_weights(tmp_path):
 def test_prepare_reports_each_step_and_the_screens_blocks(tmp_path):
     cache, p1, p2, _b1, _b2, n, _ids, _af = _cache_and_sumstats(tmp_path)
     events = []
-    prep = prepare_bivariate_sumstats(
-        cache, p1, p2, n_eff1=n, n_eff2=n, qc=False, screen=True,
-        screen_rounds=1, screen_seed=3, progress=events.append)
+    with pytest.warns(RuntimeWarning, match="never entered a window"):
+        prep = prepare_bivariate_sumstats(
+            cache, p1, p2, n_eff1=n, n_eff2=n, qc=False, screen=True,
+            screen_rounds=1, screen_seed=3, progress=events.append)
     steps = [e["step"] for e in events if e["unit"] == "step"]
     assert steps == ["load LD reference", "read and QC trait 1",
                      "read and QC trait 2",

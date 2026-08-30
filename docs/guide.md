@@ -122,11 +122,15 @@ interpreting a real-data fit, and always heed the fit's own warnings.
 
 1. **Harmonize, then verify.** Match on rsID, require the reported allele pair
    to equal the reference pair as a set, flip the sign of `beta` when the effect
-   allele is the reference's other allele, and drop indels and strand-ambiguous
-   A/T and C/G pairs. Then check it: correlate the aligned effect-allele
-   frequency against the reference's own. Near +1 is aligned, near −1 inverted.
-   The flip *rate* cannot distinguish those — a legitimate effect-allele
-   convention produces any rate at all (one real file flipped 69.7%).
+   allele is the reference's other allele, and drop strand-ambiguous pairs
+   (A/T and C/G SNPs, and palindromic multi-base pairs such as `AA`/`TT`).
+   Non-palindromic indels are kept when the alleles match. Then check it:
+   correlate the aligned effect-allele frequency against the reference's own.
+   Near +1 is aligned, near −1 inverted. The flip *rate* cannot distinguish
+   those — a legitimate effect-allele convention produces any rate at all
+   (one real file flipped 69.7%). A unique rsID is not coordinate-checked
+   by `harmonize`; `prepare_trait_sumstats` drops matches whose chrom/pos
+   disagree with the LD reference.
 2. **Check the effective sample size.** `n_eff` scales every standardized effect.
    For case-control data,
    [`bipred.qc.implied_sample_size`](../bipred/qc.py) can compare the reported
@@ -147,6 +151,14 @@ interpreting a real-data fit, and always heed the fit's own warnings.
    [`bipred.qc.ld_consistency_screen`](../bipred/qc.py). This lightweight,
    block-based routine is inspired by the DENTIST statistic but does not
    implement the published DENTIST windowing and protected-removal procedure.
+   The default chi2 threshold is a *null* calibration of the split-half
+   statistic. Split-half flags are confirmed against the full-window
+   leave-one-out residual: LD-consistent large effects (APOE-scale |z| on
+   lipids) are kept, as are weak z-scores whose sign is sampling noise.
+   What is dropped is a residual that is itself genome-wide significant
+   given the neighbours. Blocks smaller than 50 live variants are not
+   evaluated and are kept. A high drop rate is a warning that the LD may
+   be thresholded or indefinite, not a quiet success.
 
 ```python
 from ldpred3 import standardize_betas
@@ -502,7 +514,8 @@ prep = prepare_bivariate_sumstats(
   certificate of correctness. `result.divergence_diagnostics` records the
   exact ratios, trace summaries, thresholds, and per-trait flags used by this
   warning. They are fit-validity heuristics, not R-hat, ESS, or a convergence
-  certificate.
+  certificate. `write_weights` refuses a flagged fit unless
+  `allow_diverged=True` (CLI: `--allow-diverged`).
 - `ldpred3.shrink_ld_blocks` keys its shrinkage on `k / n_ref`, which assumes
   the distortion is finite-panel noise. Against a reference whose correlations
   were thresholded to zero outside a window, the distortion is structural and

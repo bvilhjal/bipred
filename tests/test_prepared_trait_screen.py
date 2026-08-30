@@ -95,7 +95,8 @@ def test_screen_uses_raw_z_and_selected_rows_without_principal_panel(
     assert screened.log["screen"] is True
     record = screened.log["ld_consistency_screen"]
     assert record == {
-        "n_input": 4, "n_kept": 3, "n_dropped": 1,
+        "n_input": 4, "n_tested": 4, "n_untested": 0,
+        "n_kept": 3, "n_dropped": 1,
         "parameters": {
             "rounds": 3, "window": 25, "threshold": 10.0,
             "eigenvalue_floor": 2e-3, "seed": 7, "ncores": 2,
@@ -131,7 +132,8 @@ def test_caller_owned_cache_remains_open_and_unchanged(tmp_path, mmap):
     owner = prepare_ld_cache(path)
     source = [block for block, _idx in owner.blocks]
     try:
-        screened = screen_prepared_trait(owner, _trait())
+        with pytest.warns(RuntimeWarning, match="never entered a window"):
+            screened = screen_prepared_trait(owner, _trait())
         assert len(screened) == 4
         assert not owner.closed
         assert len(owner.blocks) == 1 and owner.blocks[0][0] is source[0]

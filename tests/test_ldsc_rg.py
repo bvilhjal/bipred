@@ -413,6 +413,29 @@ def test_estimate_sample_overlap_requires_result_type():
         estimate_sample_overlap(0.1, 60000.0, 40000.0)
 
 
+def test_estimate_sample_overlap_rejects_a_constrained_intercept():
+    n1 = n2 = 50_000.0
+    free = LDSCRgResult(rg=0.4, rg_se=0.05, gcov=0.1, gcov_intercept=0.0,
+                        h2=(0.2, 0.2))
+    constrained = LDSCRgResult(
+        rg=0.4, rg_se=0.05, gcov=0.1, gcov_intercept=0.0, h2=(0.2, 0.2),
+        constrain_intercept=0.0)
+    out = estimate_sample_overlap(free, n1, n2)
+    assert out["n_shared"] == 0.0
+    assert out["physically_consistent"] is True
+    with pytest.raises(ValueError, match="free-intercept"):
+        estimate_sample_overlap(constrained, n1, n2)
+
+
+def test_ldsc_rg_records_a_constrained_intercept():
+    beta, ell, n = _simple_inputs()
+    res = ldsc_rg(beta, beta, ell, n, n, n_blocks=2, constrain_intercept=0.0)
+    assert res.constrain_intercept == 0.0
+    assert res.gcov_intercept == 0.0
+    free = ldsc_rg(beta, beta, ell, n, n, n_blocks=2)
+    assert free.constrain_intercept is None
+
+
 def test_ldsc_rg_constrain_intercept_recovers_rg():
     # Fixing the cross-trait intercept at its true value (0: no sample
     # overlap) leaves the genetic-correlation estimate on target.

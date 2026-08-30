@@ -172,6 +172,11 @@ rho_beta        = s12 / sqrt(s1 s2)
 rg_from_overlap = rho_beta pi11 / sqrt(pi1 pi2)
 ```
 
+`.mixer["rho_beta"]` uses the posterior-mean Sigma in that formula (ratio of
+means). `mixer_iterate_summary()["rho_beta"]["mean"]` averages the same ratio
+computed on each retained iterate (mean of ratios). They differ by Jensen's
+inequality; neither is a bug.
+
 Ratios such as `frac_shared`, `rho_beta`, and `rg_from_overlap` avoid the literal
 causal-count interpretation, but still require calibration. A point-normal
 mixture can spread inclusion mass to LD neighbours, and finite-reference

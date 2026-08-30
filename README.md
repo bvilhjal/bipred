@@ -18,7 +18,7 @@ LDpred3 revision tested by CI; its private interoperability seam is not stable
 on the sibling repository's moving default branch:
 
 ```bash
-python -m pip install "ldpred3[fast] @ git+https://github.com/bvilhjal/ldpred3.git@621a2c4dc10a225fd7abcddebc66fbdee33c9cf0"
+python -m pip install "ldpred3[fast] @ git+https://github.com/bvilhjal/ldpred3.git@339b4db76a92a7dd235c764753b38c4b1f41e7fc"
 python -m pip install "bipred[fast] @ git+https://github.com/bvilhjal/bipred.git"
 ```
 
@@ -28,6 +28,11 @@ For development with sibling checkouts:
 python -m pip install -e "../ldpred3[fast]"
 python -m pip install -e ".[fast,test]"
 ```
+
+Import the installed packages, not a parent folder that happens to contain an
+`ldpred3/` directory. Running `import ldpred3` with that folder as the working
+directory binds the empty checkout as a namespace package and hides the real
+module.
 
 CI preinstalls that immutable revision, then installs Bipred through its
 declared `ldpred3>=0.5.5.dev0,<0.7` dependency contract rather than bypassing

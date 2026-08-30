@@ -14,7 +14,7 @@ env:
   # Exact compatible sibling revision. Pin the tested 0.6 release rather than
   # following the moving default branch. Archived real-data benchmarks retain
   # their own immutable 0.4.5 source pin in benchmarks/real_data_inputs.py.
-  LDPRED3_REV: "621a2c4dc10a225fd7abcddebc66fbdee33c9cf0"
+  LDPRED3_REV: "339b4db76a92a7dd235c764753b38c4b1f41e7fc"
   # The floor bipred supports -- NOT a prediction about what `master` is at.
   # Those are different facts, and the workflow used to assert the installed
   # version equalled this one, which held only while master sat exactly on the

@@ -96,6 +96,12 @@ _DIVERGENCE_MAX_EFFECT_RATIO = 10.0
 _DIVERGENCE_MAX_SLAB_SIGMAS = 25.0
 _DIVERGENCE_MAX_TRACE_DRIFT = 1.25
 _DIVERGENCE_MIN_TRACE = 40
+# Structural PD probe: D32 rounding of a near-singular sample correlation
+# routinely produces tiny negative eigenvalues. ``R + 0.05 I`` absorbs that
+# noise; a 3x3 with min eig ~-1 still fails and would otherwise return a
+# finite, h2-clamped, wrong fit.
+_STRUCTURAL_LD_RIDGE = 0.05
+_STRUCTURAL_LD_CHOLESKY_MAX = 1024
 _DENSE = 0
 _LOWRANK = 1
 
@@ -337,6 +343,63 @@ def _prepare_block(R, ld_int8):
     return np.ascontiguousarray(arr, dtype=np.float32), 1.0
 
 
+def _divergence_is_flagged(diag):
+    """True when single-chain or pooled diagnostics marked the fit invalid."""
+    if not isinstance(diag, dict):
+        return False
+    if diag.get("flagged"):
+        return True
+    try:
+        return int(diag.get("n_flagged") or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _reject_structurally_indefinite_ld(corr, scale, start, size):
+    """Refuse a dense block whose ``R + 0.05 I`` is not positive definite.
+
+    Entries in ``[-1, 1]`` are not enough: a 3x3 correlation can have min
+    eig near -1 and still look like a correlation matrix. D32 rounding of a
+    usable sample correlation is much smaller than 0.05, so those blocks
+    pass. LowRankLD is checked by its residual-diag contract instead.
+    """
+    k = int(corr.shape[0])
+    if k == 0:
+        return
+    ridge = _STRUCTURAL_LD_RIDGE
+    if k <= _STRUCTURAL_LD_CHOLESKY_MAX:
+        dense = np.array(corr, dtype=np.float64, order="C")
+        if scale != 1.0:
+            dense *= scale
+        dense.flat[::k + 1] += ridge
+        try:
+            np.linalg.cholesky(dense)
+        except np.linalg.LinAlgError:
+            raise ValueError(
+                f"LD block starting at variant {start} (size {size}) is "
+                f"structurally indefinite (R + {ridge} I is not positive "
+                "definite). Entries in [-1, 1] do not make a correlation "
+                "matrix; regularise the reference "
+                "(ldpred3.shrink_ld_blocks) or rebuild it."
+            ) from None
+        return
+    rng = np.random.default_rng(0)
+    raw = np.asarray(corr, dtype=np.float64)
+    for _ in range(16):
+        x = rng.standard_normal(k)
+        rx = raw @ x
+        if scale != 1.0:
+            rx *= scale
+        q = float(x @ rx) + ridge * float(x @ x)
+        if q <= 0.0:
+            raise ValueError(
+                f"LD block starting at variant {start} (size {size}) is "
+                f"structurally indefinite (a quadratic form of R + {ridge} I "
+                "is non-positive). Regularise the reference "
+                "(ldpred3.shrink_ld_blocks) or rebuild it."
+            )
+
+
 def _prepare_bivariate_lowrank_block(R):
     """Return the current compact-LD payload without expanding per-row state.
 
@@ -468,13 +531,11 @@ def _warn_if_unstandardized(beta, n_eff, name):
     z = np.abs(beta) * np.sqrt(n_eff)
     max_abs = float(np.max(np.abs(beta)))
     if max_abs >= 1.0:
-        warnings.warn(
+        raise ValueError(
             f"{name} has |beta_hat| >= 1 (max {max_abs:.3g}); effects from "
             "ldpred3.standardize_betas lie in (-1, 1). If these are GWAS "
             "z-scores or raw betas, call standardize_betas(beta, se, n_eff)[0] "
-            "before the fit.",
-            stacklevel=4)
-        return
+            "before the fit.")
     if beta.size >= 1000 and float(np.median(z)) < 0.05 and float(np.max(z)) < 0.5:
         warnings.warn(
             f"{name} has median |beta_hat|*sqrt(n_eff) = {float(np.median(z)):.3g}, "
@@ -529,6 +590,7 @@ def _prepare_bivariate_inputs(blocks, beta_hat1, beta_hat2, n_eff1, n_eff2,
             )
         else:
             Rq, scale = _prepare_block(R, options.ld_int8)
+            _reject_structurally_indefinite_ld(Rq, scale, start, size)
             prepared_blocks.append(
                 (_DENSE, _readonly_view(Rq), start, size, scale, None)
             )
@@ -759,6 +821,17 @@ def _fit_divergence_statistics(beta1, beta2, raw_h2, sigma_diag,
                     drift, direction = 1.0 / last_over_first, "falling"
                 else:
                     drift, direction = 1.0, "flat"
+            elif first < 0.0 and last < 0.0:
+                last_over_first = last / first
+                if last_over_first > 1.0:
+                    drift, direction = last_over_first, "falling"
+                elif last_over_first < 1.0:
+                    drift, direction = 1.0 / last_over_first, "rising"
+                else:
+                    drift, direction = 1.0, "flat"
+            elif first != 0.0 or last != 0.0:
+                last_over_first = None
+                drift, direction = float("inf"), "sign-crossing"
 
         flags = {
             "nonpositive_genetic_variance": bool(
@@ -866,11 +939,16 @@ def _warn_if_fit_diverged(beta1, beta2, raw_h2, sigma_diag, genetic_samples, m,
                 "per-causal effect SD the fit itself inferred" %
                 (label, trait["max_effect_slab_sd"]))
         if trait["flags"]["trace_drift"]:
-            verb = "rose" if trait["trace_direction"] == "rising" else "fell"
-            reasons.append(
-                "trait %s's genetic variance %s %.2fx across the retained "
-                "sweeps, so the chain had not settled" %
-                (label, verb, trait["trace_drift_fold"]))
+            if trait["trace_direction"] == "sign-crossing":
+                reasons.append(
+                    "trait %s's genetic variance changed sign across the "
+                    "retained sweeps, so the chain had not settled" % label)
+            else:
+                verb = "rose" if trait["trace_direction"] == "rising" else "fell"
+                reasons.append(
+                    "trait %s's genetic variance %s %.2fx across the retained "
+                    "sweeps, so the chain had not settled" %
+                    (label, verb, trait["trace_drift_fold"]))
     if reasons:
         # Block geometry is reported here rather than warned about on its own.
         # Size alone does not predict this failure -- the fit that motivated
@@ -1602,7 +1680,7 @@ class BivariateResult:
     divergence_diagnostics: Optional[dict] = None  # structured heuristic ratios
 
     def write_weights(self, path, *, trait, id, chrom, pos, effect_allele,
-                      other_allele, af=None, sd=None):
+                      other_allele, af=None, sd=None, allow_diverged=False):
         """Write one trait's posterior means as an ldpred3 weight file.
 
         ``trait`` is ``1`` or ``2``. Provenance arrays must match
@@ -1621,6 +1699,10 @@ class BivariateResult:
         The choice is recorded in the file as ``SD_SOURCE`` (``"hwe"`` or
         ``"empirical"``), so a downstream frozen-scale scorer can see which it
         got instead of inferring it from which package produced the file.
+
+        A fit whose :attr:`divergence_diagnostics` are flagged is refused
+        unless ``allow_diverged`` is true. Length mismatches are reported
+        first so a short provenance array is not misdiagnosed as divergence.
         """
         from ldpred3.interop import write_weights
 
@@ -1635,6 +1717,18 @@ class BivariateResult:
             raise ValueError(
                 f"trait {trait} has {weight.size} effects but provenance "
                 f"length is {ids.size}")
+        if _divergence_is_flagged(self.divergence_diagnostics):
+            if not allow_diverged:
+                raise ValueError(
+                    "this fit's divergence diagnostic fired; refusing to "
+                    "write weights. Pass allow_diverged=True to write them "
+                    "anyway (CLI: --allow-diverged)")
+            warnings.warn(
+                "writing weights from a fit whose divergence diagnostic "
+                "fired; h2 and rg from this run are not valid",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         sd_source = "empirical"
         if af is not None and sd is None:
             warnings.warn(
@@ -1664,10 +1758,13 @@ class BivariateResult:
         Returns ``polygenicity``, ``n_causal``, ``n_shared``, ``frac_shared``,
         ``rho_beta`` and ``rg_from_overlap`` over the fitted variants. The ratios
         are usually more stable than absolute counts; counts can be inflated by
-        LD-spreading and reference-panel mismatch. Use
-        :meth:`mixer_iterate_summary` for empirical variability across retained
-        hyperparameter iterates and :meth:`mixer_calibrated` to anchor counts on
-        two univariate ldpred3 fits.
+        LD-spreading and reference-panel mismatch. ``rho_beta`` here is the
+        ratio of posterior-mean Sigma entries,
+        ``s12 / sqrt(s1 s2)``. :meth:`mixer_iterate_summary` reports the mean
+        of that ratio computed per retained iterate; the two differ by
+        Jensen's inequality. Use the iterate summary for a typical value
+        across the chain, and this property for the point-estimate Sigma.
+        :meth:`mixer_calibrated` anchors counts on two univariate ldpred3 fits.
         """
         if self.pi is None:
             raise ValueError("pi not available on this result")
@@ -1758,6 +1855,10 @@ class BivariateResult:
         an empirical range of the hybrid algorithm's retained iterates, **not**
         a Bayesian credible interval and not a frequentist confidence interval.
         It also does not represent LD-reference-mismatch uncertainty.
+
+        ``rho_beta`` is summarised as the mean of
+        ``s12 / sqrt(s1 s2)`` on each iterate. That is not the same number as
+        :attr:`mixer`'s ratio of mean Sigma entries.
         """
         return self._mixer_iterate_summary(level, "interval")
 
@@ -2000,6 +2101,16 @@ def _ldpred3_auto_bivariate_prepared_inner(prepared, options, start,
             "tol is ignored when rg_decorrelated=True: the thinned "
             "decorrelated-rg estimator requires the full retained schedule, so "
             "no early stopping is performed",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    elif tol > 0.0 and num_iter <= 2 * check_every:
+        warnings.warn(
+            f"tol={tol:g} cannot stop this run early: adaptive stopping "
+            f"needs two snapshots (retained sweep {2 * check_every}), which "
+            f"is not before num_iter={num_iter} with check_every="
+            f"{check_every}. Increase num_iter or lower check_every, or "
+            "leave tol at 0.",
             RuntimeWarning,
             stacklevel=2,
         )

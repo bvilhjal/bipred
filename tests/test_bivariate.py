@@ -1365,12 +1365,14 @@ def test_decorrelated_rg_applies_ld_only_once_at_finalization(monkeypatch):
 
     monkeypatch.setattr(bivariate, "_apply_R_rows", counting_apply)
     beta_hat = np.full(20, 0.02)
-    result = ldpred3_auto_bivariate(
-        np.eye(20), beta_hat, beta_hat, 10_000, 10_000,
-        ld_int8=False, h2_init=0.2, p_init=0.5, burn_in=5,
-        num_iter=12, sample_every=2, h2_cap=(0.5, 0.5),
-        rg_decorrelated=True, seed=2,
-    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        result = ldpred3_auto_bivariate(
+            np.eye(20), beta_hat, beta_hat, 10_000, 10_000,
+            ld_int8=False, h2_init=0.2, p_init=0.5, burn_in=5,
+            num_iter=12, sample_every=2, h2_cap=(0.5, 0.5),
+            rg_decorrelated=True, seed=2,
+        )
 
     # calls == 1 is the invariant under test: the LD is applied exactly once at
     # finalization. This deliberately tiny config produces degenerate sparse
@@ -1744,3 +1746,97 @@ def test_fit_rejects_a_non_callable_progress():
     with pytest.raises(TypeError, match="callable"):
         ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, n, n, burn_in=2,
                                       num_iter=2, progress=object())
+
+
+def test_tol_warns_when_the_schedule_cannot_stop_early():
+    with pytest.warns(RuntimeWarning, match="cannot stop this run early"):
+        ldpred3_auto_bivariate(
+            np.eye(4), np.full(4, 0.02), np.full(4, 0.02), 1000, 1000,
+            ld_int8=False, burn_in=0, num_iter=40, check_every=50, tol=1e-3,
+            h2_cap=(0.5, 0.5), seed=1)
+
+
+def test_divergence_warning_catches_a_sign_crossing_trace():
+    crossing = np.column_stack([
+        np.concatenate([np.full(40, 0.4), np.full(40, -0.3)]),
+        np.full(80, 0.01), np.full(80, 0.0706)])
+    with pytest.warns(RuntimeWarning, match="changed sign"):
+        diagnostic = bivariate._warn_if_fit_diverged(**_diverged_args(
+            genetic_samples=crossing))
+    trait = diagnostic["traits"]["trait1"]
+    assert trait["flags"]["trace_drift"] is True
+    assert trait["trace_direction"] == "sign-crossing"
+
+
+def test_mixer_rho_beta_ratio_of_means_is_not_mean_of_ratios():
+    from bipred.bivariate import BivariateResult
+    sigma_samples = np.array([[1.0, 1.0, 0.2], [4.0, 1.0, 0.2]])
+    s1, s2, s12 = sigma_samples.mean(axis=0)
+    ratio_of_means = s12 / np.sqrt(s1 * s2)
+    mean_of_ratios = float(np.mean(
+        sigma_samples[:, 2] / np.sqrt(sigma_samples[:, 0] * sigma_samples[:, 1])))
+    assert abs(ratio_of_means - mean_of_ratios) > 1e-6
+    res = BivariateResult(
+        beta1_est=np.zeros(4), beta2_est=np.zeros(4),
+        h2=(0.1, 0.1), rg=0.0, p=0.1,
+        sigma=np.array([[s1, s12], [s12, s2]]),
+        pi=np.array([0.7, 0.1, 0.1, 0.1]),
+        pi_samples=np.tile([0.7, 0.1, 0.1, 0.1], (2, 1)),
+        sigma_samples=sigma_samples,
+    )
+    assert res.mixer["rho_beta"] == pytest.approx(ratio_of_means)
+    assert res.mixer_iterate_summary()["rho_beta"]["mean"] == pytest.approx(
+        mean_of_ratios)
+
+
+def test_nonfinite_quadratics_are_rejected_as_divergence():
+    with pytest.raises(FloatingPointError, match="not positive"):
+        bivariate._check_fit_is_finite(
+            (np.nan, 0.1, 0.1), np.ones(4), np.ones(4))
+    with pytest.raises(FloatingPointError, match="posterior-mean"):
+        bivariate._check_fit_is_finite(
+            (0.1, 0.0, 0.1), np.array([np.inf, 0.0]), np.zeros(2))
+
+
+def test_per_variant_n_memo_hit_path_stays_finite():
+    """Consecutive equal n_eff entries reuse _bivar_const; mixed runs hit both."""
+    beta_hat = np.full(8, 0.03)
+    n_runs = np.array([500.0, 500.0, 500.0, 2000.0, 2000.0, 4000.0, 4000.0, 4000.0])
+    kwargs = dict(ld_int8=False, h2_init=0.1, p_init=0.5, burn_in=0,
+                  num_iter=2, h2_cap=(0.2, 0.2), seed=1)
+    result = ldpred3_auto_bivariate(
+        np.eye(8), beta_hat, beta_hat, n_runs, n_runs, cross_corr=0.3, **kwargs)
+    assert np.all(np.isfinite(result.beta1_est))
+    assert np.isfinite(result.rg)
+
+
+def test_cross_corr_reduces_ld_structured_sampling_noise():
+    """Supplying the true sampling correlation recovers rg nearer the true 0."""
+    k, n, rho = 60, 8_000, 0.75
+    pos = np.arange(k)
+    R = (0.6 ** np.abs(pos[:, None] - pos[None, :])).astype(np.float64)
+    rng = np.random.default_rng(4)
+    L = np.linalg.cholesky(R + 1e-8 * np.eye(k))
+    e1 = L @ rng.standard_normal(k) / np.sqrt(n)
+    e2 = rho * e1 + np.sqrt(1.0 - rho * rho) * (L @ rng.standard_normal(k) / np.sqrt(n))
+    kwargs = dict(ld_int8=False, h2_init=0.05, p_init=0.2, burn_in=15,
+                  num_iter=25, seed=2, h2_cap=(0.4, 0.4))
+    ignore = ldpred3_auto_bivariate(R.astype(np.float32), e1, e2, n, n,
+                                    cross_corr=0.0, **kwargs)
+    corrected = ldpred3_auto_bivariate(R.astype(np.float32), e1, e2, n, n,
+                                       cross_corr=rho, **kwargs)
+    # True genetic rg is 0: only correlated sampling errors were planted.
+    assert abs(corrected.rg) < abs(ignore.rg)
+    assert abs(corrected.rg) < 0.15
+
+
+def test_structurally_indefinite_correlation_is_rejected():
+    """Entries in [-1, 1] are not enough; a 3x3 can still have min eig ~-1."""
+    R = np.array([[1.0, 0.9, -0.9],
+                  [0.9, 1.0, 0.9],
+                  [-0.9, 0.9, 1.0]], dtype=np.float32)
+    assert float(np.linalg.eigvalsh(R.astype(np.float64)).min()) < -0.5
+    beta = np.full(3, 0.02)
+    with pytest.raises(ValueError, match="structurally indefinite"):
+        ldpred3_auto_bivariate(
+            R, beta, beta, 10_000, 10_000, burn_in=2, num_iter=2, seed=0)

@@ -1,14 +1,14 @@
 """Lazy compatibility seam for the bounded :mod:`ldpred3` dependency.
 
-The names here are shared with the LDpred3 0.5 development line bounded in
-``pyproject.toml``. Most of them -- the Numba decorators, the input
-validators, ``warn_no_numba`` -- are *published* by the public
-:mod:`ldpred3.shim` module (added in LDpred3 0.5.3), and the seam binds those
-through it. The remainder are still underscore-private helpers LDpred3 has
-not published: keeping every borrowing here makes the next dependency review
-one small, explicit audit, and loading a lightweight helper such as LDSC does
-not import the Numba kernels. Data-level sibling integration uses the stable
-:mod:`ldpred3.interop` surface.
+The names here are the bounded LDpred3 surface in ``pyproject.toml``
+(``>=0.5.5.dev0,<0.7``, including the 0.6 line). Most of them -- the Numba
+decorators, the input validators, ``warn_no_numba`` -- are *published* by the
+public :mod:`ldpred3.shim` module (added in LDpred3 0.5.3), and the seam
+binds those through it. The remainder are still underscore-private helpers
+LDpred3 has not published: keeping every borrowing here makes the next
+dependency review one small, explicit audit, and loading a lightweight helper
+such as LDSC does not import the Numba kernels. Data-level sibling
+integration uses the stable :mod:`ldpred3.interop` surface.
 """
 
 from __future__ import annotations

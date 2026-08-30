@@ -5,6 +5,35 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 ## [Unreleased]
 
+### Fixed
+
+- The LD-consistency screen confirms split-half flags with the full-window
+  DENTIST statistic and keeps LD-consistent large effects (including
+  APOE-scale |z|). Weak z-scores whose sign is sampling noise are kept.
+  A candidate is dropped only if it has an LD neighbour, the leave-one-out
+  residual exceeds the chi2 threshold, and that residual is larger than a
+  private-effect baseline. The screen records `n_tested`, warns when a large
+  fraction of variants was never evaluated or when the drop rate is high
+  (thresholded/indefinite LD), and counts overlapping-window drops once.
+- `BivariateResult.write_weights` refuses a fit whose
+  `divergence_diagnostics` are flagged unless `allow_diverged=True` (CLI:
+  `--allow-diverged`). Length mismatches are reported first.
+- Dense LD blocks that remain indefinite after a 0.05 ridge
+  (`R + 0.05 I` not PD) are rejected at prepare rather than returning a
+  finite, clamped, wrong fit. D32 rounding noise is tolerated; LowRankLD
+  is already constrained to a (near) PSD residual.
+- `prepare_trait_sumstats` logs rows dropped for non-finite/`se<=0`/`n_eff<=0`
+  even when `qc=False`, drops unique-rsID matches whose chrom/pos disagree
+  with the LD reference, and rejects `|beta_hat| >= 1` on a `PreparedTrait`.
+  The sampler now raises on that scale error rather than warning.
+- `estimate_sample_overlap` rejects an `ldsc_rg` result whose intercept was
+  constrained (which previously reported `n_shared=0`,
+  `physically_consistent=True`).
+- Multi-chain pooling keeps per-chain `divergence_diagnostics` on the pooled
+  posterior. Adaptive `tol` warns when `num_iter` is too small to stop early.
+  Trace-drift flags a sign-crossing genetic-variance path. Harmonize docs no
+  longer claim that all indels are dropped.
+
 ### Changed
 
 - Expanded the tested LDpred3 dependency contract to

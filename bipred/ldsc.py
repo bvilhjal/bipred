@@ -133,6 +133,7 @@ class LDSCRgResult:
     gcov: float                 # genetic covariance (cross-trait slope)
     gcov_intercept: float       # sample overlap and/or correlated confounding
     h2: tuple                   # (h2_1, h2_2) marginal heritabilities
+    constrain_intercept: float | None = None  # value passed to ldsc_rg, or None if free
 
     def __repr__(self):
         return (f"LDSCRgResult(rg={self.rg:+.3f} ± {self.rg_se:.3f}, "
@@ -304,7 +305,8 @@ def ldsc_rg(beta_hat1, beta_hat2, ld_scores, n_eff1, n_eff2, *, m_snps=None,
     if h1 <= 0.0 or h2 <= 0.0:
         rg = rg_se = float("nan")
         return LDSCRgResult(rg=rg, rg_se=rg_se, gcov=float(gcov),
-                            gcov_intercept=float(ic), h2=(float(h1), float(h2)))
+                            gcov_intercept=float(ic), h2=(float(h1), float(h2)),
+                            constrain_intercept=constrain_intercept)
 
     rg = gcov / np.sqrt(h1 * h2)
 
@@ -341,7 +343,8 @@ def ldsc_rg(beta_hat1, beta_hat2, ld_scores, n_eff1, n_eff2, *, m_snps=None,
             (nb - 1) / nb * np.sum((rg_jk - rg_jk.mean()) ** 2)))
 
     return LDSCRgResult(rg=float(rg), rg_se=rg_se, gcov=float(gcov),
-                        gcov_intercept=float(ic), h2=(float(h1), float(h2)))
+                        gcov_intercept=float(ic), h2=(float(h1), float(h2)),
+                        constrain_intercept=constrain_intercept)
 
 
 def estimate_sample_overlap(rg_result, n_eff1, n_eff2, pheno_corr=1.0):
@@ -401,7 +404,9 @@ def estimate_sample_overlap(rg_result, n_eff1, n_eff2, pheno_corr=1.0):
     Parameters
     ----------
     rg_result : LDSCRgResult
-        Output of :func:`ldsc_rg` (fit with a *free* intercept, the default).
+        Output of :func:`ldsc_rg` fit with a *free* intercept (the default).
+        A result whose intercept was constrained is rejected: that intercept
+        is an assumption, not an estimate of overlap.
     n_eff1, n_eff2 : float
         Scalar per-trait effective GWAS sample sizes used for the approximation.
     pheno_corr : float, default 1.0
@@ -438,6 +443,14 @@ def estimate_sample_overlap(rg_result, n_eff1, n_eff2, pheno_corr=1.0):
         raise ValueError("pheno_corr must be non-zero to solve for N_shared")
     if not isinstance(rg_result, LDSCRgResult):
         raise ValueError("rg_result must be an LDSCRgResult returned by ldsc_rg")
+    constrained = rg_result.constrain_intercept
+    if constrained is not None:
+        raise ValueError(
+            "estimate_sample_overlap requires a free-intercept ldsc_rg "
+            f"result; this one was fit with constrain_intercept="
+            f"{constrained:g}. A constrained intercept is an assumption, not "
+            "an estimate of overlap -- feeding constrain_intercept=0 would "
+            "report n_shared=0 with physically_consistent=True.")
     overlap_corr = _finite_control(
         "rg_result.gcov_intercept", rg_result.gcov_intercept)
     effective_overlap = overlap_corr * float(np.sqrt(n1) * np.sqrt(n2))
