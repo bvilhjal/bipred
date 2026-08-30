@@ -5,6 +5,13 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 ## [Unreleased]
 
+### Changed
+
+- Expanded the tested LDpred3 dependency contract to
+  `>=0.5.5.dev0,<0.7` and moved CI's immutable sibling pin to LDpred3 0.6.4.
+  The bipred and SMARTpred suites exercise the shared public interoperability
+  surface against that revision; archived benchmark provenance is unchanged.
+
 ### Removed
 
 - **Web service extracted to SMARTpred.** The `webapp/` directory, its ten

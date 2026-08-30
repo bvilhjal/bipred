@@ -11,11 +11,10 @@ on:
   workflow_dispatch:
 
 env:
-  # Exact compatible sibling revision. The default branch is now outside
-  # bipred's declared <0.6 range, so following it would make CI test dependency
-  # drift rather than this checkout. Archived real-data benchmarks retain their
-  # own immutable 0.4.5 source pin in benchmarks/real_data_inputs.py.
-  LDPRED3_REV: "aba8b55d7c8c083e4d2dd5715e995786bbf14599"
+  # Exact compatible sibling revision. Pin the tested 0.6 release rather than
+  # following the moving default branch. Archived real-data benchmarks retain
+  # their own immutable 0.4.5 source pin in benchmarks/real_data_inputs.py.
+  LDPRED3_REV: "621a2c4dc10a225fd7abcddebc66fbdee33c9cf0"
   # The floor bipred supports -- NOT a prediction about what `master` is at.
   # Those are different facts, and the workflow used to assert the installed
   # version equalled this one, which held only while master sat exactly on the
