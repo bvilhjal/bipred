@@ -1,9 +1,12 @@
 """LD-consistency screening: does it keep clean variants and catch broken ones."""
 
+import warnings
+
 import numpy as np
 import pytest
 
 from bipred.qc import (
+    DEFAULT_DROP_FRACTION_WARN,
     dentist, dentist_statistic, implied_sample_size, in_long_range_ld,
     ld_consistency_screen, sd_consistency,
 )
@@ -713,7 +716,21 @@ def test_screen_keeps_an_isolated_large_z():
     assert keep[40]
 
 
-def test_screen_warns_when_thresholded_ld_drops_null_z():
+def test_thresholded_ld_no_longer_manufactures_null_drops():
+    """A thresholded reference used to make the screen reject null z-scores.
+
+    Zeroing the small correlations makes the block indefinite, and the
+    confirmation statistic then divided a squared residual by a negative
+    precision diagonal, rejecting more than a fifth of variants drawn from the
+    LD itself. The confirmation window is now spectrally floored before it is
+    inverted (:data:`bipred.qc.DEFAULT_LOO_EIGENVALUE_FLOOR`), so the
+    statistic is well posed and the null rate returns to near zero.
+
+    The high-drop-rate warning is deliberately kept for the cases it still
+    catches -- a reference of the wrong ancestry, or one that genuinely
+    disagrees with the summary statistics -- but a merely thresholded matrix
+    is no longer one of them.
+    """
     rng = np.random.default_rng(1)
     k = 400
     R = _ar1(0.9, k)
@@ -723,10 +740,21 @@ def test_screen_warns_when_thresholded_ld_drops_null_z():
     Rt[np.abs(Rt) < 0.2] = 0.0
     np.fill_diagonal(Rt, 1.0)
     Rt = np.triu(Rt) + np.triu(Rt, 1).T
-    with pytest.warns(RuntimeWarning, match="thresholded or indefinite"):
+    assert np.linalg.eigvalsh(Rt).min() < 0.0, "thresholding should break PSD"
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
         keep = ld_consistency_screen(
             [(Rt.astype(np.float32), np.arange(k))], z, rounds=2, seed=0)
-    assert (~keep).mean() > 0.2
+    dropped = float((~keep).mean())
+    # The meaningful bar is the screen's own warning threshold: below it the
+    # mask is usable as QC. This case measured 1.5%, against more than 20%
+    # before the confirmation window was floored.
+    assert dropped < DEFAULT_DROP_FRACTION_WARN, (
+        f"null drop rate should sit below the warning threshold, "
+        f"got {dropped:.1%}")
+    assert not [w for w in caught
+                if "thresholded or indefinite" in str(w.message)]
 
 
 def test_small_block_is_kept_unevaluated():
@@ -753,3 +781,123 @@ def test_overlapping_window_drop_counts_are_unique(capsys):
     assert not keep[victim] or not keep[victim + 1]
     out = capsys.readouterr().out
     assert f"dropped {n_dropped:,}," in out
+
+
+def _indefinite_window(m=400, rho=0.9, seed=0):
+    """A near-singular LD window, floored, and its indefinite int8 round-trip.
+
+    The converted reference panels are rank-deficient sample correlations that
+    the converter lifts to a 1e-3 spectral floor, so their smallest eigenvalue
+    sits *at* that floor. int8 resolution is 1/127, and an entrywise
+    perturbation of 1/254 has a spectral norm of order that times sqrt(m), so
+    quantisation pushes such a matrix well below zero. An ordinary AR(1) does
+    not reproduce this -- floored at 1e-3 its smallest eigenvalue is ~0.018,
+    comfortably above the rounding -- so build the rank deficiency explicitly.
+    """
+    rng = np.random.default_rng(seed)
+    i = np.arange(m)
+    chol = np.linalg.cholesky(
+        rho ** np.abs(i[:, None] - i[None, :]) + 1e-8 * np.eye(m))
+    # Fewer samples than variants: R is singular by construction, as a real
+    # reference block computed from a finite panel is.
+    Z = rng.normal(size=(m // 2, m)) @ chol.T
+    Z -= Z.mean(0)
+    Z /= Z.std(0)
+    R = (Z.T @ Z) / Z.shape[0]
+    w, V = np.linalg.eigh(R)
+    R = (V * np.maximum(w, 1e-3)) @ V.T
+    d = np.sqrt(np.diag(R))
+    R /= np.outer(d, d)
+    return R, np.rint(R * 127.0) / 127.0
+
+
+def test_precision_loo_forms_no_inverse_and_floors_the_window():
+    """One eigendecomposition does the PSD repair and the inversion."""
+    from bipred.qc import (_precision_loo, DEFAULT_LOO_RIDGE,
+                           DEFAULT_LOO_EIGENVALUE_FLOOR)
+
+    R, q = _indefinite_window()
+    assert np.linalg.eigvalsh(q).min() < -0.01, "int8 window should be indefinite"
+    rng = np.random.default_rng(1)
+    z = rng.normal(size=R.shape[0])
+
+    stat, tvec = _precision_loo(q, z, DEFAULT_LOO_RIDGE,
+                               DEFAULT_LOO_EIGENVALUE_FLOOR)
+    assert np.all(np.isfinite(stat)) and np.all(np.isfinite(tvec))
+    assert np.all(stat >= 0.0), "T_j is a squared residual over a positive Omega_jj"
+
+    # Equivalent to building the floored inverse explicitly, which is what the
+    # closed form replaces.
+    w, V = np.linalg.eigh(q)
+    floored = (V * np.maximum(w, DEFAULT_LOO_EIGENVALUE_FLOOR)) @ V.T
+    omega = np.linalg.inv(floored + DEFAULT_LOO_RIDGE * np.eye(len(z)))
+    expect_t = omega @ z
+    expect = (expect_t ** 2) / np.diag(omega)
+    np.testing.assert_allclose(tvec, expect_t, rtol=1e-8, atol=1e-10)
+    np.testing.assert_allclose(stat, expect, rtol=1e-6, atol=1e-8)
+
+
+def test_precision_loo_floor_stops_an_int8_window_manufacturing_drops():
+    """The floor is what makes T_j well posed, not merely less noisy.
+
+    Under the null the screen's expected drop rate is near zero. Inverting an
+    indefinite window instead reports a large fraction of an int8 panel as
+    LD-inconsistent, because Omega_jj can be negative and T_j then means
+    nothing.
+    """
+    from bipred.qc import (_precision_loo, DEFAULT_LOO_RIDGE,
+                           DEFAULT_LOO_EIGENVALUE_FLOOR, DEFAULT_THRESHOLD,
+                           DEFAULT_PRIVATE_Z_RATIO)
+
+    R, q = _indefinite_window()
+    m = R.shape[0]
+    rng = np.random.default_rng(7)
+    w, V = np.linalg.eigh(R)
+    # z drawn from the LD itself: the null the screen is calibrated against.
+    z = (V * np.sqrt(np.maximum(w, 0.0))) @ rng.normal(size=m)
+
+    def n_dropped(matrix, floor):
+        stat, tvec = _precision_loo(matrix, z, DEFAULT_LOO_RIDGE, floor)
+        private = np.abs(tvec) <= DEFAULT_PRIVATE_Z_RATIO * np.abs(tvec * 0 + z)
+        return int(np.count_nonzero((stat > DEFAULT_THRESHOLD) & ~private))
+
+    # float32-scale input is fine either way; int8 needs the floor.
+    assert n_dropped(R, DEFAULT_LOO_EIGENVALUE_FLOOR) == 0
+    assert n_dropped(q, DEFAULT_LOO_EIGENVALUE_FLOOR) == 0
+
+    # What makes the unfloored statistic ill-posed rather than merely noisy:
+    # inverting an indefinite window gives negative Omega_jj, so T_j is a
+    # squared residual divided by a negative number. The floored path cannot.
+    k = len(z)
+    naive = np.array(q, dtype=np.float64)
+    naive.flat[::k + 1] += DEFAULT_LOO_RIDGE
+    naive_diag = np.diag(np.linalg.inv(naive))
+    assert naive_diag.min() < 0.0, (
+        "an indefinite window should give a negative precision diagonal; "
+        f"min was {naive_diag.min():.4g}")
+
+    w_q, V_q = np.linalg.eigh(q)
+    floored_diag = (V_q * V_q) @ (
+        1.0 / (np.maximum(w_q, DEFAULT_LOO_EIGENVALUE_FLOOR)
+               + DEFAULT_LOO_RIDGE))
+    assert floored_diag.min() > 0.0
+
+
+def test_precision_loo_keeps_a_genuinely_inconsistent_variant_flagged():
+    """The floor must not buy calibration by losing sensitivity."""
+    from bipred.qc import (_precision_loo, DEFAULT_LOO_RIDGE,
+                           DEFAULT_LOO_EIGENVALUE_FLOOR, DEFAULT_THRESHOLD)
+
+    R, q = _indefinite_window()
+    m = R.shape[0]
+    rng = np.random.default_rng(3)
+    w, V = np.linalg.eigh(R)
+    z = (V * np.sqrt(np.maximum(w, 0.0))) @ rng.normal(size=m)
+    # Plant an unambiguous inconsistency: a large z against its neighbours.
+    j = m // 2
+    z[j] = -np.sign(z[j] or 1.0) * 30.0
+
+    for matrix, tag in ((R, "float"), (q, "int8")):
+        stat, _t = _precision_loo(matrix, z, DEFAULT_LOO_RIDGE,
+                                  DEFAULT_LOO_EIGENVALUE_FLOOR)
+        assert stat[j] > DEFAULT_THRESHOLD, (tag, stat[j])

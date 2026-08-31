@@ -38,6 +38,41 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 ### Fixed
 
+- **The LD-consistency screen no longer manufactures drops on an indefinite
+  reference.** Its confirmation statistic `T_j = (Ω z)_j² / Ω_jj` presumes a
+  positive-definite `R + ridge I`; a thresholded or int8-quantised panel does
+  not supply one, `Ω_jj` can then be negative, and the statistic is ill-posed
+  rather than merely noisy. `_precision_loo` now spectrally floors the window
+  and inverts it in a **single eigendecomposition** —
+  `Ω = V diag(1/(max(w, floor) + ridge)) Vᵀ`, with
+  `Ω_jj = Σ_k V²_jk/(w'_k + ridge)` — so no explicit inverse is formed, no
+  `pinv` fallback is needed, and the cost is the one `eigh` the inverse cost
+  anyway.
+
+  Measured on 24 real dense windows of the converted HapMap3+ panel (14,522
+  variants), scoring the null drop rate — which should be ~0 — against
+  recovery of planted sign-flipped z-scores:
+
+  | floor | null drops D32 | null drops D8 | planted found D32 / D8 |
+  |---|---|---|---|
+  | none | 0.00% | **60.41%** | 116 / 109 of 120 |
+  | 0.001 | 0.00% | 0.02% | 116 / 118 |
+  | **0.01** | **0.00%** | **0.00%** | **115 / 118** |
+  | 0.05 | 0.00% | 0.00% | 115 / 114 |
+
+  `DEFAULT_LOO_EIGENVALUE_FLOOR = 0.01` is the smallest floor that zeroes the
+  null rate for both representations, and it recovers *more* planted
+  inconsistency than the unfloored float32 path. End to end on real blocks the
+  D8 and D32 screen masks are now identical (0 dropped of 9,958 either way,
+  against 2,779 false drops for D8 before).
+
+  This makes an int8 dense reference usable: the sampler never needed
+  definiteness — it only forms `R @ β` — but the screen inverts, and it was the
+  sole obstacle. A thresholded reference also improves, from dropping more than
+  a fifth of null variants to 1.5%, below the screen's own warning threshold;
+  `test_screen_warns_when_thresholded_ld_drops_null_z` is replaced accordingly.
+  The high-drop-rate warning is kept for the causes it still catches.
+
 - The reference-overlap diagnosis and the identifier re-anchoring borrow the
   identifier index `harmonize` already memoises on the variant table, instead
   of each building a private `{id: {(chrom, pos)}}` dict over the whole

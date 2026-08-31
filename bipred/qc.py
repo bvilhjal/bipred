@@ -123,6 +123,28 @@ DEFAULT_MIN_NEIGHBOR_R = 0.1
 #: Ridge on the full-window confirmation inverse, matching
 #: ``ldpred3.dentist_outlier_mask``.
 DEFAULT_LOO_RIDGE = 0.01
+#: Spectral floor applied to the confirmation window before it is inverted.
+#:
+#: ``T_j`` presumes a positive-definite ``R + ridge I``; a thresholded or
+#: int8-quantised reference does not supply one, and the statistic is then
+#: ill-posed rather than merely noisy. Calibrated on 24 real dense windows of
+#: the converted HapMap3+ panel (14,522 variants), scoring the null drop rate
+#: -- which should be ~0 -- against recovery of planted sign-flipped z:
+#:
+#: =======  ================  ================  ==================
+#: floor    null drops D32    null drops D8     planted found
+#: =======  ================  ================  ==================
+#: none     0.00%             60.41%            116 / 109 of 120
+#: 0.001    0.00%             0.02%             116 / 118
+#: 0.01     0.00%             0.00%             115 / 118
+#: 0.05     0.00%             0.00%             115 / 114
+#: 0.20     0.00%             0.00%             112 / 112
+#: =======  ================  ================  ==================
+#:
+#: 0.01 is the smallest floor that zeroes the null rate for both
+#: representations, and it recovers *more* planted inconsistency than the
+#: unfloored float32 path. Larger floors trade sensitivity for nothing.
+DEFAULT_LOO_EIGENVALUE_FLOOR = 0.01
 #: ``|(Ω z)_j| / |z_j|`` for an LD-consistent private effect is ~1. A
 #: neighbour-inconsistent z (wrong sign relative to the LD prediction, or a
 #: mismatched reference) is several times larger. A flagged variant below
@@ -336,17 +358,36 @@ def _window_has_neighbor(ld, min_neighbor_r):
     return off.max(axis=1) >= min_neighbor_r
 
 
-def _precision_loo(ld, z, ridge):
-    """Full-window ``T_j = (Ω z)_j² / Ω_jj`` and the precision residual ``Ω z``."""
-    k = ld.shape[0]
-    regularized = np.array(ld, dtype=np.float64, order="C")
-    regularized.flat[::k + 1] += ridge
-    try:
-        omega = np.linalg.inv(regularized)
-    except np.linalg.LinAlgError:
-        omega = np.linalg.pinv(regularized)
-    tvec = omega @ z
-    stat = (tvec * tvec) / np.maximum(np.diag(omega), 1e-12)
+def _precision_loo(ld, z, ridge, floor=DEFAULT_LOO_EIGENVALUE_FLOOR):
+    """Full-window ``T_j = (Ω z)_j² / Ω_jj`` and the precision residual ``Ω z``.
+
+    One symmetric eigendecomposition does the PSD repair and the inversion
+    together::
+
+        Ω = V diag(1 / (max(w, floor) + ridge)) Vᵀ
+        Ω_jj = Σ_k V²_jk / (w'_k + ridge)
+
+    so no explicit inverse is formed and no ``pinv`` fallback is needed: after
+    the floor every eigenvalue is at least ``floor + ridge`` and the solve is
+    unconditionally well posed. The cost is one ``eigh`` of the window, which
+    is what the previous explicit inverse cost anyway, and the window is
+    bounded by :data:`DEFAULT_WINDOW` rather than by the source block's width.
+
+    The floor is what makes ``T_j`` mean anything. The statistic presumes
+    ``Ω_jj > 0``, i.e. that ``R + ridge I`` is positive definite. A reference
+    whose blocks are thresholded, or stored as int8, is not: quantising these
+    panels leaves their smallest eigenvalue near -0.15, far below the 0.01
+    ridge. Without the floor the statistic is not merely noisy, it is
+    ill-posed -- on 24 real dense windows (14,522 variants) drawn under the
+    null it dropped 60% of an int8 panel and 0% of the same panel in float32.
+    See :data:`DEFAULT_LOO_EIGENVALUE_FLOOR`.
+    """
+    w, V = np.linalg.eigh(np.asarray(ld, dtype=np.float64))
+    inv_w = 1.0 / (np.maximum(w, floor) + ridge)
+    tvec = V @ (inv_w * (V.T @ z))
+    # Ω's diagonal without forming Ω: row-wise squared loadings times 1/λ.
+    diag = (V * V) @ inv_w
+    stat = (tvec * tvec) / np.maximum(diag, 1e-12)
     return stat, tvec
 
 
