@@ -1,6 +1,7 @@
 """Public on-ramp: sparse trait preparation, pairing, and write_weights."""
 
 from dataclasses import replace
+import warnings
 
 import numpy as np
 import pytest
@@ -606,3 +607,198 @@ def test_prepare_rejects_a_non_callable_progress(tmp_path):
     with pytest.raises(TypeError, match="callable"):
         prepare_bivariate_sumstats(cache, p1, p2, n_eff1=n, n_eff2=n,
                                    progress=42)
+
+
+def _shifted_positions_sumstats(tmp_path, ids, n, *, keep=slice(None),
+                                shift=0, name="shifted.tsv"):
+    """One trait file whose rows optionally sit at the wrong coordinates."""
+    ids = np.asarray(ids, dtype=object)[keep]
+    pos = np.arange(1, len(np.asarray(ids)) + 1)
+    path = tmp_path / name
+    _write_sumstats(
+        path, ids, ["A"] * len(ids), ["G"] * len(ids),
+        np.full(len(ids), 0.01), np.full(len(ids), 1.0 / np.sqrt(n)), n,
+        pos=pos + shift)
+    return path
+
+
+def test_full_reference_coverage_is_recorded_without_a_warning(tmp_path):
+    cache, p1, _p2, *_ = _cache_and_sumstats(tmp_path, m=60)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        trait = prepare_trait_sumstats(cache, p1, n_eff=10_000, qc=False)
+    overlap = trait.log["reference_overlap"]
+    assert overlap["n_matched"] == overlap["n_cache"] == 60
+    assert overlap["frac_of_reference"] == 1.0
+    # The unmatched-row diagnosis costs an index over the whole reference and
+    # must not be paid when coverage is fine.
+    assert overlap["diagnosed"] is False
+    assert not [w for w in caught if "LD-reference" in str(w.message)]
+
+
+def test_partial_build_shift_warns_and_names_the_genome_build(tmp_path):
+    """The 99%-lost-on-coordinates case, which used to be entirely silent."""
+    cache, _p1, _p2, _b1, _b2, n, ids, _af = _cache_and_sumstats(
+        tmp_path, m=60)
+    # Every row but the first six sits at a shifted coordinate, as a GRCh38
+    # file does against a GRCh37 reference.
+    path = tmp_path / "buildshift.tsv"
+    pos = np.arange(1, 61)
+    pos[6:] += 137
+    _write_sumstats(
+        path, ids, ["A"] * 60, ["G"] * 60, np.full(60, 0.01),
+        np.full(60, 1.0 / np.sqrt(n)), n, pos=pos)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        trait = prepare_trait_sumstats(cache, path, n_eff=n, qc=False,
+                                       label="trait")
+    overlap = trait.log["reference_overlap"]
+    assert overlap["n_matched"] == 6
+    assert overlap["frac_of_reference"] == pytest.approx(0.1)
+    assert overlap["diagnosed"] is True
+    assert overlap["n_unmatched_rows"] == 54
+    assert overlap["n_unmatched_id_elsewhere"] == 54
+    assert overlap["n_unmatched_id_absent"] == 0
+    assert overlap["build_mismatch_suspected"] is True
+    messages = [str(w.message) for w in caught
+                if issubclass(w.category, RuntimeWarning)]
+    assert any("genome-build mismatch" in m and "GRCh38" in m
+               for m in messages), messages
+    # The old n_locus_mismatch path cannot see this: harmonize rejects the
+    # row before bipred can compare loci.
+    assert trait.log["n_locus_mismatch"] == 0
+
+
+def test_a_hits_only_deposition_warns_without_blaming_the_build(tmp_path):
+    cache, _p1, _p2, _b1, _b2, n, ids, _af = _cache_and_sumstats(
+        tmp_path, m=60)
+    path = _shifted_positions_sumstats(
+        tmp_path, ids, n, keep=slice(0, 4), name="hitsonly.tsv")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        trait = prepare_trait_sumstats(cache, path, n_eff=n, qc=False)
+    overlap = trait.log["reference_overlap"]
+    assert overlap["n_matched"] == 4
+    assert overlap["n_unmatched_rows"] == 0
+    assert overlap["build_mismatch_suspected"] is False
+    messages = [str(w.message) for w in caught
+                if issubclass(w.category, RuntimeWarning)]
+    assert any("hits-only" in m for m in messages), messages
+    assert not any("genome-build mismatch" in m for m in messages), messages
+
+
+def test_a_foreign_variant_set_warns_about_absent_identifiers(tmp_path):
+    cache, _p1, _p2, _b1, _b2, n, _ids, _af = _cache_and_sumstats(
+        tmp_path, m=60)
+    # Identifiers the reference does not hold, at coordinates it does not
+    # hold either: two different variant sets, not a coordinate error.
+    foreign = np.array([f"rs{9_000_000 + i}" for i in range(60)], dtype=object)
+    path = _shifted_positions_sumstats(
+        tmp_path, foreign, n, shift=500_000, name="foreign.tsv")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with pytest.raises(ValueError, match="identifier the reference does not hold"):
+            prepare_trait_sumstats(cache, path, n_eff=n, qc=False)
+    messages = [str(w.message) for w in caught]
+    assert any("does not hold at all" in m for m in messages), messages
+
+
+def test_zero_overlap_from_a_build_shift_says_so_in_the_error(tmp_path):
+    cache, _p1, _p2, _b1, _b2, n, ids, _af = _cache_and_sumstats(
+        tmp_path, m=60)
+    path = _shifted_positions_sumstats(
+        tmp_path, ids, n, shift=1_000, name="allshifted.tsv")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with pytest.raises(ValueError, match="check the genome build"):
+            prepare_trait_sumstats(cache, path, n_eff=n, qc=False)
+
+
+def test_reanchoring_recovers_a_build_shifted_trait(tmp_path):
+    """The repair path: identifiers agree, coordinates do not."""
+    cache, _p1, _p2, _b1, _b2, n, ids, _af = _cache_and_sumstats(
+        tmp_path, m=60)
+    path = _shifted_positions_sumstats(
+        tmp_path, ids, n, shift=137, name="shifted-all.tsv")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with pytest.raises(ValueError, match="check the genome build"):
+            prepare_trait_sumstats(cache, path, n_eff=n, qc=False)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        trait = prepare_trait_sumstats(
+            cache, path, n_eff=n, qc=False, label="trait",
+            reanchor_on_identifier=True)
+    assert len(trait) == 60
+    assert trait.log["reference_overlap"]["frac_of_reference"] == 1.0
+    log = trait.log["reanchor"]
+    assert log["applied"] is True
+    assert log["n_anchored"] == log["n_moved"] == 60
+    assert log["n_dropped_absent_identifier"] == 0
+    messages = [str(w.message) for w in caught]
+    assert any("re-anchored 60 of 60 rows" in m for m in messages), messages
+    assert any("not a chain-file liftover" in m for m in messages), messages
+
+
+def test_reanchoring_a_build_matched_trait_moves_nothing(tmp_path):
+    cache, p1, _p2, *_ = _cache_and_sumstats(tmp_path, m=60)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        plain = prepare_trait_sumstats(cache, p1, n_eff=10_000, qc=False)
+        repaired = prepare_trait_sumstats(cache, p1, n_eff=10_000, qc=False,
+                                          reanchor_on_identifier=True)
+    # Idempotent on correct input: same panel, same effects, no warning.
+    np.testing.assert_array_equal(repaired.indices, plain.indices)
+    np.testing.assert_allclose(repaired.beta_hat, plain.beta_hat)
+    assert repaired.log["reanchor"]["n_moved"] == 0
+    assert repaired.log["reanchor"]["n_anchored"] == 60
+    assert not [w for w in caught if "re-anchored" in str(w.message)]
+
+
+def test_reanchoring_refuses_a_positional_match_to_a_different_variant(
+        tmp_path):
+    """A wrong-variant match is worse than a lost variant."""
+    cache, _p1, _p2, _b1, _b2, n, ids, _af = _cache_and_sumstats(
+        tmp_path, m=60)
+    # Identifiers the reference lacks, sitting exactly on reference positions:
+    # harmonize's positional fallback matches them to the wrong variants.
+    foreign = np.array([f"rs{9_000_000 + i}" for i in range(60)], dtype=object)
+    path = _shifted_positions_sumstats(
+        tmp_path, foreign, n, name="colliding.tsv")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        loose = prepare_trait_sumstats(cache, path, n_eff=n, qc=False)
+        assert len(loose) == 60          # every one a different variant
+
+        with pytest.raises(ValueError, match="no usable variant remains"):
+            prepare_trait_sumstats(cache, path, n_eff=n, qc=False,
+                                   reanchor_on_identifier=True)
+
+
+def test_reference_loci_borrows_the_cached_identifier_index(tmp_path):
+    """The diagnosis must not build a second full-reference index.
+
+    A private ``{id: {(chrom, pos)}}`` dict over a 1.4M-variant reference cost
+    roughly 0.6 GiB per call, and a re-anchored preparation has two call sites
+    live at once. ``harmonize`` already memoises an identifier index on the
+    variant table, so this asserts the borrowing rather than the byte count.
+    """
+    from bipred._ldpred3_compat import _variant_indices
+    from bipred.prepare import _ReferenceLoci, _cache_variant_table
+
+    cache, *_rest = _cache_and_sumstats(tmp_path, m=12)
+    with prepare_ld_cache(cache) as opened:
+        variants = _cache_variant_table(opened)
+        by_id = _variant_indices(variants)[1]
+        first = _ReferenceLoci(variants)
+        second = _ReferenceLoci(variants)
+        # Same object, not an equal copy: no second index was allocated.
+        assert first._by_id is by_id
+        assert second._by_id is by_id
+        # And it still answers the question the diagnosis asks.
+        assert first.loci("rs3") == {("1", 4)}
+        assert first.loci("rs9999") is None

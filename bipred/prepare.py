@@ -8,7 +8,7 @@ index space, so QC and harmonization can be reused before a pair is formed.
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Optional
 import warnings
 
@@ -27,6 +27,7 @@ from ldpred3.interop import (
 )
 
 from . import _progress
+from ._ldpred3_compat import _variant_indices
 
 
 __all__ = [
@@ -300,6 +301,301 @@ def _norm_chrom_label(value):
     return text.upper()
 
 
+#: Warn when the aligned trait covers less than this fraction of the LD
+#: reference. LDSC's ``M``, the ``h2`` denominator, and the LD-consistency
+#: screen's window coverage are all defined on the *full* reference, so a
+#: sparsely covered panel changes what those numbers mean.
+DEFAULT_REFERENCE_COVERAGE_WARN = 0.5
+#: Below this fraction the fit is no longer a genome-wide analysis of that
+#: reference; the wording escalates and names the likely causes.
+SEVERE_REFERENCE_COVERAGE = 0.1
+#: Call a coordinate/build mismatch when at least this fraction of the
+#: unmatched rows carry an identifier the reference holds at a *different*
+#: locus. Anything less is the ordinary case of two different variant sets.
+DEFAULT_BUILD_MISMATCH_FRACTION = 0.2
+
+
+class _ReferenceLoci:
+    """Loci carrying each reference identifier, over ldpred3's cached index.
+
+    ``harmonize`` builds an identifier -> row-index map and memoises it on the
+    variant table, and a caller preparing several traits against one reference
+    pays for it once. Borrowing that map and reading ``chrom``/``pos`` on
+    demand keeps this lookup free; the private ``{id: {(chrom, pos)}}`` dict it
+    replaces cost roughly half a gigabyte per call on a 1.4M-variant reference,
+    and two calls could be live at once during a re-anchored preparation.
+    """
+
+    __slots__ = ("_by_id", "_chrom", "_pos", "_memo")
+
+    def __init__(self, variants):
+        self._by_id = _variant_indices(variants)[1]
+        self._chrom = variants.chrom
+        self._pos = variants.pos
+        self._memo = {}
+
+    def __len__(self):
+        return len(self._by_id)
+
+    def _norm(self, raw):
+        norm = self._memo.get(raw)
+        if norm is None:
+            norm = self._memo[raw] = _norm_chrom_label(raw)
+        return norm
+
+    def loci(self, key):
+        """Normalised ``(chrom, pos)`` pairs for ``key``, or ``None``."""
+        rows = self._by_id.get(key)
+        if not rows:
+            return None
+        # An identifier at one locus with several allele records is the common
+        # case, so de-duplicate: callers ask "how many distinct loci", not
+        # "how many rows".
+        return {(self._norm(self._chrom[gi]), int(self._pos[gi]))
+                for gi in rows}
+
+
+def _diagnose_unmatched(sumstats, variants, harmonized):
+    """Split the unmatched GWAS rows into build-mismatch and absent-variant.
+
+    ``harmonize`` rejects a unique identifier whose chrom/pos disagrees with
+    the reference rather than accepting it at the wrong locus, so a whole-file
+    coordinate error (GRCh38 statistics against a GRCh37 reference, or CHR and
+    BP read from the wrong columns) leaves *no* trace beyond a collapsed match
+    count. Recover the distinction here: an unmatched row whose identifier the
+    reference does hold, at a locus that disagrees, is a coordinate problem,
+    not a variant the reference lacks.
+    """
+    n_rows = len(sumstats.id)
+    matched_rows = np.zeros(n_rows, dtype=bool)
+    if harmonized.src_index is not None and len(harmonized):
+        matched_rows[np.asarray(harmonized.src_index, dtype=np.int64)] = True
+    unmatched = np.where(~matched_rows)[0]
+    report = {"n_unmatched_rows": int(unmatched.size),
+              "n_unmatched_id_elsewhere": 0,
+              "n_unmatched_id_absent": 0,
+              "n_unmatched_id_missing": 0,
+              "examples": []}
+    if unmatched.size == 0:
+        return report
+    index = _ReferenceLoci(variants)
+    ss_id, ss_chrom, ss_pos = sumstats.id, sumstats.chrom, sumstats.pos
+    memo = {}
+    for k in unmatched:
+        key = ss_id[k]
+        if not key:
+            report["n_unmatched_id_missing"] += 1
+            continue
+        loci = index.loci(key)
+        if loci is None:
+            report["n_unmatched_id_absent"] += 1
+            continue
+        raw = ss_chrom[k]
+        norm = memo.get(raw)
+        if norm is None:
+            norm = memo[raw] = _norm_chrom_label(raw)
+        try:
+            here = int(ss_pos[k])
+        except (TypeError, ValueError):
+            here = 0
+        if (norm, here) in loci:
+            # Present at the same locus: the row failed on alleles, on a
+            # duplicate, or on a non-finite effect, all of which harmonize
+            # already counts separately.
+            continue
+        report["n_unmatched_id_elsewhere"] += 1
+        if len(report["examples"]) < 3:
+            ref_chrom, ref_pos = sorted(loci)[0]
+            report["examples"].append(
+                f"{key} GWAS {norm}:{here} vs reference "
+                f"{ref_chrom}:{ref_pos}")
+    return report
+
+
+def _reanchor_on_identifier(sumstats, variants, *, label,
+                            warning_stacklevel):
+    """Move each row onto the reference's own coordinates for its identifier.
+
+    This is the coordinate repair for a build mismatch when the identifiers
+    are trustworthy and shared, which is the ordinary case for a GWAS Catalog
+    harmonised file (``hm_rsid`` is dbSNP-mapped) against an rsID-keyed
+    reference. It is *not* a chain-file liftover: no interval mapping is
+    consulted, and no coordinate is invented. Each row whose identifier the
+    reference holds at exactly one locus is re-stamped with that locus, so
+    the pair is thereafter compared on the reference's build, and alleles are
+    still checked afterwards by :func:`harmonize` exactly as before.
+
+    Two classes of row are *dropped* rather than re-anchored:
+
+    1. an identifier the reference does not hold. Its coordinates are on the
+       other build, so leaving it in place would expose it to positional
+       matching, where a GRCh38 coordinate can land on a *different* variant's
+       GRCh37 coordinate and match on alleles by chance. A wrong-variant match
+       is worse than a lost variant.
+    2. an identifier the reference holds at more than one locus. Nothing but
+       the coordinates could choose between them, and the coordinates are the
+       quantity under repair.
+
+    Prefer a properly lifted-over file with its chain and its failed mappings
+    recorded. Use this when the alternative is discarding 99% of the GWAS, and
+    read the returned counts: they are the audit trail.
+    """
+    ids = sumstats.id
+    n_rows = len(ids)
+    index = _ReferenceLoci(variants)
+    chrom = np.array(sumstats.chrom, dtype=object)
+    pos = np.array(sumstats.pos, dtype=np.int64)
+    keep = np.ones(n_rows, dtype=bool)
+    memo = {}
+    n_anchored = n_moved = n_ambiguous = n_absent = n_missing_id = 0
+    for k in range(n_rows):
+        key = ids[k]
+        if not key:
+            n_missing_id += 1
+            keep[k] = False
+            continue
+        loci = index.loci(key)
+        if loci is None:
+            n_absent += 1
+            keep[k] = False
+            continue
+        if len(loci) > 1:
+            n_ambiguous += 1
+            keep[k] = False
+            continue
+        ref_chrom, ref_pos = next(iter(loci))
+        raw = chrom[k]
+        norm = memo.get(raw)
+        if norm is None:
+            norm = memo[raw] = _norm_chrom_label(raw)
+        if norm != ref_chrom or int(pos[k]) != ref_pos:
+            n_moved += 1
+        chrom[k] = ref_chrom
+        pos[k] = ref_pos
+        n_anchored += 1
+    log = {"applied": True, "n_rows": int(n_rows),
+           "n_anchored": int(n_anchored), "n_moved": int(n_moved),
+           "n_dropped_ambiguous_locus": int(n_ambiguous),
+           "n_dropped_absent_identifier": int(n_absent),
+           "n_dropped_missing_identifier": int(n_missing_id)}
+    anchored = replace(sumstats, chrom=chrom, pos=pos).subset(keep)
+    if n_moved:
+        warnings.warn(
+            f"{label}: re-anchored {n_moved:,} of {n_rows:,} rows onto the LD "
+            "reference's coordinates for their identifiers, because the two "
+            "sides disagreed on where those variants are. The fit is "
+            "therefore on the reference's genome build, keyed on identifier "
+            f"rather than on position. {n_absent:,} rows carry an identifier "
+            f"the reference does not hold and {n_ambiguous:,} an identifier "
+            "it holds at several loci; both were dropped rather than matched "
+            "positionally on the wrong build. This is not a chain-file "
+            "liftover: record it as identifier-keyed re-anchoring, and "
+            "prefer a properly lifted-over input where one is available.",
+            RuntimeWarning, stacklevel=warning_stacklevel)
+    return anchored, log
+
+
+def _reference_overlap(sumstats, variants, harmonized, n_matched, *, label,
+                       warning_stacklevel):
+    """Record the reference-coverage fractions, and warn when coverage is low.
+
+    Zero overlap is an error elsewhere. What this catches is the case that
+    still produces numbers: a fit that runs on a small, unrepresentative
+    corner of the LD reference.
+    """
+    n_rows = int(len(sumstats.id))
+    n_cache = int(len(variants.id))
+    overlap = {
+        "n_sumstats_offered": n_rows,
+        "n_cache": n_cache,
+        "n_matched": int(n_matched),
+        "frac_of_reference": (float(n_matched) / n_cache) if n_cache else 0.0,
+        "frac_of_sumstats": (float(n_matched) / n_rows) if n_rows else 0.0,
+        "diagnosed": False,
+    }
+    if overlap["frac_of_reference"] >= DEFAULT_REFERENCE_COVERAGE_WARN:
+        overlap["reason"] = "adequate_coverage"
+        return overlap
+    if n_rows == 0:
+        # Nothing reached harmonization, so the reference says nothing about
+        # why. Naming the build here would be a guess.
+        overlap.update(reason="no_rows_offered", diagnosed=False)
+        warnings.warn(
+            f"{label}: summary-statistics QC removed every row before "
+            "alignment to the LD reference, so no variant could match. Check "
+            "the QC filters against the file's columns -- a missing or "
+            "unparsed sample-size, allele-frequency, or standard-error "
+            "column removes every row -- before suspecting the reference.",
+            RuntimeWarning, stacklevel=warning_stacklevel)
+        return overlap
+    diagnosis = _diagnose_unmatched(sumstats, variants, harmonized)
+    overlap.update(diagnosis, diagnosed=True)
+    n_unmatched = diagnosis["n_unmatched_rows"]
+    elsewhere = diagnosis["n_unmatched_id_elsewhere"]
+    build_mismatch = bool(
+        n_unmatched
+        and elsewhere / n_unmatched >= DEFAULT_BUILD_MISMATCH_FRACTION)
+    overlap["build_mismatch_suspected"] = build_mismatch
+    absent = diagnosis["n_unmatched_id_absent"]
+    overlap["reason"] = (
+        "build_mismatch" if build_mismatch else
+        "absent_identifiers" if absent and absent >= elsewhere else
+        "rows_rejected_at_matched_locus" if n_unmatched else
+        "sparse_sumstats")
+    severe = overlap["frac_of_reference"] < SEVERE_REFERENCE_COVERAGE
+    lines = [
+        f"{label}: only {int(n_matched):,} of {n_cache:,} LD-reference "
+        f"variants are covered ({overlap['frac_of_reference']:.1%}), from "
+        f"{n_rows:,} GWAS rows offered to harmonization."]
+    if severe:
+        lines.append(
+            "A fit on this few reference variants is not a genome-wide "
+            "analysis of that reference: the LD blocks are nearly empty, the "
+            "LD-consistency screen leaves most windows below its minimum "
+            "size, and LDSC keeps the full reference M, so h2 and "
+            "polygenicity are on a denominator the data do not populate.")
+    else:
+        lines.append(
+            "LDSC keeps the full reference M and the LD blocks stay sparse, "
+            "so h2, polygenicity, and screen coverage are all affected.")
+    if build_mismatch:
+        lines.append(
+            f"{elsewhere:,} of the {n_unmatched:,} unmatched rows carry an "
+            "identifier the reference does hold, at coordinates that "
+            "disagree. That is the signature of a genome-build mismatch "
+            "(GRCh38 summary statistics against a GRCh37 reference, or the "
+            "reverse) or of CHR/BP read from the wrong columns, not of a "
+            "reference that lacks those variants. Lift the summary "
+            "statistics over to the reference's build -- recording the chain "
+            "file and the failed mappings -- or use a reference on the GWAS "
+            "build; do not drop the coordinates to force an "
+            "identifier-only match.")
+        if diagnosis["examples"]:
+            lines.append("Disagreeing loci: "
+                         + "; ".join(diagnosis["examples"]) + ".")
+    elif overlap["reason"] == "absent_identifiers":
+        lines.append(
+            f"{absent:,} of the {n_unmatched:,} unmatched rows carry an "
+            "identifier the reference does not hold at all, so the two "
+            "variant sets differ rather than disagreeing on coordinates.")
+    elif overlap["reason"] == "rows_rejected_at_matched_locus":
+        lines.append(
+            f"The {n_unmatched:,} unmatched rows are mostly at loci the "
+            "reference does hold, so they were rejected on alleles, on "
+            "strand ambiguity, on a duplicate identifier, or on a "
+            "non-finite effect rather than on coordinates; read the "
+            "harmonize counts in the log.")
+    else:
+        lines.append(
+            "Every offered row matched, so the GWAS itself covers only this "
+            "part of the reference -- a hits-only or array-restricted "
+            "deposition rather than a misalignment. Genome-wide estimands "
+            "cannot be read off such a subset.")
+    warnings.warn(" ".join(lines), RuntimeWarning,
+                  stacklevel=warning_stacklevel)
+    return overlap
+
+
 def _locus_mismatch(sumstats, variants, harmonized):
     """Rows whose rsID matched a reference variant at a different chrom/pos.
 
@@ -321,7 +617,8 @@ def _locus_mismatch(sumstats, variants, harmonized):
     return comparable & ((src_pos != tgt_pos) | chrom_bad)
 
 
-def _align_one(path, variants, *, n_eff, qc, qc_params, columns, label):
+def _align_one(path, variants, *, n_eff, qc, qc_params, columns, label,
+               reanchor_on_identifier=False):
     try:
         columns = {} if columns is None else dict(columns)
     except (TypeError, ValueError):
@@ -355,6 +652,10 @@ def _align_one(path, variants, *, n_eff, qc, qc_params, columns, label):
             raise ValueError("qc_params must be a mapping") from None
         keep, qc_log = qc_sumstats(ss, **effective_qc)
         ss = ss.subset(keep)
+    reanchor_log = {"applied": False}
+    if reanchor_on_identifier:
+        ss, reanchor_log = _reanchor_on_identifier(
+            ss, variants, label=label, warning_stacklevel=4)
     h = harmonize(ss, variants, drop_ambiguous=True)
     beta = np.asarray(h.beta, dtype=float)
     se = np.asarray(h.se, dtype=float)
@@ -378,6 +679,8 @@ def _align_one(path, variants, *, n_eff, qc, qc_params, columns, label):
                 "chrom/pos disagree with the LD reference (possible mixed "
                 "genome build).",
                 RuntimeWarning, stacklevel=3)
+    overlap = _reference_overlap(
+        ss, variants, h, int(ok.sum()), label=label, warning_stacklevel=3)
     indices = np.asarray(h.var_index, dtype=np.int64)[ok]
     # Keep this boundary correct even if an interoperability backend returns
     # matches in source-file order. Cache-order sorting makes later sparse
@@ -403,6 +706,8 @@ def _align_one(path, variants, *, n_eff, qc, qc_params, columns, label):
             "n_invalid": n_invalid,
             "n_locus_mismatch": n_locus_mismatch,
             "n_matched": int(ok.sum()),
+            "reference_overlap": overlap,
+            "reanchor": reanchor_log,
         },
     )
 
@@ -417,17 +722,46 @@ def _trait_label(trait, fallback):
 
 def _require_usable(trait, fallback):
     if len(trait) == 0:
-        raise ValueError(
+        message = (
             f"{_trait_label(trait, fallback)}: all GWAS variants were removed "
             "by sumstats QC or harmonization against the LD reference (no "
             "usable variant remains)")
+        overlap = trait.log.get("reference_overlap") \
+            if isinstance(trait.log, dict) else None
+        reason = overlap.get("reason") if isinstance(overlap, dict) else None
+        if reason == "build_mismatch":
+            message += (
+                f"; {overlap['n_unmatched_id_elsewhere']:,} rows carry an "
+                "identifier the reference holds at different coordinates, so "
+                "check the genome build of both sides before anything else")
+        elif reason == "no_rows_offered":
+            message += (
+                "; summary-statistics QC removed every row before alignment, "
+                "so the reference was never consulted -- check the QC "
+                "filters against the file's columns (a missing or unparsed "
+                "sample-size, frequency, or standard-error column removes "
+                "every row)")
+        elif reason == "absent_identifiers":
+            message += (
+                f"; {overlap.get('n_unmatched_id_absent', 0):,} rows carry an "
+                "identifier the reference does not hold, so the variant sets "
+                "differ (check the build, the ancestry panel, and the "
+                "identifier column)")
+        elif reason == "rows_rejected_at_matched_locus":
+            message += (
+                f"; the {overlap.get('n_unmatched_rows', 0):,} unmatched rows "
+                "are mostly at loci the reference does hold, so read the "
+                "harmonize allele, strand, duplicate, and non-finite counts "
+                "in the log")
+        raise ValueError(message)
 
 
 def _prepare_trait(cache, sumstats, *, n_eff, qc, qc_params, columns, label,
-                   require_usable=True):
+                   require_usable=True, reanchor_on_identifier=False):
     trait = _align_one(
         sumstats, _cache_variant_table(cache), n_eff=n_eff, qc=qc,
-        qc_params=qc_params, columns=columns, label=label)
+        qc_params=qc_params, columns=columns, label=label,
+        reanchor_on_identifier=reanchor_on_identifier)
     if require_usable:
         _require_usable(trait, label)
     return trait
@@ -435,7 +769,8 @@ def _prepare_trait(cache, sumstats, *, n_eff, qc, qc_params, columns, label,
 
 def prepare_trait_sumstats(
         ld_cache, sumstats, *, n_eff=None, n_cases=None, n_controls=None,
-        columns=None, qc=True, qc_params=None, label="trait", progress=None):
+        columns=None, qc=True, qc_params=None, label="trait", progress=None,
+        reanchor_on_identifier=False):
     """QC, harmonize, and standardize one GWAS against a full LD cache.
 
     The returned :class:`PreparedTrait` stores only usable variants, with
@@ -453,6 +788,12 @@ def prepare_trait_sumstats(
 
     ``progress``, when given, receives two step events: loading the LD
     reference, then reading/QC/harmonizing/standardizing the trait.
+
+    ``reanchor_on_identifier`` repairs a genome-build mismatch by taking each
+    row's coordinates from the reference entry that carries its identifier;
+    see :func:`_reanchor_on_identifier` for what it drops and why. It is off
+    by default: a build mismatch should be seen, not absorbed. The log records
+    the overlap fractions under ``reference_overlap`` either way.
     """
     resolved_n = _resolve_n_eff(n_eff, n_cases, n_controls, label)
     _progress.validate(progress)
@@ -464,7 +805,8 @@ def prepare_trait_sumstats(
             unit="step")
         return _prepare_trait(
             cache, sumstats, n_eff=resolved_n, qc=qc, qc_params=qc_params,
-            columns=columns, label=label)
+            columns=columns, label=label,
+            reanchor_on_identifier=reanchor_on_identifier)
     finally:
         if owned:
             cache.close()
@@ -833,7 +1175,8 @@ def prepare_bivariate_sumstats(
         columns1=None, columns2=None, qc=True, qc_params=None, screen=False,
         screen_rounds=4, screen_window=1000, screen_threshold=29.72,
         screen_eigenvalue_floor=1e-3, screen_seed=0, screen_ncores=1,
-        screen_verbose=False, min_af_corr=None, progress=None):
+        screen_verbose=False, min_af_corr=None, progress=None,
+        reanchor_on_identifier=False):
     """Load an ldpred3 cache and two GWAS files; return a joint-fit panel.
 
     Both files are QC'd (optional), harmonized to the cache's counted allele,
@@ -845,6 +1188,8 @@ def prepare_bivariate_sumstats(
 
     ``columns1`` / ``columns2`` map canonical LDpred3 fields to file columns.
     ``qc_params`` is passed to :func:`ldpred3.qc.qc_sumstats` for both traits.
+    ``reanchor_on_identifier`` applies the identifier-keyed coordinate repair
+    of :func:`prepare_trait_sumstats` to both traits.
 
     ``screen=True`` first forms the joint finite panel, then applies
     :func:`bipred.qc.ld_consistency_screen` to each trait's raw GWAS z-score
@@ -882,12 +1227,14 @@ def prepare_bivariate_sumstats(
                          unit="step")
         trait1 = _prepare_trait(
             cache, sumstats1, n_eff=n1, qc=qc, qc_params=qc_params,
-            columns=columns1, label="trait1", require_usable=False)
+            columns=columns1, label="trait1", require_usable=False,
+            reanchor_on_identifier=reanchor_on_identifier)
         _progress.report(progress, "read and QC trait 2", 2, n_steps,
                          unit="step")
         trait2 = _prepare_trait(
             cache, sumstats2, n_eff=n2, qc=qc, qc_params=qc_params,
-            columns=columns2, label="trait2", require_usable=False)
+            columns=columns2, label="trait2", require_usable=False,
+            reanchor_on_identifier=reanchor_on_identifier)
         _progress.report(progress, "harmonize against the LD reference",
                          3, n_steps, unit="step")
         # A trait with zero usable variants (QC dropped all, or none matched

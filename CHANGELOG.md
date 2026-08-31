@@ -5,7 +5,46 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 ## [Unreleased]
 
+### Added
+
+- `prepare_trait_sumstats` and `prepare_bivariate_sumstats` record the
+  reference-coverage fractions under `log["reference_overlap"]` and **warn**
+  when the aligned trait covers less than half of the LD reference. Zero
+  overlap was already an error; a fit on a small corner of the reference was
+  silent, and it is exactly the case where LDSC keeps the full reference `M`,
+  the LD blocks are nearly empty, and the consistency screen leaves most
+  windows below `MIN_WINDOW`.
+  The warning names the dominant cause rather than guessing: rows carrying an
+  identifier the reference holds at *different* coordinates are reported as a
+  **genome-build mismatch** (GRCh38 statistics against a GRCh37 reference, or
+  CHR/BP read from the wrong columns), with example loci; rows carrying an
+  identifier the reference does not hold are reported as two different variant
+  sets; and a file whose every row was removed by QC before alignment is
+  reported as such instead of blaming the reference. Current `harmonize`
+  rejects a unique identifier at the wrong locus, so a build mismatch left no
+  trace beyond a collapsed `n_matched` and `n_locus_mismatch` stayed 0.
+- `reanchor_on_identifier=True` repairs that mismatch: each row's chromosome
+  and position are taken from the reference entry carrying its identifier, so
+  the pair is compared on the reference's build, and `harmonize` still checks
+  the alleles. Rows whose identifier the reference does not hold, or holds at
+  several loci, are dropped rather than exposed to positional matching, where
+  a GRCh38 coordinate can land on a different variant's GRCh37 coordinate and
+  agree on alleles by chance. It is not a chain-file liftover: no interval
+  mapping is consulted and no coordinate is invented. Off by default, warns
+  when it moves anything, and records `n_anchored`, `n_moved`, and each drop
+  reason under `log["reanchor"]`. On a real GRCh38 GWAS Catalog deposit
+  against the GRCh37 HapMap3+ reference this took coverage from 0.9% to
+  91.2% with no identifier dropped.
+
 ### Fixed
+
+- The reference-overlap diagnosis and the identifier re-anchoring borrow the
+  identifier index `harmonize` already memoises on the variant table, instead
+  of each building a private `{id: {(chrom, pos)}}` dict over the whole
+  reference. On the 1,444,196-variant HapMap3+ panel the private dicts cost
+  **1,269 MiB** across the two call sites a re-anchored preparation has live at
+  once; the borrowing costs 0 MiB once a caller has harmonized anything, and
+  the web caller pre-warms it per job. Measured with `tracemalloc`.
 
 - The LD-consistency screen confirms split-half flags with the full-window
   DENTIST statistic and keeps LD-consistent large effects (including

@@ -42,6 +42,12 @@ _MODULE_NAMES = {
         "_validate_boolean_controls",
     ),
     "ldpred3.ld_repr": ("_Q8",),
+    # ``harmonize`` already builds an identifier -> row-index map and caches it
+    # on the variant table, and the web caller pre-warms it once per job. The
+    # overlap diagnosis and the identifier re-anchoring need exactly that map,
+    # so borrowing it costs nothing; building a private one over a 1.4M-variant
+    # reference cost several hundred megabytes per call.
+    "ldpred3.harmonize": ("_variant_indices",),
     # Nesting a thread pool over BLAS is safe only for some builds of it, and
     # ldpred3 already owns that determination. Importing it here rather than
     # re-deriving it keeps one answer to the question across both packages.
