@@ -159,6 +159,31 @@ DEFAULT_DROP_FRACTION_WARN = 0.05
 #: size :data:`MIN_WINDOW`. Untested variants are kept.
 DEFAULT_UNTESTED_FRACTION_WARN = 0.05
 
+#: Working precision for the screen's window statistics.
+#:
+#: The stored LD is int8 or float32, never float64, and after the confirmation
+#: window is floored at :data:`DEFAULT_LOO_EIGENVALUE_FLOOR` and ridged at
+#: :data:`DEFAULT_LOO_RIDGE` its condition number is about 50 -- nine digits
+#: inside float32's range. Widening 8-bit correlations to 64-bit floats before
+#: an eigendecomposition therefore buys no accuracy: measured on real windows,
+#: ``T_j`` moves by a worst relative 6e-06 against a threshold of 29.72, which
+#: is 2e-04 of one chi-square unit.
+#:
+#: Replacing the eigendecomposition with an adaptive uniform ridge plus an LU
+#: solve -- cheap in flops, and enough to make the operator definite -- was
+#: measured and rejected: on the 24-window benchmark below it kept the null
+#: rate at zero but found 104 of 120 planted inconsistencies against the
+#: floor's 116, for only 1.1-1.6x wall clock. A uniform shift damps the whole
+#: spectrum, where the floor moves only the eigenvalues that need moving, so
+#: borderline inconsistencies stop clearing the threshold. The spectral floor
+#: is worth its eigendecomposition.
+#:
+#: It is a memory saving rather than a speed one. The eigendecomposition is
+#: compute-bound, so the same real windows took 0.152 s in float32 against
+#: 0.153 s in float64; what halves is the window working set, which at a
+#: 1,000-variant window is 8 MiB against 4 MiB per live window per worker.
+_WORK_DTYPE = np.float32
+
 #: Long-range LD regions, GRCh37/hg19, as ``(chrom, start, end, label)``.
 #:
 #: The 24 regions of Price et al. 2008 (*Am J Hum Genet* 83:132-135): inversions
@@ -213,16 +238,16 @@ def _window_ld(block, local):
     if isinstance(block, LowRankLD):
         raw_factor = np.asarray(block.U)[local]
         if raw_factor.dtype == np.int8:
-            factor = raw_factor.astype(np.float64) * block.scale
+            factor = raw_factor.astype(_WORK_DTYPE) * _WORK_DTYPE(block.scale)
         else:
             # The fitter normalises every floating factor to contiguous D32.
             # Round only the requested rows before widening, matching that
             # payload without copying the full factor.
-            factor = (raw_factor.astype(np.float32).astype(np.float64)
-                      * block.scale)
+            factor = (raw_factor.astype(_WORK_DTYPE)
+                      * _WORK_DTYPE(block.scale))
         out = factor @ factor.T
         out[np.diag_indices(len(local))] += np.asarray(
-            block.residual_diag, dtype=np.float64)[local]
+            block.residual_diag, dtype=_WORK_DTYPE)[local]
         return out
     raw = np.asarray(block)
     # Slice in the storage dtype before widening.  Casting a whole D32 block
@@ -233,11 +258,11 @@ def _window_ld(block, local):
         # Dense D8 uses ldpred3's round(R * 127) representation.  Treating its
         # stored integers as correlations makes an otherwise clean panel look
         # maximally inconsistent.
-        return np.asarray(window, dtype=np.float64) * (1.0 / _Q8)
-    # The default fitter normalises non-D8 dense input to D32 once. Cast the
-    # window through float32 before widening so QC evaluates those same values
-    # without allocating a full-block copy.
-    return np.asarray(window, dtype=np.float32).astype(np.float64)
+        return np.asarray(window, dtype=_WORK_DTYPE) * _WORK_DTYPE(1.0 / _Q8)
+    # The default fitter normalises non-D8 dense input to D32 once, so this is
+    # the dtype QC should evaluate -- and the previous widening to float64
+    # after that cast was pure cost.
+    return np.asarray(window, dtype=_WORK_DTYPE)
 
 
 def _dentist_statistic(ld, z, predictors, targets, eigenvalue_floor):
@@ -348,12 +373,12 @@ def _selected_window_ld(block, source_rows, local, dense_lowrank):
     out = factor @ factor.T
     out[np.diag_indices(rows.size)] += np.asarray(
         block.residual_diag)[rows].astype(np.float32, copy=False)
-    return np.asarray(out, dtype=np.float32).astype(np.float64)
+    return np.asarray(out, dtype=_WORK_DTYPE)
 
 
 def _window_has_neighbor(ld, min_neighbor_r):
     """Whether each window row has an off-diagonal partner above the floor."""
-    off = np.abs(ld, dtype=np.float64)
+    off = np.abs(ld, dtype=_WORK_DTYPE)
     np.fill_diagonal(off, 0.0)
     return off.max(axis=1) >= min_neighbor_r
 
@@ -382,12 +407,13 @@ def _precision_loo(ld, z, ridge, floor=DEFAULT_LOO_EIGENVALUE_FLOOR):
     null it dropped 60% of an int8 panel and 0% of the same panel in float32.
     See :data:`DEFAULT_LOO_EIGENVALUE_FLOOR`.
     """
-    w, V = np.linalg.eigh(np.asarray(ld, dtype=np.float64))
-    inv_w = 1.0 / (np.maximum(w, floor) + ridge)
-    tvec = V @ (inv_w * (V.T @ z))
+    w, V = np.linalg.eigh(np.asarray(ld, dtype=_WORK_DTYPE))
+    inv_w = _WORK_DTYPE(1.0) / (np.maximum(w, _WORK_DTYPE(floor))
+                                + _WORK_DTYPE(ridge))
+    tvec = V @ (inv_w * (V.T @ np.asarray(z, dtype=_WORK_DTYPE)))
     # Ω's diagonal without forming Ω: row-wise squared loadings times 1/λ.
     diag = (V * V) @ inv_w
-    stat = (tvec * tvec) / np.maximum(diag, 1e-12)
+    stat = (tvec * tvec) / np.maximum(diag, _WORK_DTYPE(1e-12))
     return stat, tvec
 
 
@@ -426,7 +452,9 @@ def _settle_block(task, *, z, window, threshold, eigenvalue_floor):
     block, idx, source_rows, dense_lowrank, round_seeds = task
     keep = np.ones(idx.size, dtype=bool)
     tested = np.zeros(idx.size, dtype=bool)
-    zb = z[idx]
+    # Keep z in the window dtype: a float64 z would upcast every product back
+    # and undo the saving above.
+    zb = np.asarray(z, dtype=_WORK_DTYPE)[idx]
     dropped = np.zeros(len(round_seeds), dtype=np.int64)
     for round_no, round_seed in enumerate(round_seeds):
         rng = np.random.default_rng(round_seed)

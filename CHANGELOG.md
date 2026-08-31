@@ -5,6 +5,25 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 ## [Unreleased]
 
+The project is now `0.3.13.dev0`. The version moves because the LD-consistency
+screen's working precision changed, which shifts its mask in borderline cases.
+A consumer keying prepared artifacts on `bipred.__version__` therefore
+rebuilds rather than mixing masks computed at two precisions.
+
+### Changed
+
+- The screen's window statistics work in **float32** rather than float64. The
+  stored LD is int8 or float32, and after the confirmation window is floored
+  and ridged its condition number is about 50, so the widening bought no
+  accuracy: `T_j` moves by a worst relative 6e-06 against a threshold of
+  29.72. On real blocks the D8 and D32 masks remain identical. The D32 path
+  had been converting to float32 and then widening straight back to float64.
+
+  It is a memory saving, not a speed one: the eigendecomposition is
+  compute-bound, so the same real windows took 0.152 s against 0.153 s. What
+  halves is the live window working set, 8 MiB to 4 MiB per 1,000-variant
+  window per worker.
+
 ### Added
 
 - `prepare_trait_sumstats` and `prepare_bivariate_sumstats` record the
