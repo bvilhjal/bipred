@@ -71,6 +71,11 @@ class MultiChainBivariateResult:
 
     ``posterior.retained_iterations`` counts all pooled draws, while
     ``retained_per_chain`` records the fixed trace length of each chain.
+
+    This result does not report predictive R2. The current sampler retains
+    scalar genetic quadratics, not the per-sweep effect vectors needed for the
+    cross-chain predictive estimator. In particular,
+    ``posterior.genetic_samples`` must not be relabelled as predictive R2.
     """
 
     posterior: BivariateResult
@@ -269,7 +274,10 @@ def ldpred3_auto_bivariate_chains(
     ``num_iter`` must be even and at least four. Adaptive stopping (``tol > 0``)
     is not supported because split-Rhat and equal pooling require equal-length
     traces. Basic split-Rhat is diagnostic metadata only: high values never
-    remove a chain or change the posterior.
+    remove a chain or change the posterior. It covers the named scalar state
+    traces, not predictive performance. A single chain cannot define
+    cross-chain agreement, and pairwise products from overlapping chain pairs
+    are dependent and therefore are not valid pseudo-chains for R-hat.
 
     ``chain_ncores > 1`` runs that many chains concurrently in threads. With
     Numba, the per-block sweep kernels release the GIL; the pure-Python fallback

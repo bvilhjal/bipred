@@ -153,6 +153,10 @@ an in-sampler ceiling on implied per-trait heritability,
 the *implausible fit* warning on panels of at least 1,000 variants; below that
 the warning is suppressed, and `res.h2` landing exactly on a bound, or the raw
 `(gvar_1, gcov, gvar_2)` in `res.genetic_samples`, is the only signal.
+These same-sweep quadratics are posterior genetic-variance and covariance
+draws. They are not predictive-R2 draws: the latter requires a cross-product of
+independent chains' effect draws, or direct evaluation against an independent
+target phenotype.
 
 Cross-trait LDSC (`bipred.ldsc_rg`) is a separate moment estimator and useful
 screen. Its ratio can be unstable when either marginal LDSC heritability is near
@@ -189,4 +193,8 @@ losses. They do not turn the counts into identified causal-variant totals.
 `beta1_est` and `beta2_est` are posterior-mean effects. Borrowing can help when
 one trait is weak and the other is well powered with genuine shared signal.
 Prediction gains remain an empirical question and require out-of-sample
-validation.
+validation. Bipred does not infer observed out-of-sample R2 from summary
+statistics. Nor does it currently retain the per-sweep effect vectors needed
+for LDpred3's model-implied cross-chain predictive-R2 estimator. An R-hat over
+all chain-pair products would be invalid because overlapping pairs are not
+independent.

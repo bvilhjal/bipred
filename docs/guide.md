@@ -1,6 +1,6 @@
 # User guide
 
-Use bipred when two harmonized GWAS traits share one ancestry-matched LD
+Use bipred when two GWAS traits can be harmonized to one ancestry-matched LD
 reference. The package returns genetic correlation, SNP heritability,
 posterior-mean effects for prediction, and polygenic-overlap summaries.
 
@@ -19,7 +19,8 @@ from bipred import prepare_bivariate_sumstats, ldpred3_auto_bivariate_blocks
 
 with prepare_bivariate_sumstats(
         "ld.npz", "trait1.tsv.gz", "trait2.tsv.gz",
-        n_eff1=80_000, n_cases2=12_000, n_controls2=38_000) as prep:
+        n_eff1=80_000, n_cases2=12_000, n_controls2=38_000,
+        screen=True) as prep:
     res = ldpred3_auto_bivariate_blocks(
         prep.blocks, prep.beta_hat1, prep.beta_hat2,
         prep.n_eff1, prep.n_eff2, seed=0)
@@ -29,8 +30,17 @@ with prepare_bivariate_sumstats(
 ```
 
 `n_cases`/`n_controls` become `n_eff` via `ldpred3.n_eff_case_control`.
-`python -m bipred --ld-cache ld.npz --sumstats1 t1.tsv --sumstats2 t2.tsv`
-is the same path. The CLI runs a single chain unless `--n-chains` is at least 2
+The same screened CLI path is:
+
+```bash
+python -m bipred --ld-cache ld.npz --sumstats1 t1.tsv --sumstats2 t2.tsv \
+    --n-eff1 80000 --n-cases2 12000 --n-controls2 38000 --screen
+```
+
+Both interfaces leave the screen off unless it is requested; this real-data
+example turns it on so its retained panel and drop
+coverage can be inspected as a sensitivity diagnostic. The CLI runs a single
+chain unless `--n-chains` is at least 2
 (see *Fit multiple chains* below), and advanced options such as `tol`,
 `noise_inflation`, `iw_df`, and `pi_init` are Python-API only. An mmap cache
 stays open through the context and is released
@@ -60,9 +70,10 @@ Each prepared trait stores only usable values plus their strictly increasing
 indices in the full LD-cache order; it owns no LD mapping and can be
 serialized. A persistent web-style store should publish the object only after
 `screen_prepared_trait`, so a cache hit means QC, harmonization, standardization,
-and the mandatory trait-local screen are all complete. Its key must include the
-LD cache's identity or content hash and every QC/screen setting that changes the
-retained rows. Equal variant counts do not prove equal variant order.
+and that workflow's recorded trait-local screen are all complete. Its key must
+include the LD cache's identity or content hash and every QC/screen setting that
+changes the retained rows. Equal variant counts do not prove equal variant
+order.
 `screen_prepared_trait` uses each trait's own usable principal LD panel and is
 therefore applied before storage and before intersection in the web workflow.
 It evaluates those selected rows directly inside each source block; it does not
@@ -118,6 +129,34 @@ model-matched simulations cannot reproduce. The result may be a divergent fit
 whose `h2` and causal fraction still look ordinary. Use the checks below before
 interpreting a real-data fit, and always heed the fit's own warnings.
 
+### What preparation does automatically
+
+With its defaults, `prepare_trait_sumstats` and
+`prepare_bivariate_sumstats` process each trait in this order:
+
+1. Read the file, then run `ldpred3.qc.qc_sumstats`. It requires finite
+   `beta`, `se`, and `n_eff`, positive `se` and `n_eff`, drops every occurrence
+   of a duplicate, keeps variants with `n_eff >= 0.7 * median(n_eff)`, and
+   applies `MAF >= 0.01` and `INFO >= 0.7` where those fields are finite. Missing
+   EAF or INFO is unevaluated and retained. The chi-square cap is off.
+2. Optionally repair coordinates by identifier. This is off by default because
+   a genome-build mismatch should be visible.
+3. Harmonize alleles to the LD cache, drop strand-ambiguous variants, and
+   reject an identifier whose coordinates disagree when both records provide
+   usable chromosome and position values.
+4. Recheck finite positive inputs, retain cache order, and standardize each
+   trait. A bivariate call then intersects the traits and records aligned
+   GWAS/reference EAF correlations when reference frequencies are available.
+
+`qc=False` or `--no-qc` skips only step 1; it does not skip harmonization,
+post-match validity and locus checks, or standardization. Sample-size
+imputation, `sd_consistency`, a per-variant EAF-difference filter,
+genomic-control reversal, and the LD-consistency screen are not automatic. The
+screen requires `screen=True` or `--screen`; rejecting a low aligned EAF
+correlation requires an explicit `min_af_corr` or `--min-af-corr` threshold.
+Override the sumstats-only defaults through `qc_params` or the corresponding
+CLI flags.
+
 ### The recommended procedure
 
 1. **Harmonize, then verify.** Match on rsID, require the reported allele pair
@@ -128,9 +167,11 @@ interpreting a real-data fit, and always heed the fit's own warnings.
    correlate the aligned effect-allele frequency against the reference's own.
    Near +1 is aligned, near −1 inverted. The flip *rate* cannot distinguish
    those — a legitimate effect-allele convention produces any rate at all
-   (one real file flipped 69.7%). A unique rsID is not coordinate-checked
-   by `harmonize`; `prepare_trait_sumstats` drops matches whose chrom/pos
-   disagree with the LD reference.
+   (one real file flipped 69.7%). Current LDpred3 also coordinate-checks a
+   unique rsID when both records provide usable chromosome and position
+   values. Bipred retains a defensive post-harmonization locus check for
+   compatibility with older interoperability backends; missing coordinates
+   preserve identifier matching.
 2. **Check the effective sample size.** `n_eff` scales every standardized effect.
    For case-control data,
    [`bipred.qc.implied_sample_size`](../bipred/qc.py) can compare the reported
@@ -139,9 +180,9 @@ interpreting a real-data fit, and always heed the fit's own warnings.
    traits, absolute N and phenotype scale are not separately identifiable from
    these columns; the function reports N as unidentified rather than calibrating
    itself to the reported value.
-3. **Filter per variant using study-appropriate thresholds.** Minor allele frequency
-   ≥ 0.01, allele-frequency concordance, imputation quality where the file
-   carries it, per-variant sample size, and
+3. **Filter per variant using study-appropriate thresholds.** Preparation
+   applies its documented MAF, INFO, and relative-N defaults where the file
+   carries those fields. Study-specific allele-frequency concordance and
    [`bipred.qc.sd_consistency`](../bipred/qc.py) are useful inputs **for the
    joint-fit panel**. A chi-square cap is not one of those: it is an LDSC-row
    filter (see below and [`ldsc_rg`](rg.md)). Thresholds must reflect the
@@ -166,9 +207,9 @@ from bipred.qc import implied_sample_size, ld_consistency_screen
 
 sized = implied_sample_size(beta2, se2, ref_af, binary=True, reported_n=n2)
 if not sized["consistent"]:
-    n2 = n2 * sized["ratio"]          # fit what the data behaves like
+    print("Investigate N and SE provenance before changing the analysis:", sized)
 
-# Standardized effects depend on N: recompute them after any N adjustment.
+# The primary analysis retains its externally documented sample sizes.
 beta_hat1 = standardize_betas(beta1, se1, n1)[0]
 beta_hat2 = standardize_betas(beta2, se2, n2)[0]
 
@@ -176,6 +217,13 @@ z1, z2 = beta1 / se1, beta2 / se2     # original GWAS columns
 keep = (ld_consistency_screen(blocks, z1)
         & ld_consistency_screen(blocks, z2))
 ```
+
+Do not replace the primary `n_eff` from this diagnostic alone. In a binary
+trait, the same discrepancy can reflect genomic-control-inflated standard
+errors, a pooled case/control-N approximation, or both; the file cannot
+distinguish them. Check cohort and summary-statistic provenance first. If
+external evidence supports another effective N, label the recomputed
+standardized effects and fit as a prespecified sensitivity analysis.
 
 Use raw GWAS z-scores here, not standardized `beta_hat / se`. After intersecting
 the masks, retile with `subset_blocks(blocks, keep)` (or pass `screen=True` to
@@ -217,11 +265,13 @@ OMP_NUM_THREADS=1 python your_screen.py     # then ld_consistency_screen(..., nc
 ```
 
 Note that ldpred3 ships a *different* LD-consistency filter,
-`ldpred3.qc.dentist_outlier_mask`. It inverts a whole block and removes the
-single worst variant per pass; this one predicts random half-windows from each
-other, which is closer to the split-sample procedure Chen et al. published. They
-are not interchangeable, and bipred's committed factorial evidence was generated
-with the screen documented here.
+`ldpred3.qc.dentist_outlier_mask`. It uses a whole-block precision statistic
+and removes the single worst variant per pass; this one predicts random
+half-windows from each other and confirms candidates in the full window. Both
+depart from the published workflow in different ways, so neither inherits its
+calibration or can be ranked as closer from current evidence. They are not
+interchangeable, and bipred's committed factorial evidence was generated with
+the screen documented here.
 
 ### What the factorial established
 
@@ -338,6 +388,20 @@ require different trace contracts. The pooled posterior records
 `retained_iterations = n_chains * retained_per_chain` and
 `stopped_early=False`.
 
+The scalar diagnostic does not include predictive R2. Bipred currently retains
+same-sweep genetic quadratics but not the per-sweep effect vectors needed for
+LDpred3's cross-chain predictive estimator. A single bivariate chain has no
+independent chain comparator. With multiple chains, treating every pairwise
+product as a separate chain would still be invalid: pairs such as `(1, 2)` and
+`(1, 3)` share chain 1. Their dependence makes an R-hat over those products
+look more informative than it is.
+
+A future model-implied trace would have to stream thinned effect draws for both
+traits. An R-like diagnostic would then require at least four chains arranged
+as two disjoint pairs, so no original chain contributes to two diagnostic
+paths. It would remain a low-resolution, autocorrelated model diagnostic rather
+than observed target-cohort performance.
+
 ## Read the result
 
 **Table 2. Main `BivariateResult` fields.**
@@ -351,7 +415,7 @@ require different trace contracts. The pooled posterior records
 | `pi` | `(pi00, pi10, pi01, pi11)` mixture |
 | `sigma` | mean retained 2 × 2 effect covariance |
 | `noise_scale` | learned residual factors; `(1, 1)` when disabled |
-| `genetic_samples` | retained `(gvar_1, gcov, gvar_2)` trace |
+| `genetic_samples` | retained same-sweep `(gvar_1, gcov, gvar_2)` trace for heritability and genetic covariance; not predictive-R2 draws |
 | `retained_iterations` | post-burn-in sweeps actually retained |
 | `stopped_early` | whether single-chain adaptive stopping fired |
 
@@ -439,6 +503,17 @@ chains driver, which reserves them for its own dispersal.
 | `check_every` | `50` | both | retained sweeps between stabilization checks; accepted by chains but inert there, since adaptive stopping is disabled |
 | `seed` | `None` (single) / `0` (chains) | both | random seed. The chains driver requires an integer and rejects `None` |
 | `progress` | `None` | single | optional per-sweep progress callback; see [Progress reporting](#progress-reporting). The chains driver does not accept it: its chains run concurrently, so a single callback could not say which one it spoke for |
+
+The direct API and CLI deliberately retain the 200/200 schedule. Their
+bivariate effects and `pi`, `Sigma`, heritability, covariance, and overlap
+summaries all average stochastic retained iterates; replacing 100 of those
+draws with extra burn-in halves the retained trace and can increase Monte Carlo
+error. No controlled schedule comparison has shown that 300/100 preserves
+those summaries.
+SMARTpred passes 300/100 explicitly as its fixed-budget service operating point;
+it does not change bipred's default or make a single-chain architecture summary
+convergence-certified. When those summaries matter, compare longer retained
+schedules or use the multi-chain driver and inspect its diagnostic.
 
 With `tol>0`, a single chain checks the relative RMS change in both
 posterior-mean effect vectors and the change in `r_g` every `check_every`

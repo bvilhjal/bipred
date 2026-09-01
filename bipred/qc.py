@@ -1,8 +1,9 @@
 """Summary-statistic quality control against the LD reference you will fit with.
 
-bipred does not harmonize summary statistics or build LD, and this module does
-not change that. What it adds is an LD-dependent check: whether a variant's
-reported effect is *consistent with the variants
+This module consumes already aligned arrays. Package-level preparation helpers
+use LDpred3 for basic summary-statistic QC and harmonization against an LD
+cache; they do not build LD. What this module adds is an LD-dependent check:
+whether a variant's reported effect is *consistent with the variants
 correlated with it*. Every filter a user can apply beforehand -- minor allele
 frequency, imputation quality, per-variant sample size --
 judges a variant in isolation and therefore cannot see disagreement with its

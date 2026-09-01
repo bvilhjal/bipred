@@ -1657,13 +1657,15 @@ class BivariateResult:
     learned 2x2 effect covariance, and ``pi`` the four-state mixture
     ``(pi00, pi10, pi01, pi11)`` = neither / trait-1-only / trait-2-only / both
     causal. ``sigma``, ``pi``, and ``noise_scale`` are means over the retained
-    stochastic hyperparameter iterates. ``genetic_samples`` retains raw
-    ``(gvar1, gcov, gvar2)`` quadratics and ``noise_scale_samples`` retains the
-    two noise scales at every post-burn-in sweep. ``retained_iterations`` is the
-    number of rows retained in those traces; ``stopped_early`` reports whether
-    adaptive stopping shortened a single-chain run. ``divergence_diagnostics``
-    records the structured single-chain fit-validity ratios behind any
-    divergence warning; these heuristics are not a convergence certificate.
+    stochastic hyperparameter iterates. ``genetic_samples`` retains raw,
+    same-sweep ``(gvar1, gcov, gvar2)`` quadratics and
+    ``noise_scale_samples`` retains the two noise scales at every post-burn-in
+    sweep. These genetic quadratics estimate heritability and covariance; they
+    are not predictive-R2 draws. ``retained_iterations`` is the number of rows
+    retained in those traces; ``stopped_early`` reports whether adaptive
+    stopping shortened a single-chain run. ``divergence_diagnostics`` records
+    the structured single-chain fit-validity ratios behind any divergence
+    warning; these heuristics are not a convergence certificate.
     See :attr:`mixer` for the MiXeR-style polygenic-overlap summary.
     """
 

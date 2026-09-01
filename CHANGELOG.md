@@ -1,16 +1,23 @@
 # Changelog
 
 User-visible changes to **bipred** are recorded here. The project is currently
-`0.3.14.dev0`.
+`0.3.15.dev0`.
 
 ## [Unreleased]
 
-The project is now `0.3.14.dev0`. The LDpred3 floor moves to `0.6.6` so an
+The project is now `0.3.15.dev0`. The LDpred3 floor remains `0.6.6` so an
 immutable pin cannot install a 0.6.5-labelled build that lacks
 `BUILD_MISMATCH_FRACTION` and the current DENTIST/D8 semantics.
 
 ### Changed
 
+- CI and installation guidance now pin the reviewed LDpred3 0.6.8 revision;
+  the supported dependency floor remains `>=0.6.6,<0.7`.
+- Direct bivariate fits remain at 200 burn-in and 200 retained sweeps by
+  default. SMARTpred explicitly requests 300/100 as a web-service operating
+  point; that setting does not replace bipred's sampling-oriented default
+  without evidence that halving the retained iterates preserves its bivariate
+  architecture summaries.
 - The dense-block structural check skips D8 (int8). Quantization is not
   PSD-preserving, and `R + 0.05 I` rejected ordinary finite-reference D8
   while 16 random probes on blocks larger than 1,024 missed an embedded

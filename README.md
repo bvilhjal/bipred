@@ -11,14 +11,14 @@ LD representations and sampler utilities.
 ## Installation
 
 Python 3.9–3.14 is supported. Numba is strongly recommended. The current
-Bipred development line supports LDpred3 0.5 and 0.6. Neither package is on
+Bipred development line supports `ldpred3>=0.6.6,<0.7`. Neither package is on
 PyPI, so a
 Git install requires authenticated GitHub read access. Install the exact
 LDpred3 revision tested by CI; its private interoperability seam is not stable
 on the sibling repository's moving default branch:
 
 ```bash
-python -m pip install "ldpred3[fast] @ git+https://github.com/bvilhjal/ldpred3.git@339b4db76a92a7dd235c764753b38c4b1f41e7fc"
+python -m pip install "ldpred3[fast] @ git+https://github.com/bvilhjal/ldpred3.git@7ddbc5a3a69de2e15915d8d0d6b081def6d08681"
 python -m pip install "bipred[fast] @ git+https://github.com/bvilhjal/bipred.git"
 ```
 
@@ -67,7 +67,8 @@ For real data, start from an ldpred3 LD cache:
 from bipred import prepare_bivariate_sumstats, ldpred3_auto_bivariate_blocks
 
 with prepare_bivariate_sumstats(
-        "ld.npz", "t1.tsv", "t2.tsv", n_eff1=N1, n_eff2=N2) as prep:
+        "ld.npz", "t1.tsv", "t2.tsv", n_eff1=N1, n_eff2=N2,
+        screen=True) as prep:
     res = ldpred3_auto_bivariate_blocks(
         prep.blocks, prep.beta_hat1, prep.beta_hat2,
         prep.n_eff1, prep.n_eff2, seed=0)
@@ -78,14 +79,23 @@ with prepare_bivariate_sumstats(
 
 ```bash
 python -m bipred --ld-cache ld.npz --sumstats1 t1.tsv --sumstats2 t2.tsv \
-    --n-eff1 N1 --n-eff2 N2 --out-weights1 t1.weights --out-weights2 t2.weights
+    --n-eff1 N1 --n-eff2 N2 --screen \
+    --out-weights1 t1.weights --out-weights2 t2.weights
 ```
+
+Both real-data examples request the LD-consistency screen explicitly; the
+Python and CLI defaults leave it off. Record its settings and inspect its drop
+coverage as a sensitivity diagnostic rather than treating its mask as truth.
 
 The default file has no fit-cohort dosage-scale metadata; score it with
 `ldpred3.score_from_weights(..., scaling="target")`. Passing `af=prep.af`
 adds an HWE-derived `SD_REF`, which is an explicit approximation rather than an
 observed fit-cohort dosage SD. The CLI likewise requires
 `--hwe-frozen-scale` to opt into that approximation. The user guide covers QC.
+Bipred does not infer observed out-of-sample R2 from summary statistics; score
+an independent target cohort and evaluate against its phenotype. Its retained
+genetic-quadratic traces estimate heritability and covariance, not predictive
+R2.
 Bipred includes a lightweight LD-consistency
 sensitivity screen:
 
