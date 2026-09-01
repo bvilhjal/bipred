@@ -35,7 +35,7 @@ directory binds the empty checkout as a namespace package and hides the real
 module.
 
 CI preinstalls that immutable revision, then installs Bipred through its
-declared `ldpred3>=0.5.5.dev0,<0.7` dependency contract rather than bypassing
+declared `ldpred3>=0.6.6,<0.7` dependency contract rather than bypassing
 the resolver. The private sampler seam in `bipred/_ldpred3_compat.py` still has
 behavioural tests. Archived real-data
 benchmarks deliberately retain their immutable LDpred3 0.4.5 provenance in

@@ -1840,3 +1840,34 @@ def test_structurally_indefinite_correlation_is_rejected():
     with pytest.raises(ValueError, match="structurally indefinite"):
         ldpred3_auto_bivariate(
             R, beta, beta, 10_000, 10_000, burn_in=2, num_iter=2, seed=0)
+
+
+def test_d8_block_is_not_rejected_for_quantization_indefiniteness():
+    """Ordinary D8 rounding is expected to be slightly indefinite."""
+    rng = np.random.default_rng(7)
+    k, n = 410, 40
+    X = rng.standard_normal((n, k))
+    R = X.T @ X
+    d = np.sqrt(np.diag(R))
+    R = R / np.outer(d, d)
+    Q = np.rint(np.clip(R, -1.0, 1.0) * 127).astype(np.int8)
+    deq = Q.astype(np.float64) / 127.0
+    assert float(np.linalg.eigvalsh(deq).min()) < -0.05
+    beta = np.full(k, 0.01)
+    ldpred3_auto_bivariate(
+        Q, beta, beta, 10_000, 10_000, burn_in=2, num_iter=2, seed=0,
+        ld_int8=False)
+
+
+def test_large_float_block_rejects_an_embedded_indefinite_3x3():
+    """Random quadratic probes used to miss a localized defect above k=1024."""
+    k = 1025
+    R = np.eye(k, dtype=np.float32)
+    R[:3, :3] = np.array([[1.0, 0.9, -0.9],
+                          [0.9, 1.0, 0.9],
+                          [-0.9, 0.9, 1.0]], dtype=np.float32)
+    beta = np.full(k, 0.01)
+    with pytest.raises(ValueError, match="structurally indefinite"):
+        ldpred3_auto_bivariate(
+            R, beta, beta, 10_000, 10_000, burn_in=1, num_iter=1, seed=0,
+            ld_int8=False)

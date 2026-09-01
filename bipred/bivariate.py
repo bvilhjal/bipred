@@ -60,6 +60,7 @@ from ._ldpred3_compat import (
     _jit_fastmath_nogil,
     _jit_nogil,
     _set_threads,
+    _smallest_eigenvalue,
     _validate_beta_hat,
     _validate_blocks,
     _validate_boolean_controls,
@@ -356,48 +357,51 @@ def _divergence_is_flagged(diag):
 
 
 def _reject_structurally_indefinite_ld(corr, scale, start, size):
-    """Refuse a dense block whose ``R + 0.05 I`` is not positive definite.
+    """Refuse a float block whose ``R + 0.05 I`` is not positive definite.
 
     Entries in ``[-1, 1]`` are not enough: a 3x3 correlation can have min
     eig near -1 and still look like a correlation matrix. D32 rounding of a
     usable sample correlation is much smaller than 0.05, so those blocks
     pass. LowRankLD is checked by its residual-diag contract instead.
+
+    D8 (int8) rounding is *not* PSD-preserving. Finite-reference D8 blocks
+    routinely have ``λmin ≈ -0.08`` at a few hundred variants, which fails
+    ``R + 0.05 I`` even though the representation is the documented default.
+    The LD-consistency screen already spectral-floors that case, and the
+    sampler only needs matrix-vector products, so int8 blocks are not
+    probed here.
+
+    Blocks larger than 1024 use a deterministic smallest-eigenvalue probe
+    rather than random quadratic forms, which missed an embedded indefinite
+    3x3 while rejecting ordinary D8 quantization error below the boundary.
     """
-    k = int(corr.shape[0])
-    if k == 0:
+    arr = np.asarray(corr)
+    k = int(arr.shape[0])
+    if k == 0 or arr.dtype == np.int8:
         return
     ridge = _STRUCTURAL_LD_RIDGE
+    dense = np.array(arr, dtype=np.float64, order="C")
+    if scale != 1.0:
+        dense *= scale
+    dense.flat[::k + 1] += ridge
+
+    def _fail():
+        raise ValueError(
+            f"LD block starting at variant {start} (size {size}) is "
+            f"structurally indefinite (R + {ridge} I is not positive "
+            "definite). Entries in [-1, 1] do not make a correlation "
+            "matrix; regularise the reference "
+            "(ldpred3.shrink_ld_blocks) or rebuild it."
+        )
+
     if k <= _STRUCTURAL_LD_CHOLESKY_MAX:
-        dense = np.array(corr, dtype=np.float64, order="C")
-        if scale != 1.0:
-            dense *= scale
-        dense.flat[::k + 1] += ridge
         try:
             np.linalg.cholesky(dense)
         except np.linalg.LinAlgError:
-            raise ValueError(
-                f"LD block starting at variant {start} (size {size}) is "
-                f"structurally indefinite (R + {ridge} I is not positive "
-                "definite). Entries in [-1, 1] do not make a correlation "
-                "matrix; regularise the reference "
-                "(ldpred3.shrink_ld_blocks) or rebuild it."
-            ) from None
+            _fail()
         return
-    rng = np.random.default_rng(0)
-    raw = np.asarray(corr, dtype=np.float64)
-    for _ in range(16):
-        x = rng.standard_normal(k)
-        rx = raw @ x
-        if scale != 1.0:
-            rx *= scale
-        q = float(x @ rx) + ridge * float(x @ x)
-        if q <= 0.0:
-            raise ValueError(
-                f"LD block starting at variant {start} (size {size}) is "
-                f"structurally indefinite (a quadratic form of R + {ridge} I "
-                "is non-positive). Regularise the reference "
-                "(ldpred3.shrink_ld_blocks) or rebuild it."
-            )
+    if _smallest_eigenvalue(dense) <= 0.0:
+        _fail()
 
 
 def _prepare_bivariate_lowrank_block(R):
@@ -1717,6 +1721,12 @@ class BivariateResult:
             raise ValueError(
                 f"trait {trait} has {weight.size} effects but provenance "
                 f"length is {ids.size}")
+        if not isinstance(allow_diverged, (bool, np.bool_)):
+            raise TypeError(
+                "allow_diverged must be a boolean; "
+                f"got {type(allow_diverged).__name__} {allow_diverged!r}. "
+                "The string 'False' is truthy in Python and would export "
+                "flagged weights.")
         if _divergence_is_flagged(self.divergence_diagnostics):
             if not allow_diverged:
                 raise ValueError(

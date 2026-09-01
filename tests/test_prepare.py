@@ -337,6 +337,9 @@ def test_write_weights_refuses_a_diverged_fit_until_allowed(tmp_path):
     with pytest.warns(RuntimeWarning, match="divergence diagnostic"):
         res.write_weights(str(path), allow_diverged=True, **common)
     assert path.exists()
+    with pytest.raises(TypeError, match="must be a boolean"):
+        res.write_weights(str(tmp_path / "str.weights"),
+                          allow_diverged="False", **common)
 
 
 def test_unstandardized_z_scores_are_rejected(tmp_path):
@@ -774,9 +777,11 @@ def test_reanchoring_refuses_a_positional_match_to_a_different_variant(
         loose = prepare_trait_sumstats(cache, path, n_eff=n, qc=False)
         assert len(loose) == 60          # every one a different variant
 
-        with pytest.raises(ValueError, match="no usable variant remains"):
+        with pytest.raises(ValueError, match="re-anchoring dropped every") as exc:
             prepare_trait_sumstats(cache, path, n_eff=n, qc=False,
                                    reanchor_on_identifier=True)
+        assert "never consulted" not in str(exc.value)
+        assert "reference was consulted" in str(exc.value)
 
 
 def test_reference_loci_borrows_the_cached_identifier_index(tmp_path):

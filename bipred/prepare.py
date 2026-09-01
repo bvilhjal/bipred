@@ -505,7 +505,7 @@ def _reanchor_on_identifier(sumstats, variants, *, label,
 
 
 def _reference_overlap(sumstats, variants, harmonized, n_matched, *, label,
-                       warning_stacklevel):
+                       warning_stacklevel, reanchor_log=None):
     """Record the reference-coverage fractions, and warn when coverage is low.
 
     Zero overlap is an error elsewhere. What this catches is the case that
@@ -524,6 +524,29 @@ def _reference_overlap(sumstats, variants, harmonized, n_matched, *, label,
     }
     if overlap["frac_of_reference"] >= DEFAULT_REFERENCE_COVERAGE_WARN:
         overlap["reason"] = "adequate_coverage"
+        return overlap
+    reanchor_in = 0
+    if isinstance(reanchor_log, dict) and reanchor_log.get("applied"):
+        try:
+            reanchor_in = int(reanchor_log.get("n_rows") or 0)
+        except (TypeError, ValueError):
+            reanchor_in = 0
+    if n_rows == 0 and reanchor_in > 0:
+        # The reference *was* consulted: re-anchoring dropped every identifier.
+        n_absent = int(reanchor_log.get("n_dropped_absent_identifier") or 0)
+        n_ambiguous = int(reanchor_log.get("n_dropped_ambiguous_locus") or 0)
+        overlap.update(
+            reason="reanchor_dropped_all", diagnosed=True,
+            n_dropped_absent_identifier=n_absent,
+            n_dropped_ambiguous_locus=n_ambiguous)
+        warnings.warn(
+            f"{label}: identifier re-anchoring dropped every one of "
+            f"{reanchor_in:,} rows against the LD reference "
+            f"({n_absent:,} identifiers the reference does not hold, "
+            f"{n_ambiguous:,} held at several loci). This is not a QC "
+            "filter failure: the reference was consulted and none of the "
+            "offered identifiers could be re-stamped onto it.",
+            RuntimeWarning, stacklevel=warning_stacklevel)
         return overlap
     if n_rows == 0:
         # Nothing reached harmonization, so the reference says nothing about
@@ -689,7 +712,8 @@ def _align_one(path, variants, *, n_eff, qc, qc_params, columns, label,
                 "genome build).",
                 RuntimeWarning, stacklevel=3)
     overlap = _reference_overlap(
-        ss, variants, h, int(ok.sum()), label=label, warning_stacklevel=3)
+        ss, variants, h, int(ok.sum()), label=label, warning_stacklevel=3,
+        reanchor_log=reanchor_log)
     indices = np.asarray(h.var_index, dtype=np.int64)[ok]
     # Keep this boundary correct even if an interoperability backend returns
     # matches in source-file order. Cache-order sorting makes later sparse
@@ -743,6 +767,12 @@ def _require_usable(trait, fallback):
                 f"; {overlap['n_unmatched_id_elsewhere']:,} rows carry an "
                 "identifier the reference holds at different coordinates, so "
                 "check the genome build of both sides before anything else")
+        elif reason == "reanchor_dropped_all":
+            message += (
+                "; identifier re-anchoring dropped every row against the LD "
+                f"reference ({overlap.get('n_dropped_absent_identifier', 0):,} "
+                "identifiers absent from it). The reference was consulted; "
+                "QC is not why nothing remains")
         elif reason == "no_rows_offered":
             message += (
                 "; summary-statistics QC removed every row before alignment, "

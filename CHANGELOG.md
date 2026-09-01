@@ -1,14 +1,29 @@
 # Changelog
 
 User-visible changes to **bipred** are recorded here. The project is currently
-`0.3.12.dev0`.
+`0.3.14.dev0`.
 
 ## [Unreleased]
 
-The project is now `0.3.13.dev0`. The version moves because the LD-consistency
-screen's working precision changed, which shifts its mask in borderline cases.
-A consumer keying prepared artifacts on `bipred.__version__` therefore
-rebuilds rather than mixing masks computed at two precisions.
+The project is now `0.3.14.dev0`. The LDpred3 floor moves to `0.6.6` so an
+immutable pin cannot install a 0.6.5-labelled build that lacks
+`BUILD_MISMATCH_FRACTION` and the current DENTIST/D8 semantics.
+
+### Changed
+
+- The dense-block structural check skips D8 (int8). Quantization is not
+  PSD-preserving, and `R + 0.05 I` rejected ordinary finite-reference D8
+  while 16 random probes on blocks larger than 1,024 missed an embedded
+  indefinite 3×3. Large float blocks now use a deterministic
+  smallest-eigenvalue probe. The LD-consistency screen already floors D8.
+- `ldpred3` dependency floor is `>=0.6.6,<0.7`.
+
+### Fixed
+
+- `allow_diverged="False"` is no longer treated as true. The argument must
+  be a boolean.
+- Identifier re-anchoring that drops every row no longer reports that QC
+  removed everything and the reference was never consulted.
 
 ### Changed
 
