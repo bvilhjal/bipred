@@ -15,6 +15,11 @@ import warnings
 import numpy as np
 
 from ldpred3 import n_eff_case_control
+from ldpred3.harmonize import (
+    BUILD_MISMATCH_FRACTION as _BUILD_MISMATCH_FRACTION,
+    REFERENCE_COVERAGE_WARN as _REFERENCE_COVERAGE_WARN,
+    SEVERE_REFERENCE_COVERAGE as _SEVERE_REFERENCE_COVERAGE,
+)
 from ldpred3.interop import (
     PreparedLDCache,
     VariantTable,
@@ -301,18 +306,22 @@ def _norm_chrom_label(value):
     return text.upper()
 
 
+# Coverage thresholds live in ldpred3, not here, so the CLI and this package
+# diagnose a thin alignment with the same numbers. Two copies of 0.5 in two
+# repos is precisely how a "shared" threshold stops being shared.
+#
 #: Warn when the aligned trait covers less than this fraction of the LD
 #: reference. LDSC's ``M``, the ``h2`` denominator, and the LD-consistency
 #: screen's window coverage are all defined on the *full* reference, so a
 #: sparsely covered panel changes what those numbers mean.
-DEFAULT_REFERENCE_COVERAGE_WARN = 0.5
+DEFAULT_REFERENCE_COVERAGE_WARN = _REFERENCE_COVERAGE_WARN
 #: Below this fraction the fit is no longer a genome-wide analysis of that
 #: reference; the wording escalates and names the likely causes.
-SEVERE_REFERENCE_COVERAGE = 0.1
+SEVERE_REFERENCE_COVERAGE = _SEVERE_REFERENCE_COVERAGE
 #: Call a coordinate/build mismatch when at least this fraction of the
 #: unmatched rows carry an identifier the reference holds at a *different*
 #: locus. Anything less is the ordinary case of two different variant sets.
-DEFAULT_BUILD_MISMATCH_FRACTION = 0.2
+DEFAULT_BUILD_MISMATCH_FRACTION = _BUILD_MISMATCH_FRACTION
 
 
 class _ReferenceLoci:
