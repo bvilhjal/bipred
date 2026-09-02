@@ -1871,3 +1871,160 @@ def test_large_float_block_rejects_an_embedded_indefinite_3x3():
         ldpred3_auto_bivariate(
             R, beta, beta, 10_000, 10_000, burn_in=1, num_iter=1, seed=0,
             ld_int8=False)
+
+
+def _random_corr(k, rng):
+    A = rng.normal(size=(k, k))
+    C = A @ A.T / k
+    d = np.sqrt(np.diag(C))
+    R = C / np.outer(d, d)
+    np.fill_diagonal(R, 1.0)
+    return R
+
+
+def _oracle_bivar_sweep(R, bh1, bh2, n1, n2, curr1, curr2, unif, z1, z2,
+                        lpi, s1, s2, s12, cross_corr):
+    """One sweep by textbook Gaussian conditioning, written from the model
+    rather than from ``_bivar_const``'s closed forms. ``R @ beta`` is
+    recomputed from scratch at every variant, so the incremental residual
+    update in the kernel under test is also checked."""
+    k = len(bh1)
+    c1, c2 = curr1.copy(), curr2.copy()
+    rbsum1, rbsum2 = np.zeros(k), np.zeros(k)
+    c10 = c01 = c11 = 0
+    sum1sq = sum2sq = sum12 = 0.0
+    nn1, nn2 = np.asarray(n1, float), np.asarray(n2, float)
+    lpi = np.asarray(lpi, float)
+    slabs = [np.zeros((2, 2)),
+             np.array([[s1, 0.0], [0.0, 0.0]]),
+             np.array([[0.0, 0.0], [0.0, s2]]),
+             np.array([[s1, s12], [s12, s2]])]
+    for j in range(k):
+        E = np.array(
+            [[1.0 / nn1[j], cross_corr / np.sqrt(nn1[j] * nn2[j])],
+             [cross_corr / np.sqrt(nn1[j] * nn2[j]), 1.0 / nn2[j]]])
+        d = np.array([bh1[j] - (R @ c1)[j] + c1[j],
+                      bh2[j] - (R @ c2)[j] + c2[j]])
+        ws, mus, covs = [], [], []
+        for S in slabs:
+            C = E + S
+            _, ldet = np.linalg.slogdet(C)
+            ws.append(-0.5 * ldet - 0.5 * float(d @ np.linalg.solve(C, d)))
+            if S.any():
+                G = S @ np.linalg.inv(C)
+                mus.append(G @ d)
+                covs.append(S - G @ S)
+            else:
+                mus.append(np.zeros(2))
+                covs.append(np.zeros((2, 2)))
+        w = lpi + np.asarray(ws)
+        w -= w.max()
+        pr = np.exp(w)
+        pr /= pr.sum()
+        rbsum1[j] += pr[1] * mus[1][0] + pr[3] * mus[3][0]
+        rbsum2[j] += pr[2] * mus[2][1] + pr[3] * mus[3][1]
+        cum = np.cumsum(pr)
+        u = unif[j]
+        if u < cum[0]:
+            st = 0
+        elif u < cum[1]:
+            st = 1
+        elif u < cum[2]:
+            st = 2
+        else:
+            st = 3
+        if st == 0:
+            new1 = new2 = 0.0
+        elif st == 1:
+            new1 = mus[1][0] + np.sqrt(max(covs[1][0, 0], 0.0)) * z1[j]
+            new2 = 0.0
+        elif st == 2:
+            new1 = 0.0
+            new2 = mus[2][1] + np.sqrt(max(covs[2][1, 1], 0.0)) * z2[j]
+        else:
+            L = np.linalg.cholesky(covs[3])
+            new1 = mus[3][0] + L[0, 0] * z1[j]
+            new2 = mus[3][1] + L[1, 0] * z1[j] + L[1, 1] * z2[j]
+        if st == 1:
+            c10 += 1
+            sum1sq += new1 * new1
+        elif st == 2:
+            c01 += 1
+            sum2sq += new2 * new2
+        elif st == 3:
+            c11 += 1
+            sum1sq += new1 * new1
+            sum2sq += new2 * new2
+            sum12 += new1 * new2
+        c1[j], c2[j] = new1, new2
+    return ((c10, c01, c11, sum1sq, sum2sq, sum12,
+             float(c1 @ (R @ c1)), float(c1 @ (R @ c2)), float(c2 @ (R @ c2))),
+            c1, c2, rbsum1, rbsum2)
+
+
+def _run_sweep_vs_oracle(k, seed, cross_corr, per_variant_n, quantise):
+    rng = np.random.default_rng(seed)
+    R = _random_corr(k, rng)
+    corr = (R * 127.0).astype(np.int8) if quantise else R
+    scale = 1.0 / 127.0 if quantise else 1.0
+    R_eff = corr * scale
+    bh1, bh2 = rng.normal(0, 0.05, k), rng.normal(0, 0.05, k)
+    if per_variant_n:
+        n1, n2 = rng.uniform(2e4, 9e4, k), rng.uniform(1e4, 6e4, k)
+        n_const = False
+    else:
+        n1, n2 = np.full(k, 60000.0), np.full(k, 45000.0)
+        n_const = True
+    s1, s2, s12 = 2e-4, 3e-4, 4e-5
+    lpi = np.log(np.array([0.90, 0.04, 0.03, 0.03]))
+    unif, z1, z2 = rng.random(k), rng.standard_normal(k), rng.standard_normal(k)
+    init1, init2 = rng.normal(0, 0.01, k), rng.normal(0, 0.01, k)
+
+    exp, oc1, oc2, ors1, ors2 = _oracle_bivar_sweep(
+        R_eff, bh1, bh2, n1, n2, init1.copy(), init2.copy(),
+        unif, z1, z2, lpi, s1, s2, s12, cross_corr)
+
+    def run(kernel):
+        c1, c2 = init1.copy(), init2.copy()
+        rb1, rb2 = np.zeros(k), np.zeros(k)
+        rs1, rs2 = np.zeros(k), np.zeros(k)
+        got = kernel(corr, bh1, bh2, n1, n2, c1, c2, rb1, rb2, rs1, rs2,
+                     unif, z1, z2, lpi[0], lpi[1], lpi[2], lpi[3],
+                     s1, s2, s12, cross_corr, scale, n_const, True)
+        return got, c1, c2, rb1, rb2, rs1, rs2
+
+    got, c1, c2, rb1, rb2, rs1, rs2 = run(bivariate._bivar_one_sweep)
+    assert tuple(got[:3]) == tuple(exp[:3])
+    for label, g, e in zip(
+            ("sum1sq", "sum2sq", "sum12", "gv11", "gv12", "gv22"),
+            got[3:9], exp[3:9]):
+        np.testing.assert_allclose(g, e, rtol=1e-9, atol=1e-12, err_msg=label)
+    np.testing.assert_allclose(c1, oc1, rtol=1e-9, atol=1e-12)
+    np.testing.assert_allclose(c2, oc2, rtol=1e-9, atol=1e-12)
+    np.testing.assert_allclose(rs1, ors1, rtol=1e-9, atol=1e-12)
+    np.testing.assert_allclose(rs2, ors2, rtol=1e-9, atol=1e-12)
+    # The sweep's incremental R@beta equals a from-scratch recompute.
+    np.testing.assert_allclose(rb1, R_eff @ c1, rtol=1e-9, atol=1e-12)
+    np.testing.assert_allclose(rb2, R_eff @ c2, rtol=1e-9, atol=1e-12)
+    # The JIT kernel agrees with the Python kernel.
+    got_j, c1_j, c2_j, _, _, _, _ = run(bivariate._bivar_one_sweep_jit)
+    assert tuple(got_j[:3]) == tuple(got[:3])
+    np.testing.assert_allclose(got_j[3:9], got[3:9], rtol=1e-10, atol=1e-12)
+    np.testing.assert_allclose(c1_j, c1, rtol=1e-10, atol=1e-12)
+    np.testing.assert_allclose(c2_j, c2, rtol=1e-10, atol=1e-12)
+
+
+def test_bivar_sweep_matches_independent_gaussian_conditioning():
+    """The four-state conditional likelihood, posterior means, and draws agree
+    with an independent Gaussian-conditioning oracle. Every other check on the
+    shared algebra (low-rank vs dense, ncores, vectorised rg, per-variant-N
+    memo) reuses ``_bivar_const``, so only this test would catch a systematic
+    error in it."""
+    for seed, cc, per_variant, quantise in (
+            (7, 0.0, False, False),
+            (11, 0.3, False, False),
+            (13, -0.45, False, False),
+            (17, 0.2, True, False),
+            (19, 0.15, True, True),
+            (23, -0.2, True, False)):
+        _run_sweep_vs_oracle(40, seed, cc, per_variant, quantise)

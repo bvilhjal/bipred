@@ -364,6 +364,30 @@ class _ReferenceLoci:
                 for gi in rows}
 
 
+def _count_positional_only_matches(sumstats, variants, harmonized):
+    """Matched rows whose identifier the reference lacks (position-only match).
+
+    ``harmonize`` falls back to matching on coordinates when a row's
+    identifier is not in the reference. That is a legitimate rescue when the
+    identifier schemes differ, but the resulting alignment cannot be verified
+    by identifier, and a coordinate can land on a *different* variant that
+    happens to carry a compatible allele pair. Count those rows so the
+    preparation is never silently identifier-unverifiable. With
+    ``reanchor_on_identifier`` the absent rows were already dropped upstream,
+    so this reads 0 there.
+    """
+    if not len(harmonized) or harmonized.src_index is None:
+        return 0
+    by_id = _variant_indices(variants)[1]
+    ss_id = sumstats.id
+    n = 0
+    for k in np.asarray(harmonized.src_index, dtype=np.int64):
+        key = ss_id[k]
+        if key and key not in by_id:
+            n += 1
+    return n
+
+
 def _diagnose_unmatched(sumstats, variants, harmonized):
     """Split the unmatched GWAS rows into build-mismatch and absent-variant.
 
@@ -488,24 +512,46 @@ def _reanchor_on_identifier(sumstats, variants, *, label,
            "n_dropped_absent_identifier": int(n_absent),
            "n_dropped_missing_identifier": int(n_missing_id)}
     anchored = replace(sumstats, chrom=chrom, pos=pos).subset(keep)
-    if n_moved:
+    n_dropped = n_absent + n_ambiguous + n_missing_id
+    # Warn on drops as well as moves: a file whose identifiers are retired or
+    # missing between builds can lose a large fraction with n_moved == 0, and
+    # gating on ``if n_moved`` alone made that discard completely silent.
+    if n_moved or n_dropped:
+        actions = []
+        if n_moved:
+            actions.append(
+                f"re-anchored {n_moved:,} of {n_rows:,} rows onto the LD "
+                "reference's coordinates for their identifiers, because the "
+                "two sides disagreed on where those variants are")
+        if n_dropped:
+            actions.append(
+                f"dropped {n_dropped:,} of {n_rows:,} rows it could not anchor "
+                f"by identifier ({n_absent:,} identifiers the reference does "
+                f"not hold, {n_ambiguous:,} held at several loci, "
+                f"{n_missing_id:,} with no identifier at all)")
         warnings.warn(
-            f"{label}: re-anchored {n_moved:,} of {n_rows:,} rows onto the LD "
-            "reference's coordinates for their identifiers, because the two "
-            "sides disagreed on where those variants are. The fit is "
-            "therefore on the reference's genome build, keyed on identifier "
-            f"rather than on position. {n_absent:,} rows carry an identifier "
-            f"the reference does not hold and {n_ambiguous:,} an identifier "
-            "it holds at several loci; both were dropped rather than matched "
-            "positionally on the wrong build. This is not a chain-file "
-            "liftover: record it as identifier-keyed re-anchoring, and "
-            "prefer a properly lifted-over input where one is available.",
+            f"{label}: identifier-keyed re-anchoring: " + "; ".join(actions)
+            + ". The fit is therefore on the reference's genome build, keyed "
+            "on identifier rather than on position. This is not a chain-file "
+            "liftover: record it, and prefer a properly lifted-over input "
+            "where one is available.",
             RuntimeWarning, stacklevel=warning_stacklevel)
     return anchored, log
 
 
+def _qc_rows_dropped(qc_log):
+    """Rows removed by ``qc_sumstats`` before alignment, from its own counts."""
+    if not isinstance(qc_log, dict):
+        return 0
+    try:
+        return max(int(qc_log["n_input"]) - int(qc_log["n_kept"]), 0)
+    except (KeyError, TypeError, ValueError):
+        return 0
+
+
 def _reference_overlap(sumstats, variants, harmonized, n_matched, *, label,
-                       warning_stacklevel, reanchor_log=None):
+                       warning_stacklevel, reanchor_log=None,
+                       n_invalid=0, qc_log=None):
     """Record the reference-coverage fractions, and warn when coverage is low.
 
     Zero overlap is an error elsewhere. What this catches is the case that
@@ -514,23 +560,27 @@ def _reference_overlap(sumstats, variants, harmonized, n_matched, *, label,
     """
     n_rows = int(len(sumstats.id))
     n_cache = int(len(variants.id))
-    overlap = {
-        "n_sumstats_offered": n_rows,
-        "n_cache": n_cache,
-        "n_matched": int(n_matched),
-        "frac_of_reference": (float(n_matched) / n_cache) if n_cache else 0.0,
-        "frac_of_sumstats": (float(n_matched) / n_rows) if n_rows else 0.0,
-        "diagnosed": False,
-    }
-    if overlap["frac_of_reference"] >= DEFAULT_REFERENCE_COVERAGE_WARN:
-        overlap["reason"] = "adequate_coverage"
-        return overlap
     reanchor_in = 0
     if isinstance(reanchor_log, dict) and reanchor_log.get("applied"):
         try:
             reanchor_in = int(reanchor_log.get("n_rows") or 0)
         except (TypeError, ValueError):
             reanchor_in = 0
+    # Re-anchoring drops rows before harmonization, so the post-drop length
+    # under-reports what the user offered; measure coverage against the real
+    # input when the pre-drop count is known.
+    n_offered = reanchor_in if reanchor_in > 0 else n_rows
+    overlap = {
+        "n_sumstats_offered": n_offered,
+        "n_cache": n_cache,
+        "n_matched": int(n_matched),
+        "frac_of_reference": (float(n_matched) / n_cache) if n_cache else 0.0,
+        "frac_of_sumstats": (float(n_matched) / n_offered) if n_offered else 0.0,
+        "diagnosed": False,
+    }
+    if overlap["frac_of_reference"] >= DEFAULT_REFERENCE_COVERAGE_WARN:
+        overlap["reason"] = "adequate_coverage"
+        return overlap
     if n_rows == 0 and reanchor_in > 0:
         # The reference *was* consulted: re-anchoring dropped every identifier.
         n_absent = int(reanchor_log.get("n_dropped_absent_identifier") or 0)
@@ -569,16 +619,31 @@ def _reference_overlap(sumstats, variants, harmonized, n_matched, *, label,
         and elsewhere / n_unmatched >= DEFAULT_BUILD_MISMATCH_FRACTION)
     overlap["build_mismatch_suspected"] = build_mismatch
     absent = diagnosis["n_unmatched_id_absent"]
-    overlap["reason"] = (
-        "build_mismatch" if build_mismatch else
-        "absent_identifiers" if absent and absent >= elsewhere else
-        "rows_rejected_at_matched_locus" if n_unmatched else
-        "sparse_sumstats")
+    # Rows can also be lost after reaching harmonization: the validity mask
+    # (finite, se>0, n>0) and any QC that ran before alignment. When either
+    # accounts for at least as many rows as were matched, name that cause
+    # rather than blaming the deposition.
+    n_harmonized = int(len(harmonized))
+    qc_dropped = _qc_rows_dropped(qc_log)
+    validity_dominates = bool(n_invalid) and n_invalid >= max(n_matched, 1)
+    qc_dominates = bool(qc_dropped) and qc_dropped >= max(n_matched, 1)
+    if validity_dominates:
+        overlap["reason"] = "rows_failed_validity"
+    elif qc_dominates:
+        overlap["reason"] = "qc_removed_rows"
+    elif build_mismatch:
+        overlap["reason"] = "build_mismatch"
+    elif absent and absent >= elsewhere:
+        overlap["reason"] = "absent_identifiers"
+    elif n_unmatched:
+        overlap["reason"] = "rows_rejected_at_matched_locus"
+    else:
+        overlap["reason"] = "sparse_sumstats"
     severe = overlap["frac_of_reference"] < SEVERE_REFERENCE_COVERAGE
     lines = [
         f"{label}: only {int(n_matched):,} of {n_cache:,} LD-reference "
         f"variants are covered ({overlap['frac_of_reference']:.1%}), from "
-        f"{n_rows:,} GWAS rows offered to harmonization."]
+        f"{n_offered:,} GWAS rows offered to harmonization."]
     if severe:
         lines.append(
             "A fit on this few reference variants is not a genome-wide "
@@ -617,6 +682,20 @@ def _reference_overlap(sumstats, variants, harmonized, n_matched, *, label,
             "strand ambiguity, on a duplicate identifier, or on a "
             "non-finite effect rather than on coordinates; read the "
             "harmonize counts in the log.")
+    elif overlap["reason"] == "rows_failed_validity":
+        lines.append(
+            f"{n_invalid:,} of the {n_harmonized:,} harmonized rows had a "
+            "non-finite or non-positive standard error or sample size and "
+            "were dropped after alignment. Check the SE and N columns -- a "
+            "mis-mapped or all-zero standard-error column is a common cause "
+            "-- before suspecting the deposition.")
+    elif overlap["reason"] == "qc_removed_rows":
+        lines.append(
+            f"Sumstats QC removed {qc_dropped:,} rows before alignment, so "
+            "only the survivors were offered to the reference. Relax the QC "
+            "filters (min_n_ratio, min_maf, min_info, max_chisq) if they are "
+            "tighter than intended, and check they point at the right "
+            "columns.")
     else:
         lines.append(
             "Every offered row matched, so the GWAS itself covers only this "
@@ -667,7 +746,14 @@ def _align_one(path, variants, *, n_eff, qc, qc_params, columns, label,
         # "n_eff" key in **columns binds that same parameter). An integer
         # index therefore goes in as its digit string, which _build_colmap
         # resolves by position; anything else is rejected rather than
-        # silently coerced.
+        # silently coerced. A boolean is an int in Python, so it must be
+        # refused before the integer test: True would otherwise read column
+        # index 1 (the chromosome column) as a per-variant n_eff of 1.0
+        # genome-wide, a silent two-orders-of-magnitude error.
+        if isinstance(column_n, (bool, np.bool_)):
+            raise ValueError(
+                f"{label}: columns['n_eff'] must be a column name or a "
+                f"zero-based integer index, not boolean {column_n!r}")
         if not isinstance(column_n, (int, np.integer)):
             raise ValueError(
                 f"{label}: columns['n_eff'] must be a column name or a "
@@ -689,6 +775,18 @@ def _align_one(path, variants, *, n_eff, qc, qc_params, columns, label,
         ss, reanchor_log = _reanchor_on_identifier(
             ss, variants, label=label, warning_stacklevel=4)
     h = harmonize(ss, variants, drop_ambiguous=True)
+    n_positional_only = _count_positional_only_matches(ss, variants, h)
+    if n_positional_only:
+        warnings.warn(
+            f"{label}: {n_positional_only:,} matched row(s) carry an "
+            "identifier the LD reference does not hold and were aligned on "
+            "position alone, so each was bound to whatever reference variant "
+            "sits at that coordinate with a compatible allele pair -- possibly "
+            "a different variant than the identifier names. Check the "
+            "identifier column and the genome build of both sides, or pass "
+            "reanchor_on_identifier=True to anchor on identifier instead "
+            "(which drops such rows rather than matching them positionally).",
+            RuntimeWarning, stacklevel=3)
     beta = np.asarray(h.beta, dtype=float)
     se = np.asarray(h.se, dtype=float)
     n_vec = np.asarray(h.n_eff, dtype=float)
@@ -713,7 +811,7 @@ def _align_one(path, variants, *, n_eff, qc, qc_params, columns, label,
                 RuntimeWarning, stacklevel=3)
     overlap = _reference_overlap(
         ss, variants, h, int(ok.sum()), label=label, warning_stacklevel=3,
-        reanchor_log=reanchor_log)
+        reanchor_log=reanchor_log, n_invalid=n_invalid, qc_log=qc_log)
     indices = np.asarray(h.var_index, dtype=np.int64)[ok]
     # Keep this boundary correct even if an interoperability backend returns
     # matches in source-file order. Cache-order sorting makes later sparse
@@ -737,6 +835,7 @@ def _align_one(path, variants, *, n_eff, qc, qc_params, columns, label,
             "harmonize": dict(h.log),
             "n_harmonized": int(len(h)),
             "n_invalid": n_invalid,
+            "n_positional_only": n_positional_only,
             "n_locus_mismatch": n_locus_mismatch,
             "n_matched": int(ok.sum()),
             "reference_overlap": overlap,

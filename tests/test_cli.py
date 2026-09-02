@@ -178,3 +178,12 @@ def test_cli_real_mmap_cache_to_target_scaled_weights(tmp_path):
     weights = read_weights(out)
     assert len(weights) == m
     assert not weights.has_scale
+
+
+def test_cli_version_reports_the_package_version(capsys):
+    # The README instructs users to cite bipred.__version__ for the exact run;
+    # the CLI must be able to report it so a paper can record it.
+    with pytest.raises(SystemExit) as exc:
+        main(["--version"])
+    assert exc.value.code == 0
+    assert f"bipred {bipred.__version__}" in capsys.readouterr().out

@@ -6,6 +6,8 @@ import argparse
 import math
 import sys
 
+from . import __version__
+
 
 def _column_mapping(values, parser, option):
     """Parse repeated ``FIELD=COLUMN`` specifications for one GWAS."""
@@ -27,6 +29,8 @@ def build_parser():
         prog="bipred",
         description="Joint two-trait LDpred3 fit from an LD cache and two GWAS "
                     "files.")
+    p.add_argument("--version", action="version",
+                   version=f"bipred {__version__}")
     p.add_argument("--ld-cache", required=True,
                    help="cache written by ldpred3.save_ld_blocks")
     p.add_argument("--sumstats1", required=True)

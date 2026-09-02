@@ -17,32 +17,50 @@ import pytest
 
 
 def test_seam_imports_resolve():
-    # The complete borrowed surface, listed explicitly so a partial removal
-    # upstream trips a clear failure here rather than an obscure error elsewhere.
-    from bipred._ldpred3_compat import (  # noqa: F401
-        HAVE_NUMBA,
-        _Q8,
-        _as_n_vector,
-        _check_h2_p,
-        _finite_control,
-        _get_thread_id,
-        _integer_at_least,
-        _jit,
-        _jit_nogil,
-        _jit_parallel,
-        _set_threads,
-        _smallest_eigenvalue,
-        _validate_beta_hat,
-        _validate_blocks,
-        _validate_boolean_controls,
-        _validate_iterations,
-        _validate_seed,
-        _weights,
-        _wls,
-        prange,
-    )
+    # The complete borrowed surface is derived from the seam's own ``__all__``,
+    # so every name bipred borrows is pinned automatically: adding a borrowing
+    # extends the contract, and a partial removal upstream trips a clear
+    # failure here rather than an obscure error elsewhere.
+    import bipred._ldpred3_compat as seam
+
+    assert seam.__all__, "the seam must declare its borrowed surface"
+    unresolved = [name for name in seam.__all__ if not hasattr(seam, name)]
+    assert unresolved == [], f"unresolved borrowed ldpred3 names: {unresolved}"
 
     from ldpred3 import LowRankLD  # noqa: F401
+
+
+def test_variant_indices_layout_is_identifier_keyed():
+    """``prepare.py`` reads ``_variant_indices(variants)[1]`` as the by-id map.
+
+    A private slot re-order in ldpred3 lands inside bipred's declared
+    ``>=0.6.6,<0.7`` range and owes no deprecation, yet would turn every
+    identifier lookup into ``None`` (or a tuple-keyed position index), so a
+    build mismatch is misdiagnosed and re-anchoring drops every row -- with no
+    ``AttributeError``, so the import gate above stays green. Pin the layout
+    behaviourally: slot [1] must be an identifier -> row-index mapping.
+    """
+    from bipred._ldpred3_compat import _variant_indices
+
+    class _TinyVariants:
+        def __init__(self):
+            self.id = np.array(["rs1", "rs2", "rs3"], dtype=object)
+            self.chrom = np.array(["1", "1", "2"], dtype=object)
+            self.pos = np.array([100, 200, 300], dtype=np.int64)
+            self.a1 = np.array(["A", "A", "A"], dtype=object)
+            self.a2 = np.array(["G", "G", "G"], dtype=object)
+
+        def __len__(self):
+            return int(self.id.size)
+
+    indices = _variant_indices(_TinyVariants())
+    assert len(indices) == 5
+    by_id = indices[1]
+    assert isinstance(by_id, dict)
+    assert by_id.get("rs2") == [1]
+    assert by_id.get("rsX") is None
+    # The key and the lazy/auxiliary slots keep their documented roles too.
+    assert by_id.get("rs1") == [0] and by_id.get("rs3") == [2]
 
 
 def test_deterministic_chain_seeds_are_distinct_and_stable():

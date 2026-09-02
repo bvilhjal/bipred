@@ -290,6 +290,14 @@ def test_prepare_reads_an_n_eff_column_by_index_name_and_digit_string(tmp_path):
         prepare_bivariate_sumstats(
             cache, str(path), p2, n_eff2=10_000,
             columns1={"n_eff": 7.5}, qc=False)
+    # A boolean is an int in Python, so True would otherwise read column
+    # index 1 (CHR) as a per-variant n_eff of 1.0 genome-wide -- a silent,
+    # two-orders-of-magnitude error. Refuse it like every other non-index.
+    for bad in (True, False, np.bool_(True)):
+        with pytest.raises(ValueError, match="not boolean"):
+            prepare_bivariate_sumstats(
+                cache, str(path), p2, n_eff2=10_000,
+                columns1={"n_eff": bad}, qc=False)
 
 
 def test_write_weights_uses_hwe_sd_from_cache_af(tmp_path):
@@ -807,3 +815,82 @@ def test_reference_loci_borrows_the_cached_identifier_index(tmp_path):
         # And it still answers the question the diagnosis asks.
         assert first.loci("rs3") == {("1", 4)}
         assert first.loci("rs9999") is None
+
+
+def test_positional_only_matches_are_flagged(tmp_path):
+    """Rows whose identifier the reference lacks but whose coordinate matches
+    are aligned on position alone; that must never be silent."""
+    cache, _p1, _p2, _b1, _b2, n, _ids, _af = _cache_and_sumstats(
+        tmp_path, m=60)
+    foreign = np.array([f"rs{9_000_000 + i}" for i in range(60)], dtype=object)
+    path = _shifted_positions_sumstats(tmp_path, foreign, n, name="posonly.tsv")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        trait = prepare_trait_sumstats(cache, path, n_eff=n, qc=False)
+    assert len(trait) == 60
+    assert trait.log["n_positional_only"] == 60
+    messages = [str(w.message) for w in caught]
+    assert any("position alone" in m for m in messages), messages
+
+
+def test_positional_only_matches_are_absent_after_reanchoring(tmp_path):
+    """reanchor_on_identifier drops the absent-identifier rows upstream, so
+    the survivors match by identifier and nothing is position-only."""
+    cache, _p1, _p2, _b1, _b2, n, ids, _af = _cache_and_sumstats(
+        tmp_path, m=60)
+    path = _shifted_positions_sumstats(tmp_path, ids, n, shift=137,
+                                       name="posonly-reanchor.tsv")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        trait = prepare_trait_sumstats(cache, path, n_eff=n, qc=False,
+                                       reanchor_on_identifier=True)
+    assert len(trait) == 60
+    assert trait.log["n_positional_only"] == 0
+
+
+def test_reanchoring_warns_on_drops_without_any_move(tmp_path):
+    """A file that loses rows to re-anchoring but needs no coordinate move
+    used to discard them with zero output on stderr."""
+    cache, _p1, _p2, _b1, _b2, n, _ids, _af = _cache_and_sumstats(
+        tmp_path, m=60)
+    # 40 rows carry real identifiers at the correct coordinates; 20 carry no
+    # identifier at all. Nothing needs moving, but the empty-id rows are
+    # dropped by re-anchoring and that discard must be announced.
+    ids_mixed = np.array(
+        [f"rs{i}" if i < 40 else "" for i in range(60)], dtype=object)
+    path = tmp_path / "reanchor-drops.tsv"
+    _write_sumstats(path, ids_mixed, ["A"] * 60, ["G"] * 60,
+                    np.full(60, 0.01), np.full(60, 1.0 / np.sqrt(n)), n,
+                    pos=np.arange(1, 61))
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        trait = prepare_trait_sumstats(cache, str(path), n_eff=n, qc=False,
+                                       reanchor_on_identifier=True)
+    assert len(trait) == 40
+    log = trait.log["reanchor"]
+    assert log["n_moved"] == 0
+    assert log["n_dropped_missing_identifier"] == 20
+    messages = [str(w.message) for w in caught]
+    assert any("dropped 20 of 60 rows" in m for m in messages), messages
+
+
+def test_low_coverage_from_invalid_rows_names_the_validity_mask(tmp_path):
+    """When the SE/N validity mask (not the deposition) explains the loss,
+    the coverage warning must say so instead of blaming the GWAS."""
+    cache, _p1, _p2, _b1, _b2, n, ids, _af = _cache_and_sumstats(
+        tmp_path, m=60)
+    # 20 valid rows match; 40 carry an all-zero standard error and are
+    # dropped after harmonization by the validity mask.
+    se = np.full(60, 1.0 / np.sqrt(n))
+    se[20:] = 0.0
+    path = tmp_path / "invalid-se.tsv"
+    _write_sumstats(path, ids, ["A"] * 60, ["G"] * 60, np.full(60, 0.01),
+                    se, n, pos=np.arange(1, 61))
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        trait = prepare_trait_sumstats(cache, str(path), n_eff=n, qc=False)
+    overlap = trait.log["reference_overlap"]
+    assert overlap["reason"] == "rows_failed_validity"
+    assert trait.log["n_invalid"] == 40
+    messages = [str(w.message) for w in caught]
+    assert any("standard error" in m for m in messages), messages

@@ -31,6 +31,39 @@ immutable pin cannot install a 0.6.5-labelled build that lacks
   be a boolean.
 - Identifier re-anchoring that drops every row no longer reports that QC
   removed everything and the reference was never consulted.
+- `columns={"n_eff": True}` is rejected instead of being read as column
+  index 1. A boolean is an int in Python, so `True` previously selected the
+  chromosome column and silently set a per-variant `n_eff` of 1.0
+  genome-wide — a two-orders-of-magnitude error in the standardized effects.
+  Every other integer control already refuses booleans; this one now does too.
+- Rows whose identifier the LD reference does not hold but whose coordinate
+  matches are now announced: they were aligned on position alone, so each was
+  bound to whatever reference variant sits at that coordinate with a
+  compatible allele pair, and the alignment for them cannot be verified by
+  identifier. The count is recorded as `log["n_positional_only"]`. With
+  `reanchor_on_identifier` such rows are dropped upstream, so the warning
+  reads 0 there.
+- Identifier re-anchoring now warns when it *drops* rows even if it moves
+  none. Previously the warning was gated on `n_moved`, so a file losing a
+  large fraction to retired or missing identifiers was discarded with zero
+  output on stderr. Coverage is also measured against the pre-reanchor row
+  count, so `n_sumstats_offered` reports what the user actually offered.
+- The low-coverage warning attributes the loss to the validity mask or to QC
+  when those dominate. Before, whenever every surviving row harmonized, the
+  reason was forced to "sparse_sumstats" and the message blamed the
+  deposition — even when a mis-mapped, all-zero standard-error column or an
+  over-tight QC filter had removed most of the file.
+
+### Added
+
+- `bipred --version` prints the package version, so a run can record the
+  exact version `README` asks users to cite.
+- Tests: the ldpred3 seam test now derives its pinned surface from the seam's
+  own `__all__` (previously 5 of the 25 borrowed private names, including
+  `_variant_indices`, were unpinned), pins the `_variant_indices` layout
+  behaviourally, and an independent Gaussian-conditioning oracle checks the
+  bivariate sweep's four-state likelihood, posterior means, and draws — the
+  one check that does not reuse `_bivar_const`'s closed forms.
 
 ### Changed
 
