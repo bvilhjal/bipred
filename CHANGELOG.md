@@ -11,6 +11,12 @@ immutable pin cannot install a 0.6.5-labelled build that lacks
 
 ### Changed
 
+- The LDpred3 ceiling moves from `<0.7` to `<0.8`, in both the core dependency
+  and the `fast` extra. LDpred3 0.7.0 (chrX-aware matching, QC and scoring)
+  was excluded by the old ceiling even though the bipred suite runs green
+  against it; bipred touches none of the chrX surface. README's two statements
+  of the contract were updated to match.
+
 - CI and installation guidance now pin the reviewed LDpred3 0.6.8 revision;
   the supported dependency floor remains `>=0.6.6,<0.7`.
 - Direct bivariate fits remain at 200 burn-in and 200 retained sweeps by

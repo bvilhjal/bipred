@@ -11,7 +11,7 @@ LD representations and sampler utilities.
 ## Installation
 
 Python 3.9–3.14 is supported. Numba is strongly recommended. The current
-Bipred development line supports `ldpred3>=0.6.6,<0.7`. Neither package is on
+Bipred development line supports `ldpred3>=0.6.6,<0.8`. Neither package is on
 PyPI, so a
 Git install requires authenticated GitHub read access. Install the exact
 LDpred3 revision tested by CI; its private interoperability seam is not stable
@@ -35,7 +35,7 @@ directory binds the empty checkout as a namespace package and hides the real
 module.
 
 CI preinstalls that immutable revision, then installs Bipred through its
-declared `ldpred3>=0.6.6,<0.7` dependency contract rather than bypassing
+declared `ldpred3>=0.6.6,<0.8` dependency contract rather than bypassing
 the resolver. The private sampler seam in `bipred/_ldpred3_compat.py` still has
 behavioural tests. Archived real-data
 benchmarks deliberately retain their immutable LDpred3 0.4.5 provenance in
