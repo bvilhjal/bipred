@@ -18,7 +18,7 @@ immutable pin cannot install a 0.6.5-labelled build that lacks
   of the contract were updated to match.
 
 - CI and installation guidance now pin the reviewed LDpred3 0.6.8 revision;
-  the supported dependency floor remains `>=0.6.6,<0.7`.
+  the supported dependency floor remains `>=0.6.6`.
 - Direct bivariate fits remain at 200 burn-in and 200 retained sweeps by
   default. SMARTpred explicitly requests 300/100 as a web-service operating
   point; that setting does not replace bipred's sampling-oriented default
@@ -29,7 +29,7 @@ immutable pin cannot install a 0.6.5-labelled build that lacks
   while 16 random probes on blocks larger than 1,024 missed an embedded
   indefinite 3×3. Large float blocks now use a deterministic
   smallest-eigenvalue probe. The LD-consistency screen already floors D8.
-- `ldpred3` dependency floor is `>=0.6.6,<0.7`.
+- `ldpred3` dependency range is `>=0.6.6,<0.8`.
 
 ### Fixed
 
