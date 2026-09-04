@@ -5,11 +5,27 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 ## [Unreleased]
 
-The project is now `0.3.15.dev0`. The LDpred3 floor is `0.7.3`: that is the
-first release exporting `qc._ridge_for_floor`, the ill-posed-window repair the
-LD-consistency screen's confirmation stage now imports rather than re-deriving.
-(It had been `0.6.6`, the first build with `BUILD_MISMATCH_FRACTION` and the
-current DENTIST/D8 semantics; every later floor still guarantees those.)
+The project is now `0.3.15.dev0`. The LDpred3 floor is `0.7.4`: the
+LD-consistency screen now lives there, and `bipred.qc` re-exports it. (The
+floor had been `0.6.6`, the first build with `BUILD_MISMATCH_FRACTION` and the
+current DENTIST/D8 semantics, then `0.7.3` for the shared ill-posed-window
+repair; every later floor still guarantees those.)
+
+### Removed
+
+- The LD-consistency screen's implementation. `bipred/qc.py` was 1,048 lines,
+  of which the screen -- DENTIST's split-half schedule -- was ~700, and its own
+  docstring asked why it was here at all "given the package otherwise refuses
+  to touch summary statistics". It is a single-trait check, and SMARTpred's
+  univariate pipeline had to import the two-trait package to run it. It now
+  lives in `ldpred3.qc` beside LDpred3's other DENTIST schedule, sharing one
+  file and one repair. Every public name (`ld_consistency_screen`, `dentist`,
+  `dentist_statistic`, the `DEFAULT_*` controls) is re-exported unchanged, so
+  callers need not change; `bipred.qc.DEFAULT_EIGENVALUE_FLOOR` remains the
+  1e-3 split-half truncation, aliasing LDpred3's
+  `DEFAULT_SPLIT_HALF_EIGENVALUE_FLOOR`. The 35 screen tests moved with it.
+  What stays is genuinely bipred's: the long-range-LD locus list,
+  `sd_consistency`, and `implied_sample_size`.
 
 ### Changed
 

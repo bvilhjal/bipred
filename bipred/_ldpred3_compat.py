@@ -1,8 +1,8 @@
 """Lazy compatibility seam for the bounded :mod:`ldpred3` dependency.
 
 The names here are the bounded LDpred3 surface in ``pyproject.toml``
-(``>=0.7.3,<0.8``; the floor is where ``qc._ridge_for_floor``, the
-shared DENTIST repair, first exists). Most of them -- the Numba
+(``>=0.7.4,<0.8``; the floor is where the LD-consistency screen itself
+lives, ``bipred.qc`` being a re-export of it). Most of them -- the Numba
 decorators, the input validators, ``warn_no_numba`` -- are *published* by the
 public :mod:`ldpred3.shim` module (added in LDpred3 0.5.3), and the seam
 binds those through it. The remainder are still underscore-private helpers
