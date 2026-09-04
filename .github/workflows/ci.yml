@@ -14,14 +14,14 @@ env:
   # Exact compatible sibling revision. Pin the tested 0.6 release rather than
   # following the moving default branch. Archived real-data benchmarks retain
   # their own immutable 0.4.5 source pin in benchmarks/real_data_inputs.py.
-  LDPRED3_REV: "a7d4bd8961669ca487adf2a310d354ee12b32d22"
+  LDPRED3_REV: "d5570538d934e19aa7d6366176a1dfd27f3ee78d"
   # The floor bipred supports -- NOT a prediction about what `master` is at.
   # Those are different facts, and the workflow used to assert the installed
   # version equalled this one, which held only while master sat exactly on the
   # floor and broke the moment LDpred3 moved to 0.5.4, with no bipred change at
   # fault. The verify step below checks range membership instead, so this value
   # tracks pyproject and nothing else.
-  LDPRED3_FLOOR: "0.7.5"
+  LDPRED3_FLOOR: "0.7.6"
   # ldpred3 lives in a private repo, so the runner's default GITHUB_TOKEN (scoped
   # to this repo only) cannot clone it. Provide a repo/organization secret
   # LDPRED3_FOR_BIPRED (or LDPRED3_TOKEN) — a PAT or fine-grained token with

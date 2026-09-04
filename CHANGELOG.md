@@ -5,7 +5,7 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 ## [Unreleased]
 
-The project is now `0.3.15.dev0`. The LDpred3 floor is `0.7.5`: single-trait
+The project is now `0.3.15.dev0`. The LDpred3 floor is `0.7.6`: single-trait
 preparation and the LD-consistency screen both live there now, and
 `bipred.prepare` / `bipred.qc` re-export them. (The floor had been `0.6.6`,
 the first build with `BUILD_MISMATCH_FRACTION` and the current DENTIST/D8
