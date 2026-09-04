@@ -1,7 +1,8 @@
 """Lazy compatibility seam for the bounded :mod:`ldpred3` dependency.
 
 The names here are the bounded LDpred3 surface in ``pyproject.toml``
-(``>=0.6.6,<0.7``). Most of them -- the Numba
+(``>=0.7.3,<0.8``; the floor is where ``qc._ridge_for_floor``, the
+shared DENTIST repair, first exists). Most of them -- the Numba
 decorators, the input validators, ``warn_no_numba`` -- are *published* by the
 public :mod:`ldpred3.shim` module (added in LDpred3 0.5.3), and the seam
 binds those through it. The remainder are still underscore-private helpers
@@ -57,7 +58,12 @@ _MODULE_NAMES = {
     "ldpred3.ldsc": ("_weights", "_wls"),
     # Deterministic λmin for large float LD blocks. DENTIST already owns the
     # Lanczos-or-eigh fallback; the structural PD probe must not re-derive it.
-    "ldpred3.qc": ("_smallest_eigenvalue",),
+    # ``_ridge_for_floor`` is the one ill-posed-window repair shared by both
+    # DENTIST screens, and ``DEFAULT_EIGENVALUE_FLOOR`` its floor: importing
+    # them is what makes "both screens repair the same way" true by
+    # construction rather than by a docstring kept in step by hand.
+    "ldpred3.qc": ("DEFAULT_EIGENVALUE_FLOOR", "_ridge_for_floor",
+                   "_smallest_eigenvalue"),
 }
 
 _NAME_TO_MODULE = {

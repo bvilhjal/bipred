@@ -5,11 +5,29 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 ## [Unreleased]
 
-The project is now `0.3.15.dev0`. The LDpred3 floor remains `0.6.6` so an
-immutable pin cannot install a 0.6.5-labelled build that lacks
-`BUILD_MISMATCH_FRACTION` and the current DENTIST/D8 semantics.
+The project is now `0.3.15.dev0`. The LDpred3 floor is `0.7.3`: that is the
+first release exporting `qc._ridge_for_floor`, the ill-posed-window repair the
+LD-consistency screen's confirmation stage now imports rather than re-deriving.
+(It had been `0.6.6`, the first build with `BUILD_MISMATCH_FRACTION` and the
+current DENTIST/D8 semantics; every later floor still guarantees those.)
 
 ### Changed
+
+- The LD-consistency screen's confirmation stage inverts the same operator
+  as LDpred3's DENTIST. Both floor the spectrum of an ill-posed window at
+  0.01 before inverting, but this stage *clipped* eigenvalues at the floor
+  while LDpred3 *raises the ridge* uniformly to `floor - lambda_min`, and only
+  a docstring held the two in step. The raise is now imported
+  (`ldpred3.qc._ridge_for_floor`) and `DEFAULT_LOO_EIGENVALUE_FLOOR` is
+  LDpred3's constant by identity. On well-conditioned windows nothing
+  changes. On the int8 HapMap3+ panel, where the floor binds on every dense
+  block, calibration and sensitivity were already identical (0 null flags
+  and 240/240 planted sign-flips recovered, each, in 29,805 tests), but the
+  clip flagged 1,500 consistent neighbours of a planted outlier against the
+  raise's 654; screens on quantised references will therefore drop fewer
+  innocent variants next to a genuine outlier. A test now pins the two
+  operators to agree on an indefinite window, which is the case a PSD test
+  would never have caught.
 
 - The LDpred3 ceiling moves from `<0.7` to `<0.8`, in both the core dependency
   and the `fast` extra. LDpred3 0.7.0 (chrX-aware matching, QC and scoring)
@@ -17,8 +35,8 @@ immutable pin cannot install a 0.6.5-labelled build that lacks
   against it; bipred touches none of the chrX surface. README's two statements
   of the contract were updated to match.
 
-- CI and installation guidance now pin the reviewed LDpred3 0.6.8 revision;
-  the supported dependency floor remains `>=0.6.6`.
+- CI and installation guidance now pin the reviewed LDpred3 0.6.8 revision.
+  (The floor has since moved to `>=0.7.3`; see the entry above.)
 - Direct bivariate fits remain at 200 burn-in and 200 retained sweeps by
   default. SMARTpred explicitly requests 300/100 as a web-service operating
   point; that setting does not replace bipred's sampling-oriented default
@@ -29,7 +47,7 @@ immutable pin cannot install a 0.6.5-labelled build that lacks
   while 16 random probes on blocks larger than 1,024 missed an embedded
   indefinite 3×3. Large float blocks now use a deterministic
   smallest-eigenvalue probe. The LD-consistency screen already floors D8.
-- `ldpred3` dependency range is `>=0.6.6,<0.8`.
+- `ldpred3` dependency range is `>=0.7.3,<0.8`.
 
 ### Fixed
 

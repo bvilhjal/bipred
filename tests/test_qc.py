@@ -816,13 +816,27 @@ def _indefinite_window(m=400, rho=0.9, seed=0):
     return R, np.rint(R * 127.0) / 127.0
 
 
-def test_precision_loo_forms_no_inverse_and_floors_the_window():
-    """One eigendecomposition does the PSD repair and the inversion."""
+def test_precision_loo_is_ldpred3s_operator_on_an_ill_posed_window():
+    """The confirmation stage inverts exactly what LDpred3's DENTIST inverts.
+
+    Both screens repair an ill-posed window with the *same* uniform
+    ridge-raise, imported from LDpred3 -- not, as before, a clip of the
+    spectrum here and a raise there. Those agreed on well-conditioned input
+    and diverged on every int8 block of the HapMap3+ panel, where the floor
+    binds. So the window here must be indefinite, and the raise must be seen
+    to engage: a test on a PSD window would pass under either operator and
+    prove nothing about the one that was wrong.
+    """
     from bipred.qc import (_precision_loo, DEFAULT_LOO_RIDGE,
                            DEFAULT_LOO_EIGENVALUE_FLOOR)
+    from ldpred3.qc import _floored_ridge, _ridge_for_floor, DEFAULT_EIGENVALUE_FLOOR
+
+    assert DEFAULT_LOO_EIGENVALUE_FLOOR == DEFAULT_EIGENVALUE_FLOOR, (
+        "bipred's confirmation floor must be LDpred3's, not a mirrored copy")
 
     R, q = _indefinite_window()
-    assert np.linalg.eigvalsh(q).min() < -0.01, "int8 window should be indefinite"
+    lo = float(np.linalg.eigvalsh(q).min())
+    assert lo < -0.01, "int8 window should be indefinite"
     rng = np.random.default_rng(1)
     z = rng.normal(size=R.shape[0])
 
@@ -831,17 +845,43 @@ def test_precision_loo_forms_no_inverse_and_floors_the_window():
     assert np.all(np.isfinite(stat)) and np.all(np.isfinite(tvec))
     assert np.all(stat >= 0.0), "T_j is a squared residual over a positive Omega_jj"
 
-    # Equivalent to building the floored inverse explicitly, which is what the
-    # closed form replaces.
-    w, V = np.linalg.eigh(q)
-    floored = (V * np.maximum(w, DEFAULT_LOO_EIGENVALUE_FLOOR)) @ V.T
-    omega = np.linalg.inv(floored + DEFAULT_LOO_RIDGE * np.eye(len(z)))
+    # The repair engaged: the shift exceeds the requested ridge on this window,
+    # and the spectrum-given form agrees with the block-given form LDpred3
+    # itself calls.
+    shift = _ridge_for_floor(lo, DEFAULT_LOO_RIDGE, DEFAULT_LOO_EIGENVALUE_FLOOR)
+    assert shift > DEFAULT_LOO_RIDGE
+    assert shift == _floored_ridge(q.astype(np.float64), DEFAULT_LOO_RIDGE,
+                                   DEFAULT_LOO_EIGENVALUE_FLOOR)
+
+    # bipred finds lambda_min from a float32 eigh, LDpred3 from a float64
+    # Lanczos. The shift is rounded up to _SHIFT_GRID, so the two may land one
+    # grid step apart on the same block -- never more. That step is the
+    # documented cost of the grid and keeps both above the floor.
+    from ldpred3.qc import _SHIFT_GRID
+    w32 = np.linalg.eigh(np.asarray(q, dtype=np.float32))[0]
+    shift32 = _ridge_for_floor(float(w32.min()), DEFAULT_LOO_RIDGE,
+                               DEFAULT_LOO_EIGENVALUE_FLOOR)
+    assert abs(shift32 - shift) <= _SHIFT_GRID + 1e-12
+
+    # LDpred3's operator, formed explicitly: Omega = (R + shift I)^-1.
+    omega = np.linalg.inv(np.asarray(q, dtype=np.float64)
+                          + shift32 * np.eye(len(z)))
     expect_t = omega @ z
     expect = (expect_t ** 2) / np.diag(omega)
-    # The closed form is the same operator; the tolerance is float32's, which
-    # is the precision the screen deliberately works in.
-    np.testing.assert_allclose(tvec, expect_t, rtol=1e-3, atol=1e-5)
+    # Same operator; the tolerance is float32's, the precision the screen
+    # deliberately works in. The raise leaves Omega twice as ill-conditioned
+    # as the clip did (smallest eigenvalue at the floor rather than floor +
+    # ridge), so near-zero residuals carry ~1e-4 absolute float32 error.
+    np.testing.assert_allclose(tvec, expect_t, rtol=1e-3, atol=2e-4)
     np.testing.assert_allclose(stat, expect, rtol=5e-3, atol=1e-3)
+
+    # And the clip is *not* what this computes any more: on an indefinite
+    # window the two differ materially, which is the bug this pins.
+    w, V = np.linalg.eigh(np.asarray(q, dtype=np.float64))
+    clipped = np.linalg.inv((V * np.maximum(w, DEFAULT_LOO_EIGENVALUE_FLOOR)) @ V.T
+                            + DEFAULT_LOO_RIDGE * np.eye(len(z)))
+    clip_stat = ((clipped @ z) ** 2) / np.diag(clipped)
+    assert not np.allclose(stat, clip_stat, rtol=5e-3, atol=1e-3)
 
 
 def test_precision_loo_floor_stops_an_int8_window_manufacturing_drops():
@@ -883,11 +923,12 @@ def test_precision_loo_floor_stops_an_int8_window_manufacturing_drops():
         "an indefinite window should give a negative precision diagonal; "
         f"min was {naive_diag.min():.4g}")
 
+    from ldpred3.qc import _ridge_for_floor
     w_q, V_q = np.linalg.eigh(q)
-    floored_diag = (V_q * V_q) @ (
-        1.0 / (np.maximum(w_q, DEFAULT_LOO_EIGENVALUE_FLOOR)
-               + DEFAULT_LOO_RIDGE))
-    assert floored_diag.min() > 0.0
+    shift = _ridge_for_floor(float(w_q.min()), DEFAULT_LOO_RIDGE,
+                             DEFAULT_LOO_EIGENVALUE_FLOOR)
+    raised_diag = (V_q * V_q) @ (1.0 / (w_q + shift))
+    assert raised_diag.min() > 0.0
 
 
 def test_precision_loo_keeps_a_genuinely_inconsistent_variant_flagged():

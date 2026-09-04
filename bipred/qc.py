@@ -89,10 +89,15 @@ from ._ldpred3_compat import (
     _Q8,
     _finite_control,
     _integer_at_least,
+    _ridge_for_floor,
     _validate_blocks,
     _validate_boolean_controls,
     _validate_seed,
 )
+# LDpred3's precision-form floor, aliased: bipred's own DEFAULT_EIGENVALUE_FLOOR
+# below is a different quantity (the split-half stage's pinv truncation, 1e-3)
+# and must keep its name and value.
+from ._ldpred3_compat import DEFAULT_EIGENVALUE_FLOOR as _LDPRED3_EIGENVALUE_FLOOR
 
 __all__ = ["ld_consistency_screen", "dentist", "dentist_statistic",
            "in_long_range_ld",
@@ -145,7 +150,15 @@ DEFAULT_LOO_RIDGE = 0.01
 #: 0.01 is the smallest floor that zeroes the null rate for both
 #: representations, and it recovers *more* planted inconsistency than the
 #: unfloored float32 path. Larger floors trade sensitivity for nothing.
-DEFAULT_LOO_EIGENVALUE_FLOOR = 0.01
+#:
+#: That calibration was run with the floor applied as a *clip* on the
+#: spectrum. The repair is now LDpred3's uniform ridge-raise
+#: (``ldpred3.qc._ridge_for_floor``), imported rather than mirrored, so the
+#: value below is LDpred3's constant by identity and cannot drift from it.
+#: The raise matches the clip on calibration and sensitivity and flags 2.3x
+#: fewer consistent neighbours of a planted outlier on the int8 panel; see
+#: :func:`_precision_loo`.
+DEFAULT_LOO_EIGENVALUE_FLOOR = _LDPRED3_EIGENVALUE_FLOOR
 #: ``|(Ω z)_j| / |z_j|`` for an LD-consistent private effect is ~1. A
 #: neighbour-inconsistent z (wrong sign relative to the LD prediction, or a
 #: mismatched reference) is several times larger. A flagged variant below
@@ -390,27 +403,41 @@ def _precision_loo(ld, z, ridge, floor=DEFAULT_LOO_EIGENVALUE_FLOOR):
     One symmetric eigendecomposition does the PSD repair and the inversion
     together::
 
-        Ω = V diag(1 / (max(w, floor) + ridge)) Vᵀ
-        Ω_jj = Σ_k V²_jk / (w'_k + ridge)
+        c    = ldpred3.qc._ridge_for_floor(min(w), ridge, floor)
+        Ω    = V diag(1 / (w + c)) Vᵀ
+        Ω_jj = Σ_k V²_jk / (w_k + c)
 
-    so no explicit inverse is formed and no ``pinv`` fallback is needed: after
-    the floor every eigenvalue is at least ``floor + ridge`` and the solve is
-    unconditionally well posed. The cost is one ``eigh`` of the window, which
-    is what the previous explicit inverse cost anyway, and the window is
-    bounded by :data:`DEFAULT_WINDOW` rather than by the source block's width.
+    so no explicit inverse is formed and no ``pinv`` fallback is needed: ``c``
+    is the smallest grid-rounded shift that lifts every eigenvalue to the
+    floor, so the solve is unconditionally well posed. The cost is one
+    ``eigh`` of the window, and the window is bounded by :data:`DEFAULT_WINDOW`
+    rather than by the source block's width.
 
-    The floor is what makes ``T_j`` mean anything. The statistic presumes
-    ``Ω_jj > 0``, i.e. that ``R + ridge I`` is positive definite. A reference
-    whose blocks are thresholded, or stored as int8, is not: quantising these
-    panels leaves their smallest eigenvalue near -0.15, far below the 0.01
-    ridge. Without the floor the statistic is not merely noisy, it is
-    ill-posed -- on 24 real dense windows (14,522 variants) drawn under the
-    null it dropped 60% of an int8 panel and 0% of the same panel in float32.
-    See :data:`DEFAULT_LOO_EIGENVALUE_FLOOR`.
+    The repair is LDpred3's, imported, not re-derived: ``Ω`` here is the same
+    operator :func:`ldpred3.qc.dentist_outlier_mask` inverts, so the two
+    screens cannot disagree on an ill-posed window. They used to. This
+    function clipped the spectrum at the floor instead, and on the int8
+    HapMap3+ panel (λ_min between -0.16 and -0.05, so the floor binds on
+    every block) the two operators agreed on the null (0 false flags each in
+    29,805 tests) and on sensitivity (240/240 planted sign-flips recovered
+    each) but not on collateral: the clip flagged 1,500 consistent
+    neighbours of the planted outliers, the raise 654. Clipping left the
+    well-conditioned directions at full sharpness and let the outlier's
+    residual leak through them; the uniform shift damps it. On the float32
+    panel the difference was smaller but present, because its build-time
+    ridge of 0.001 also sits under the 0.01 floor.
+
+    The floor itself is what makes ``T_j`` mean anything. The statistic
+    presumes ``Ω_jj > 0``, i.e. that ``R + ridge I`` is positive definite. A
+    reference whose blocks are thresholded, or stored as int8, is not.
+    Without the floor the statistic is not merely noisy, it is ill-posed --
+    on 24 real dense windows (14,522 variants) drawn under the null it
+    dropped 60% of an int8 panel and 0% of the same panel in float32. See
+    :data:`DEFAULT_LOO_EIGENVALUE_FLOOR`.
     """
     w, V = np.linalg.eigh(np.asarray(ld, dtype=_WORK_DTYPE))
-    inv_w = _WORK_DTYPE(1.0) / (np.maximum(w, _WORK_DTYPE(floor))
-                                + _WORK_DTYPE(ridge))
+    shift = _ridge_for_floor(float(w.min()), float(ridge), float(floor))
+    inv_w = _WORK_DTYPE(1.0) / (w + _WORK_DTYPE(shift))
     tvec = V @ (inv_w * (V.T @ np.asarray(z, dtype=_WORK_DTYPE)))
     # Ω's diagonal without forming Ω: row-wise squared loadings times 1/λ.
     diag = (V * V) @ inv_w
