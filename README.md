@@ -18,7 +18,7 @@ LDpred3 revision tested by CI; its private interoperability seam is not stable
 on the sibling repository's moving default branch:
 
 ```bash
-python -m pip install "ldpred3[fast] @ git+https://github.com/bvilhjal/ldpred3.git@ebb070966fafeb846f94dde81daf1b5c5f778e8d"
+python -m pip install "ldpred3[fast] @ git+https://github.com/bvilhjal/ldpred3.git@a7d4bd8961669ca487adf2a310d354ee12b32d22"
 python -m pip install "bipred[fast] @ git+https://github.com/bvilhjal/bipred.git"
 ```
 

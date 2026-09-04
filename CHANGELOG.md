@@ -5,13 +5,27 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 ## [Unreleased]
 
-The project is now `0.3.15.dev0`. The LDpred3 floor is `0.7.4`: the
-LD-consistency screen now lives there, and `bipred.qc` re-exports it. (The
-floor had been `0.6.6`, the first build with `BUILD_MISMATCH_FRACTION` and the
-current DENTIST/D8 semantics, then `0.7.3` for the shared ill-posed-window
-repair; every later floor still guarantees those.)
+The project is now `0.3.15.dev0`. The LDpred3 floor is `0.7.5`: single-trait
+preparation and the LD-consistency screen both live there now, and
+`bipred.prepare` / `bipred.qc` re-export them. (The floor had been `0.6.6`,
+the first build with `BUILD_MISMATCH_FRACTION` and the current DENTIST/D8
+semantics; `0.7.3` for the shared ill-posed-window repair; `0.7.4` for the
+screen; every later floor still guarantees those.)
 
 ### Removed
+
+- Single-trait preparation. `bipred/prepare.py` was 1,403 lines; the 537 that
+  remain are the pairing -- `PreparedBivariate`, `pair_prepared_traits`,
+  `prepare_bivariate_sumstats` and their helpers. `PreparedTrait`,
+  `prepare_trait_sumstats` and `screen_prepared_trait` live in
+  `ldpred3.prepare` and are re-exported here unchanged, so existing imports
+  keep working and resolve to the same objects (a test now asserts that).
+  Two private copies of LDpred3 code went with them: `_ReferenceLoci` (the
+  richer bipred version replaced LDpred3's) and `_diagnose_unmatched`, plus a
+  chromosome-label normaliser that LDpred3's already subsumed. `_progress` is
+  a re-export of `ldpred3._progress` for the same reason. The 19 single-trait
+  tests and the screen-wrapper tests moved to LDpred3; three tests that build
+  a `BivariateResult` stayed.
 
 - The LD-consistency screen's implementation. `bipred/qc.py` was 1,048 lines,
   of which the screen -- DENTIST's split-half schedule -- was ~700, and its own

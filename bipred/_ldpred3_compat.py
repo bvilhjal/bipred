@@ -1,8 +1,8 @@
 """Lazy compatibility seam for the bounded :mod:`ldpred3` dependency.
 
 The names here are the bounded LDpred3 surface in ``pyproject.toml``
-(``>=0.7.4,<0.8``; the floor is where the LD-consistency screen itself
-lives, ``bipred.qc`` being a re-export of it). Most of them -- the Numba
+(``>=0.7.5,<0.8``; the floor is where single-trait preparation and the
+LD-consistency screen live, ``bipred.prepare`` and ``bipred.qc`` re-exporting them). Most of them -- the Numba
 decorators, the input validators, ``warn_no_numba`` -- are *published* by the
 public :mod:`ldpred3.shim` module (added in LDpred3 0.5.3), and the seam
 binds those through it. The remainder are still underscore-private helpers
@@ -64,6 +64,10 @@ _MODULE_NAMES = {
     # construction rather than by a docstring kept in step by hand.
     "ldpred3.qc": ("DEFAULT_EIGENVALUE_FLOOR", "_ridge_for_floor",
                    "_smallest_eigenvalue"),
+    # The progress-callback contract moved to LDpred3 with the screen; the
+    # pairing reports through the same two helpers so one caller callable
+    # sees one event vocabulary.
+    "ldpred3._progress": ("report", "validate"),
 }
 
 _NAME_TO_MODULE = {

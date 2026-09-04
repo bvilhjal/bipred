@@ -96,3 +96,17 @@ def test_import_submodule_as_binds_the_module_not_a_function():
 
     assert isinstance(ldsc_module, types.ModuleType)
     assert callable(ldsc_module.ldsc_rg)
+
+
+def test_single_trait_preparation_is_reexported_from_ldpred3():
+    """bipred re-exports, and does not redefine, single-trait preparation.
+
+    A caller who wrote ``from bipred import screen_prepared_trait`` before the
+    move must get the very object LDpred3 owns -- not a copy that could drift.
+    """
+    import bipred
+    import ldpred3.prepare
+    for name in ("PreparedTrait", "prepare_trait_sumstats", "screen_prepared_trait"):
+        assert getattr(bipred, name) is getattr(ldpred3.prepare, name)
+        assert name in bipred.__all__
+

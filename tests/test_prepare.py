@@ -1,7 +1,6 @@
 """Public on-ramp: sparse trait preparation, pairing, and write_weights."""
 
 from dataclasses import replace
-import warnings
 
 import numpy as np
 import pytest
@@ -94,36 +93,6 @@ def test_prepare_aligns_and_standardizes(tmp_path):
     truth2 = standardize_betas(b2, np.full(20, 1.0 / np.sqrt(n)), n)[0]
     assert np.allclose(prep.beta_hat2, truth2, atol=1e-6)
     assert np.allclose(prep.af, af)
-
-
-def test_prepare_trait_is_sparse_and_sorted_in_cache_order(tmp_path):
-    cache, _p1, _p2, b1, _b2, n, ids, _af = _cache_and_sumstats(tmp_path)
-    source_order = np.array([9, 2, 15, 0, 7])
-    path = tmp_path / "unsorted-trait.tsv"
-    _write_sumstats(
-        path, ids[source_order], ["A"] * len(source_order),
-        ["G"] * len(source_order), b1[source_order],
-        np.full(len(source_order), 1.0 / np.sqrt(n)), n,
-        pos=source_order + 1)
-    events = []
-    trait = prepare_trait_sumstats(
-        cache, path, n_eff=n, qc=False, label="reusable trait",
-        progress=events.append)
-
-    expected = np.sort(source_order)
-    np.testing.assert_array_equal(trait.indices, expected)
-    assert len(trait) == len(expected) < trait.n_cache == len(ids)
-    from ldpred3 import standardize_betas
-    truth = standardize_betas(
-        b1[expected], np.full(len(expected), 1.0 / np.sqrt(n)), n)[0]
-    np.testing.assert_allclose(trait.beta_hat, truth, atol=1e-7)
-    np.testing.assert_array_equal(trait.n_eff, np.full(len(expected), n))
-    assert trait.indices.flags.c_contiguous and trait.beta_hat.flags.c_contiguous
-    assert trait.log["label"] == "reusable trait"
-    assert [event["step"] for event in events] == [
-        "load LD reference",
-        "read, QC, harmonize, and standardize reusable trait",
-    ]
 
 
 def test_pair_prepared_traits_matches_one_shot_preparation(tmp_path):
@@ -316,83 +285,6 @@ def test_write_weights_uses_hwe_sd_from_cache_af(tmp_path):
     assert wt.has_scale
     assert np.allclose(wt.weight, res.beta1_est)
     assert np.allclose(wt.sd_ref, np.sqrt(2 * 0.3 * 0.7))
-
-
-def test_write_weights_rejects_a_length_mismatch():
-    res = BivariateResult(
-        beta1_est=np.ones(3), beta2_est=np.ones(3), h2=(0.1, 0.1),
-        rg=0.0, p=0.02, sigma=np.eye(2))
-    with pytest.raises(ValueError, match="provenance"):
-        res.write_weights("x", trait=1, id=["a"], chrom=["1"], pos=[1],
-                          effect_allele=["A"], other_allele=["G"])
-
-
-def test_write_weights_refuses_a_diverged_fit_until_allowed(tmp_path):
-    res = BivariateResult(
-        beta1_est=np.ones(2), beta2_est=np.ones(2), h2=(0.1, 0.1),
-        rg=0.0, p=0.02, sigma=np.eye(2),
-        divergence_diagnostics={"evaluated": True, "flagged": True})
-    ids = ["a", "b"]
-    common = dict(
-        trait=1, id=ids, chrom=["1", "1"], pos=[1, 2],
-        effect_allele=["A", "A"], other_allele=["G", "G"])
-    with pytest.raises(ValueError, match="provenance"):
-        res.write_weights("x", trait=1, id=["a"], chrom=["1"], pos=[1],
-                          effect_allele=["A"], other_allele=["G"])
-    with pytest.raises(ValueError, match="divergence diagnostic"):
-        res.write_weights(str(tmp_path / "blocked.weights"), **common)
-    path = tmp_path / "allowed.weights"
-    with pytest.warns(RuntimeWarning, match="divergence diagnostic"):
-        res.write_weights(str(path), allow_diverged=True, **common)
-    assert path.exists()
-    with pytest.raises(TypeError, match="must be a boolean"):
-        res.write_weights(str(tmp_path / "str.weights"),
-                          allow_diverged="False", **common)
-
-
-def test_unstandardized_z_scores_are_rejected(tmp_path):
-    R = _ar1(12)
-    z = np.linspace(-2.0, 2.5, 12)
-    with pytest.raises(ValueError, match=r"\|beta_hat\| >= 1"):
-        ldpred3_auto_bivariate_blocks(
-            [(R, np.arange(12))], z, z, 20_000, 20_000,
-            burn_in=3, num_iter=3, seed=0)
-
-
-def test_invalid_sumstat_rows_are_counted_when_qc_is_off(tmp_path):
-    cache, p1, p2, *_ = _cache_and_sumstats(tmp_path, m=8)
-    with open(p1, encoding="utf-8") as fh:
-        lines = fh.readlines()
-    # Zero SE on one otherwise-valid matched row; qc=False used to drop it
-    # without recording the loss.
-    parts = lines[1].rstrip("\n").split("\t")
-    parts[6] = "0"
-    lines[1] = "\t".join(parts) + "\n"
-    p_bad = tmp_path / "bad.tsv"
-    p_bad.write_text("".join(lines), encoding="utf-8")
-    from bipred import prepare_trait_sumstats
-    trait = prepare_trait_sumstats(cache, p_bad, n_eff=10_000, qc=False)
-    assert trait.log["n_harmonized"] == 8
-    assert trait.log["n_invalid"] == 1
-    assert trait.log["n_matched"] == 7
-    assert len(trait) == 7
-
-
-def test_rsid_match_at_the_wrong_locus_is_dropped(tmp_path):
-    cache, p1, p2, *_ = _cache_and_sumstats(tmp_path, m=6)
-    with open(p1, encoding="utf-8") as fh:
-        lines = fh.readlines()
-    parts = lines[2].rstrip("\n").split("\t")
-    parts[2] = "99999"          # same rsID, different BP
-    lines[2] = "\t".join(parts) + "\n"
-    p_bad = tmp_path / "buildmix.tsv"
-    p_bad.write_text("".join(lines), encoding="utf-8")
-    from bipred import prepare_trait_sumstats
-    trait = prepare_trait_sumstats(cache, p_bad, n_eff=10_000, qc=False)
-    assert len(trait) == 5
-    dropped = (int(trait.log.get("n_locus_mismatch") or 0)
-               + int((trait.log.get("harmonize") or {}).get("n_unmatched") or 0))
-    assert dropped >= 1
 
 
 def test_prepared_trait_rejects_raw_z_as_beta_hat(tmp_path):
@@ -620,277 +512,42 @@ def test_prepare_rejects_a_non_callable_progress(tmp_path):
                                    progress=42)
 
 
-def _shifted_positions_sumstats(tmp_path, ids, n, *, keep=slice(None),
-                                shift=0, name="shifted.tsv"):
-    """One trait file whose rows optionally sit at the wrong coordinates."""
-    ids = np.asarray(ids, dtype=object)[keep]
-    pos = np.arange(1, len(np.asarray(ids)) + 1)
-    path = tmp_path / name
-    _write_sumstats(
-        path, ids, ["A"] * len(ids), ["G"] * len(ids),
-        np.full(len(ids), 0.01), np.full(len(ids), 1.0 / np.sqrt(n)), n,
-        pos=pos + shift)
-    return path
+def test_write_weights_rejects_a_length_mismatch():
+    res = BivariateResult(
+        beta1_est=np.ones(3), beta2_est=np.ones(3), h2=(0.1, 0.1),
+        rg=0.0, p=0.02, sigma=np.eye(2))
+    with pytest.raises(ValueError, match="provenance"):
+        res.write_weights("x", trait=1, id=["a"], chrom=["1"], pos=[1],
+                          effect_allele=["A"], other_allele=["G"])
 
 
-def test_full_reference_coverage_is_recorded_without_a_warning(tmp_path):
-    cache, p1, _p2, *_ = _cache_and_sumstats(tmp_path, m=60)
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        trait = prepare_trait_sumstats(cache, p1, n_eff=10_000, qc=False)
-    overlap = trait.log["reference_overlap"]
-    assert overlap["n_matched"] == overlap["n_cache"] == 60
-    assert overlap["frac_of_reference"] == 1.0
-    # The unmatched-row diagnosis costs an index over the whole reference and
-    # must not be paid when coverage is fine.
-    assert overlap["diagnosed"] is False
-    assert not [w for w in caught if "LD-reference" in str(w.message)]
+def test_write_weights_refuses_a_diverged_fit_until_allowed(tmp_path):
+    res = BivariateResult(
+        beta1_est=np.ones(2), beta2_est=np.ones(2), h2=(0.1, 0.1),
+        rg=0.0, p=0.02, sigma=np.eye(2),
+        divergence_diagnostics={"evaluated": True, "flagged": True})
+    ids = ["a", "b"]
+    common = dict(
+        trait=1, id=ids, chrom=["1", "1"], pos=[1, 2],
+        effect_allele=["A", "A"], other_allele=["G", "G"])
+    with pytest.raises(ValueError, match="provenance"):
+        res.write_weights("x", trait=1, id=["a"], chrom=["1"], pos=[1],
+                          effect_allele=["A"], other_allele=["G"])
+    with pytest.raises(ValueError, match="divergence diagnostic"):
+        res.write_weights(str(tmp_path / "blocked.weights"), **common)
+    path = tmp_path / "allowed.weights"
+    with pytest.warns(RuntimeWarning, match="divergence diagnostic"):
+        res.write_weights(str(path), allow_diverged=True, **common)
+    assert path.exists()
+    with pytest.raises(TypeError, match="must be a boolean"):
+        res.write_weights(str(tmp_path / "str.weights"),
+                          allow_diverged="False", **common)
 
 
-def test_partial_build_shift_warns_and_names_the_genome_build(tmp_path):
-    """The 99%-lost-on-coordinates case, which used to be entirely silent."""
-    cache, _p1, _p2, _b1, _b2, n, ids, _af = _cache_and_sumstats(
-        tmp_path, m=60)
-    # Every row but the first six sits at a shifted coordinate, as a GRCh38
-    # file does against a GRCh37 reference.
-    path = tmp_path / "buildshift.tsv"
-    pos = np.arange(1, 61)
-    pos[6:] += 137
-    _write_sumstats(
-        path, ids, ["A"] * 60, ["G"] * 60, np.full(60, 0.01),
-        np.full(60, 1.0 / np.sqrt(n)), n, pos=pos)
-
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        trait = prepare_trait_sumstats(cache, path, n_eff=n, qc=False,
-                                       label="trait")
-    overlap = trait.log["reference_overlap"]
-    assert overlap["n_matched"] == 6
-    assert overlap["frac_of_reference"] == pytest.approx(0.1)
-    assert overlap["diagnosed"] is True
-    assert overlap["n_unmatched_rows"] == 54
-    assert overlap["n_unmatched_id_elsewhere"] == 54
-    assert overlap["n_unmatched_id_absent"] == 0
-    assert overlap["build_mismatch_suspected"] is True
-    messages = [str(w.message) for w in caught
-                if issubclass(w.category, RuntimeWarning)]
-    assert any("genome-build mismatch" in m and "GRCh38" in m
-               for m in messages), messages
-    # The old n_locus_mismatch path cannot see this: harmonize rejects the
-    # row before bipred can compare loci.
-    assert trait.log["n_locus_mismatch"] == 0
-
-
-def test_a_hits_only_deposition_warns_without_blaming_the_build(tmp_path):
-    cache, _p1, _p2, _b1, _b2, n, ids, _af = _cache_and_sumstats(
-        tmp_path, m=60)
-    path = _shifted_positions_sumstats(
-        tmp_path, ids, n, keep=slice(0, 4), name="hitsonly.tsv")
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        trait = prepare_trait_sumstats(cache, path, n_eff=n, qc=False)
-    overlap = trait.log["reference_overlap"]
-    assert overlap["n_matched"] == 4
-    assert overlap["n_unmatched_rows"] == 0
-    assert overlap["build_mismatch_suspected"] is False
-    messages = [str(w.message) for w in caught
-                if issubclass(w.category, RuntimeWarning)]
-    assert any("hits-only" in m for m in messages), messages
-    assert not any("genome-build mismatch" in m for m in messages), messages
-
-
-def test_a_foreign_variant_set_warns_about_absent_identifiers(tmp_path):
-    cache, _p1, _p2, _b1, _b2, n, _ids, _af = _cache_and_sumstats(
-        tmp_path, m=60)
-    # Identifiers the reference does not hold, at coordinates it does not
-    # hold either: two different variant sets, not a coordinate error.
-    foreign = np.array([f"rs{9_000_000 + i}" for i in range(60)], dtype=object)
-    path = _shifted_positions_sumstats(
-        tmp_path, foreign, n, shift=500_000, name="foreign.tsv")
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        with pytest.raises(ValueError, match="identifier the reference does not hold"):
-            prepare_trait_sumstats(cache, path, n_eff=n, qc=False)
-    messages = [str(w.message) for w in caught]
-    assert any("does not hold at all" in m for m in messages), messages
-
-
-def test_zero_overlap_from_a_build_shift_says_so_in_the_error(tmp_path):
-    cache, _p1, _p2, _b1, _b2, n, ids, _af = _cache_and_sumstats(
-        tmp_path, m=60)
-    path = _shifted_positions_sumstats(
-        tmp_path, ids, n, shift=1_000, name="allshifted.tsv")
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        with pytest.raises(ValueError, match="check the genome build"):
-            prepare_trait_sumstats(cache, path, n_eff=n, qc=False)
-
-
-def test_reanchoring_recovers_a_build_shifted_trait(tmp_path):
-    """The repair path: identifiers agree, coordinates do not."""
-    cache, _p1, _p2, _b1, _b2, n, ids, _af = _cache_and_sumstats(
-        tmp_path, m=60)
-    path = _shifted_positions_sumstats(
-        tmp_path, ids, n, shift=137, name="shifted-all.tsv")
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        with pytest.raises(ValueError, match="check the genome build"):
-            prepare_trait_sumstats(cache, path, n_eff=n, qc=False)
-
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        trait = prepare_trait_sumstats(
-            cache, path, n_eff=n, qc=False, label="trait",
-            reanchor_on_identifier=True)
-    assert len(trait) == 60
-    assert trait.log["reference_overlap"]["frac_of_reference"] == 1.0
-    log = trait.log["reanchor"]
-    assert log["applied"] is True
-    assert log["n_anchored"] == log["n_moved"] == 60
-    assert log["n_dropped_absent_identifier"] == 0
-    messages = [str(w.message) for w in caught]
-    assert any("re-anchored 60 of 60 rows" in m for m in messages), messages
-    assert any("not a chain-file liftover" in m for m in messages), messages
-
-
-def test_reanchoring_a_build_matched_trait_moves_nothing(tmp_path):
-    cache, p1, _p2, *_ = _cache_and_sumstats(tmp_path, m=60)
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        plain = prepare_trait_sumstats(cache, p1, n_eff=10_000, qc=False)
-        repaired = prepare_trait_sumstats(cache, p1, n_eff=10_000, qc=False,
-                                          reanchor_on_identifier=True)
-    # Idempotent on correct input: same panel, same effects, no warning.
-    np.testing.assert_array_equal(repaired.indices, plain.indices)
-    np.testing.assert_allclose(repaired.beta_hat, plain.beta_hat)
-    assert repaired.log["reanchor"]["n_moved"] == 0
-    assert repaired.log["reanchor"]["n_anchored"] == 60
-    assert not [w for w in caught if "re-anchored" in str(w.message)]
-
-
-def test_reanchoring_refuses_a_positional_match_to_a_different_variant(
-        tmp_path):
-    """A wrong-variant match is worse than a lost variant."""
-    cache, _p1, _p2, _b1, _b2, n, ids, _af = _cache_and_sumstats(
-        tmp_path, m=60)
-    # Identifiers the reference lacks, sitting exactly on reference positions:
-    # harmonize's positional fallback matches them to the wrong variants.
-    foreign = np.array([f"rs{9_000_000 + i}" for i in range(60)], dtype=object)
-    path = _shifted_positions_sumstats(
-        tmp_path, foreign, n, name="colliding.tsv")
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        loose = prepare_trait_sumstats(cache, path, n_eff=n, qc=False)
-        assert len(loose) == 60          # every one a different variant
-
-        with pytest.raises(ValueError, match="re-anchoring dropped every") as exc:
-            prepare_trait_sumstats(cache, path, n_eff=n, qc=False,
-                                   reanchor_on_identifier=True)
-        assert "never consulted" not in str(exc.value)
-        assert "reference was consulted" in str(exc.value)
-
-
-def test_reference_loci_borrows_the_cached_identifier_index(tmp_path):
-    """The diagnosis must not build a second full-reference index.
-
-    A private ``{id: {(chrom, pos)}}`` dict over a 1.4M-variant reference cost
-    roughly 0.6 GiB per call, and a re-anchored preparation has two call sites
-    live at once. ``harmonize`` already memoises an identifier index on the
-    variant table, so this asserts the borrowing rather than the byte count.
-    """
-    from bipred._ldpred3_compat import _variant_indices
-    from bipred.prepare import _ReferenceLoci, _cache_variant_table
-
-    cache, *_rest = _cache_and_sumstats(tmp_path, m=12)
-    with prepare_ld_cache(cache) as opened:
-        variants = _cache_variant_table(opened)
-        by_id = _variant_indices(variants)[1]
-        first = _ReferenceLoci(variants)
-        second = _ReferenceLoci(variants)
-        # Same object, not an equal copy: no second index was allocated.
-        assert first._by_id is by_id
-        assert second._by_id is by_id
-        # And it still answers the question the diagnosis asks.
-        assert first.loci("rs3") == {("1", 4)}
-        assert first.loci("rs9999") is None
-
-
-def test_positional_only_matches_are_flagged(tmp_path):
-    """Rows whose identifier the reference lacks but whose coordinate matches
-    are aligned on position alone; that must never be silent."""
-    cache, _p1, _p2, _b1, _b2, n, _ids, _af = _cache_and_sumstats(
-        tmp_path, m=60)
-    foreign = np.array([f"rs{9_000_000 + i}" for i in range(60)], dtype=object)
-    path = _shifted_positions_sumstats(tmp_path, foreign, n, name="posonly.tsv")
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        trait = prepare_trait_sumstats(cache, path, n_eff=n, qc=False)
-    assert len(trait) == 60
-    assert trait.log["n_positional_only"] == 60
-    messages = [str(w.message) for w in caught]
-    assert any("position alone" in m for m in messages), messages
-
-
-def test_positional_only_matches_are_absent_after_reanchoring(tmp_path):
-    """reanchor_on_identifier drops the absent-identifier rows upstream, so
-    the survivors match by identifier and nothing is position-only."""
-    cache, _p1, _p2, _b1, _b2, n, ids, _af = _cache_and_sumstats(
-        tmp_path, m=60)
-    path = _shifted_positions_sumstats(tmp_path, ids, n, shift=137,
-                                       name="posonly-reanchor.tsv")
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        trait = prepare_trait_sumstats(cache, path, n_eff=n, qc=False,
-                                       reanchor_on_identifier=True)
-    assert len(trait) == 60
-    assert trait.log["n_positional_only"] == 0
-
-
-def test_reanchoring_warns_on_drops_without_any_move(tmp_path):
-    """A file that loses rows to re-anchoring but needs no coordinate move
-    used to discard them with zero output on stderr."""
-    cache, _p1, _p2, _b1, _b2, n, _ids, _af = _cache_and_sumstats(
-        tmp_path, m=60)
-    # 40 rows carry real identifiers at the correct coordinates; 20 carry no
-    # identifier at all. Nothing needs moving, but the empty-id rows are
-    # dropped by re-anchoring and that discard must be announced.
-    ids_mixed = np.array(
-        [f"rs{i}" if i < 40 else "" for i in range(60)], dtype=object)
-    path = tmp_path / "reanchor-drops.tsv"
-    _write_sumstats(path, ids_mixed, ["A"] * 60, ["G"] * 60,
-                    np.full(60, 0.01), np.full(60, 1.0 / np.sqrt(n)), n,
-                    pos=np.arange(1, 61))
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        trait = prepare_trait_sumstats(cache, str(path), n_eff=n, qc=False,
-                                       reanchor_on_identifier=True)
-    assert len(trait) == 40
-    log = trait.log["reanchor"]
-    assert log["n_moved"] == 0
-    assert log["n_dropped_missing_identifier"] == 20
-    messages = [str(w.message) for w in caught]
-    assert any("dropped 20 of 60 rows" in m for m in messages), messages
-
-
-def test_low_coverage_from_invalid_rows_names_the_validity_mask(tmp_path):
-    """When the SE/N validity mask (not the deposition) explains the loss,
-    the coverage warning must say so instead of blaming the GWAS."""
-    cache, _p1, _p2, _b1, _b2, n, ids, _af = _cache_and_sumstats(
-        tmp_path, m=60)
-    # 20 valid rows match; 40 carry an all-zero standard error and are
-    # dropped after harmonization by the validity mask.
-    se = np.full(60, 1.0 / np.sqrt(n))
-    se[20:] = 0.0
-    path = tmp_path / "invalid-se.tsv"
-    _write_sumstats(path, ids, ["A"] * 60, ["G"] * 60, np.full(60, 0.01),
-                    se, n, pos=np.arange(1, 61))
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        trait = prepare_trait_sumstats(cache, str(path), n_eff=n, qc=False)
-    overlap = trait.log["reference_overlap"]
-    assert overlap["reason"] == "rows_failed_validity"
-    assert trait.log["n_invalid"] == 40
-    messages = [str(w.message) for w in caught]
-    assert any("standard error" in m for m in messages), messages
+def test_unstandardized_z_scores_are_rejected(tmp_path):
+    R = _ar1(12)
+    z = np.linspace(-2.0, 2.5, 12)
+    with pytest.raises(ValueError, match=r"\|beta_hat\| >= 1"):
+        ldpred3_auto_bivariate_blocks(
+            [(R, np.arange(12))], z, z, 20_000, 20_000,
+            burn_in=3, num_iter=3, seed=0)
