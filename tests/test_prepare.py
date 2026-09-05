@@ -452,8 +452,62 @@ def test_prepare_reuses_a_caller_owned_validated_cache(tmp_path):
         assert prep._ld_owner is None
         prep.close()
         assert not shared.closed
-        assert len(prep.blocks) == 1
+        assert prep.blocks == []
+        assert len(shared.blocks) == 1
     assert shared.closed
+
+
+@pytest.mark.parametrize("borrowed", [False, True])
+@pytest.mark.parametrize("screen_action", ["none", "drop", "error"])
+def test_owned_subset_closes_without_consuming_parent(tmp_path, monkeypatch,
+                                                      borrowed, screen_action):
+    from pathlib import Path
+    from contextlib import nullcontext
+    import bipred.prepare as module
+
+    cache, p1, p2, b1, b2, n, ids, _ = _cache_and_sumstats(tmp_path, mmap=True)
+    keep = np.arange(0, len(ids), 2)
+    for path, beta in ((p1, b1), (p2, b2)):
+        _write_sumstats(path, ids[keep], np.full(len(keep), "A"),
+                        np.full(len(keep), "G"), beta[keep],
+                        np.full(len(keep), 1 / np.sqrt(n)), n, pos=keep + 1)
+    original = module.subset_blocks
+    owned = []
+
+    def capture(*args, **kwargs):
+        blocks, indices = original(*args, **kwargs)
+        directory = getattr(blocks, "_temporary_directory", None)
+        if directory is not None:
+            owned.append((blocks, Path(directory.name)))
+        return blocks, indices
+
+    def screen(blocks, z, **kwargs):
+        if screen_action == "error":
+            raise RuntimeError("screen failed")
+        mask = np.ones(len(z), dtype=bool)
+        mask[1] = False
+        return mask
+
+    monkeypatch.setattr(module, "subset_blocks", capture)
+    monkeypatch.setattr("bipred.qc.ld_consistency_screen", screen)
+    with prepare_ld_cache(cache) if borrowed else nullcontext(cache) as source:
+        if screen_action == "error":
+            with pytest.raises(RuntimeError, match="screen failed"):
+                prepare_bivariate_sumstats(source, p1, p2, n_eff1=n, n_eff2=n,
+                                          qc=False, screen=True)
+        else:
+            prep = prepare_bivariate_sumstats(source, p1, p2, n_eff1=n, n_eff2=n,
+                                             qc=False, screen=screen_action == "drop")
+            prep.close()
+            prep.close()
+        if borrowed:
+            assert not source.closed and len(source.blocks) == 1
+            assert np.isfinite(source.blocks[0][0][0, 0])
+        # Older supported providers return heap subsets. The real mapped
+        # subset contract is exercised whenever the provider exposes it.
+        for blocks, directory in owned:
+            assert blocks.closed
+            assert not directory.exists()
 
 
 def test_missing_cache_af_writes_safe_target_scaled_weights(tmp_path):

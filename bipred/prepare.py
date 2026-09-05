@@ -66,6 +66,7 @@ class PreparedBivariate:
     log: dict = field(default_factory=dict)
     cache_indices: Optional[np.ndarray] = None
     _ld_owner: object = field(default=None, repr=False)
+    _subset_owner: object = field(default=None, repr=False)
 
     def close(self):
         """Release a memory-mapped cache owned by this prepared panel.
@@ -75,11 +76,16 @@ class PreparedBivariate:
         manager.  Its LD views must not be used after ``close()``.
         """
         owner, self._ld_owner = self._ld_owner, None
-        if owner is not None:
-            # Drop our views before unmapping their payload.  Keeping a dangling
-            # ndarray around after mmap.close() can segfault on later access.
-            self.blocks.clear()
-            owner.close()
+        subset, self._subset_owner = self._subset_owner, None
+        # Detach rather than clear: a complete selection may be the caller's
+        # original block collection. Child scratch has a separate lifetime.
+        self.blocks = []
+        try:
+            if subset is not None:
+                subset.close()
+        finally:
+            if owner is not None:
+                owner.close()
 
     def __enter__(self):
         return self
@@ -104,6 +110,16 @@ def subset_blocks(blocks, keep):
     cache order.
     """
     return subset_ld_blocks(blocks, keep, return_indices=True)
+
+
+def _release_subset(subset, parent):
+    """Release a child selection, never its borrowed parent collection."""
+    if subset is not None and subset is not parent:
+        close = getattr(subset, "close", None)
+        if close is not None:
+            close()
+        else:
+            subset.clear()
 
 
 def _consume_subset_blocks(blocks, keep, n_cache):
@@ -317,8 +333,8 @@ def _pair_prepared(
                     "LD-consistency screening left fewer than two joint variants")
             if not np.all(screen_keep):
                 final_indices = joint_indices[screen_keep]
-                if tiled is not blocks:
-                    tiled.clear()
+                _release_subset(tiled, blocks)
+                tiled = None
                 tiled, kept = subset_blocks(blocks, final_indices)
                 in1 = in1[screen_keep]
                 in2 = in2[screen_keep]
@@ -331,6 +347,8 @@ def _pair_prepared(
         variants = _cache_variant_table(cache)
         return PreparedBivariate(
             blocks=tiled,
+            _subset_owner=(tiled if tiled is not blocks
+                           and getattr(tiled, "close", None) is not None else None),
             beta_hat1=np.ascontiguousarray(arrays1["beta_hat"][in1]),
             beta_hat2=np.ascontiguousarray(arrays2["beta_hat"][in2]),
             n_eff1=np.ascontiguousarray(arrays1["n_eff"][in1]),
@@ -353,8 +371,7 @@ def _pair_prepared(
             },
         )
     except BaseException:
-        if tiled is not None and tiled is not blocks:
-            tiled.clear()
+        _release_subset(tiled, blocks)
         raise
 
 

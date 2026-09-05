@@ -1,12 +1,20 @@
 # Changelog
 
 User-visible changes to **bipred** are recorded here. The project is currently
-`0.3.15.dev0`.
+`0.3.15.dev1`.
 
 ## [Unreleased]
 
-The project is now `0.3.15.dev0`. The LDpred3 floor is `0.7.6`: single-trait
-preparation and the LD-consistency screen both live there now, and
+- Close privately owned mapped LD subsets independently of borrowed parent
+  caches, including re-screening and exception paths. Closing a prepared pair
+  now detaches its block views without clearing a caller-owned collection.
+- Decorrelated covariance contracts blockwise through LDpred3's bounded
+  cross-products, avoiding complete widened LD and genome-length products.
+  This requires LDpred3 `>=0.7.12,<0.8`; CI pins the tested provider while
+  deployment and historical benchmark pins remain independently frozen.
+
+The project is now `0.3.15.dev1`. The earlier LDpred3 floor `0.7.6` moved single-trait
+preparation and the LD-consistency screen to the provider, and
 `bipred.prepare` / `bipred.qc` re-export them. (The floor had been `0.6.6`,
 the first build with `BUILD_MISMATCH_FRACTION` and the current DENTIST/D8
 semantics; `0.7.3` for the shared ill-posed-window repair; `0.7.4` for the

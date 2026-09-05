@@ -1,14 +1,10 @@
 """LD-consistency screening: does it keep clean variants and catch broken ones."""
 
-import warnings
-
 import numpy as np
 import pytest
 
 from bipred.qc import (
-    DEFAULT_DROP_FRACTION_WARN,
-    dentist, dentist_statistic, implied_sample_size, in_long_range_ld,
-    ld_consistency_screen, sd_consistency,
+    implied_sample_size, in_long_range_ld, sd_consistency,
 )
 
 
@@ -205,5 +201,4 @@ def test_qc_boolean_controls_reject_strings():
 
 
 # --- progress reporting -----------------------------------------------------
-
 

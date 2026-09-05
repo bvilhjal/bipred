@@ -1355,15 +1355,15 @@ def test_online_decorrelated_moments_match_materialised_formula():
 
 
 def test_decorrelated_rg_applies_ld_only_once_at_finalization(monkeypatch):
-    apply_R_rows = bivariate._apply_R_rows
+    crossproducts = bivariate.ld_crossproducts
     calls = 0
 
     def counting_apply(*args, **kwargs):
         nonlocal calls
         calls += 1
-        return apply_R_rows(*args, **kwargs)
+        return crossproducts(*args, **kwargs)
 
-    monkeypatch.setattr(bivariate, "_apply_R_rows", counting_apply)
+    monkeypatch.setattr(bivariate, "ld_crossproducts", counting_apply)
     beta_hat = np.full(20, 0.02)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)

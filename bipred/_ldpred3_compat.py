@@ -1,8 +1,8 @@
 """Lazy compatibility seam for the bounded :mod:`ldpred3` dependency.
 
 The names here are the bounded LDpred3 surface in ``pyproject.toml``
-(``>=0.7.6,<0.8``; the floor is where single-trait preparation and the
-LD-consistency screen live, ``bipred.prepare`` and ``bipred.qc`` re-exporting them). Most of them -- the Numba
+(``>=0.7.12,<0.8``; bounded LD cross-products require that provider version).
+Single-trait preparation and screening remain provider-owned. Most helpers -- the Numba
 decorators, the input validators, ``warn_no_numba`` -- are *published* by the
 public :mod:`ldpred3.shim` module (added in LDpred3 0.5.3), and the seam
 binds those through it. The remainder are still underscore-private helpers

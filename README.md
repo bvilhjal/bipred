@@ -11,14 +11,13 @@ LD representations and sampler utilities.
 ## Installation
 
 Python 3.9–3.14 is supported. Numba is strongly recommended. The current
-Bipred development line supports `ldpred3>=0.6.6,<0.8`. Neither package is on
-PyPI, so a
-Git install requires authenticated GitHub read access. Install the exact
-LDpred3 revision tested by CI; its private interoperability seam is not stable
-on the sibling repository's moving default branch:
+Bipred development line supports `ldpred3>=0.7.12,<0.8`. Neither package is on
+PyPI, so a Git install requires authenticated GitHub read access. CI pins the
+tested provider revision below; publish that revision before installing this
+Bipred development line from Git. Sibling-checkout installs also work locally.
 
 ```bash
-python -m pip install "ldpred3[fast] @ git+https://github.com/bvilhjal/ldpred3.git@d5570538d934e19aa7d6366176a1dfd27f3ee78d"
+python -m pip install "ldpred3[fast] @ git+https://github.com/bvilhjal/ldpred3.git@c1981e5365a8107435c28076549104f9969fdcb4"
 python -m pip install "bipred[fast] @ git+https://github.com/bvilhjal/bipred.git"
 ```
 
@@ -34,11 +33,11 @@ Import the installed packages, not a parent folder that happens to contain an
 directory binds the empty checkout as a namespace package and hides the real
 module.
 
-CI preinstalls that immutable revision, then installs Bipred through its
-declared `ldpred3>=0.6.6,<0.8` dependency contract rather than bypassing
+CI preinstalls the provider checkout, then installs Bipred through its
+declared `ldpred3>=0.7.12,<0.8` dependency contract rather than bypassing
 the resolver. The private sampler seam in `bipred/_ldpred3_compat.py` still has
 behavioural tests. Archived real-data
-benchmarks deliberately retain their immutable LDpred3 0.4.5 provenance in
+benchmarks deliberately retain their immutable LDpred3 0.6.1 provenance in
 `benchmarks/real_data_inputs.py`; do not rewrite historical evidence when the
 runtime dependency moves.
 

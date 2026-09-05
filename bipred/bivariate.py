@@ -42,7 +42,7 @@ import math
 import warnings
 
 import numpy as np
-from ldpred3 import LowRankLD
+from ldpred3 import LowRankLD, ld_crossproducts, ld_matmul
 
 from . import _progress
 
@@ -306,12 +306,9 @@ def _apply_R_rows(fblocks, V):
     out = np.zeros_like(V)
     for kind, data, start, k, aux, residual, _score1, _score2 in fblocks:
         sl = slice(start, start + k)
-        if kind == _LOWRANK:
-            W = data.astype(V.dtype) * aux
-            out[:, sl] = ((V[:, sl] @ W) @ W.T
-                          + V[:, sl] * residual.astype(V.dtype))
-        else:
-            out[:, sl] = (V[:, sl] @ data.astype(V.dtype)) * aux
+        corr = (LowRankLD(data, k, scale=aux, residual_diag=residual)
+                if kind == _LOWRANK else data)
+        out[:, sl] = ld_matmul(corr, V[:, sl].T, dequantize_dtype=np.float64).T
     return out
 
 
@@ -1030,11 +1027,15 @@ def _decorrelated_cov(fblocks, accumulator):
     n = accumulator.count
     if n < 2:
         return None
-    sums = np.vstack([accumulator.sum1, accumulator.sum2])
-    RS1, RS2 = _apply_R_rows(fblocks, sums)
-    all11 = float(sums[0] @ RS1)
-    all12 = float(sums[0] @ RS2)
-    all22 = float(sums[1] @ RS2)
+    total = np.zeros((2, 2), dtype=np.float64)
+    for kind, data, start, k, scale, residual, _score1, _score2 in fblocks:
+        sl = slice(start, start + k)
+        sums = np.column_stack((accumulator.sum1[sl], accumulator.sum2[sl]))
+        corr = (LowRankLD(data, k, scale=scale, residual_diag=residual)
+                if kind == _LOWRANK else data)
+        total += ld_crossproducts(corr, sums, dequantize_dtype=np.float64)
+        del sums, corr
+    all11, all12, all22 = total[0, 0], total[0, 1], total[1, 1]
     d11, d12, d22 = accumulator.diagonal
     npairs = n * (n - 1)
     return (all12 - d12) / npairs, (all11 - d11) / npairs, (all22 - d22) / npairs
