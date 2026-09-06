@@ -1,9 +1,29 @@
 # Changelog
 
 User-visible changes to **bipred** are recorded here. The project is currently
-`0.3.15.dev1`.
+`0.3.16.dev0`.
 
 ## [Unreleased]
+
+- `ldpred3_auto_bivariate_chains` accepts `progress=`: one event per
+  completed sweep of any chain with the pooled count over all chains
+  (`done`, `total`, `phase`, `chains`, `chains_done`), emitted under a lock
+  when chains run in threads. Reporting cannot change a chain, and a callback
+  that raises aborts the fit as that chain's error.
+- The sampler option `trace_burn_in=True` keeps the burn-in mixture draws and
+  raw genetic quadratics as `BivariateResult.burn_in_pi_samples` and
+  `burn_in_genetic_samples`; the pooled multi-chain posterior stacks them in
+  chain order. They serve trace plots and enter no estimate; a fit with the
+  option on is bit-identical to one without.
+- The compiled sweep kernels moved from `bipred/bivariate.py` into
+  `bipred/_bivar_kernels.py`; `bipred.bivariate` re-exports every name, so
+  call sites and tests are unchanged. The driver module shrinks from 2,521 to
+  about 2,000 lines and now holds only validation, preparation, the chain
+  loop and the result type.
+- The guide's quality-control chapter keeps the procedure and points to the
+  new `docs/qc_factorial.md` for the record of the committed factorial; the
+  multi-chain section documents `MultiChainBivariateResult` and
+  `BivariateChainSummary`.
 
 - Close privately owned mapped LD subsets independently of borrowed parent
   caches, including re-screening and exception paths. Closing a prepared pair

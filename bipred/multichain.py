@@ -8,9 +8,11 @@ claim and never filters chains.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import threading
 
 import numpy as np
 
+from . import _progress
 from .bivariate import (
     _BivariateStart,
     _bivariate_options_from_kwargs,
@@ -109,7 +111,9 @@ def _pool_divergence_diagnostics(diagnostics):
 
 def _accumulate_chains(chain_args, chain_results, m, retained, beta1_sum,
                        beta2_sum, pi_traces, sigma_traces, genetic_traces,
-                       noise_traces, summaries, divergence_diagnostics):
+                       noise_traces, summaries, divergence_diagnostics,
+                       burn_in=None, burn_in_pi_traces=None,
+                       burn_in_genetic_traces=None):
     """Validate and pool chain results in chain order.
 
     ``chain_results`` is consumed lazily. In the serial path that means a chain
@@ -120,7 +124,7 @@ def _accumulate_chains(chain_args, chain_results, m, retained, beta1_sum,
         chain_args, chain_results
     ):
         trace = _validated_chain_traces(
-            chain_result, m, retained, index, int(chain_seed)
+            chain_result, m, retained, index, int(chain_seed), burn_in=burn_in
         )
         beta1_sum += trace["beta1_est"]
         beta2_sum += trace["beta2_est"]
@@ -128,6 +132,9 @@ def _accumulate_chains(chain_args, chain_results, m, retained, beta1_sum,
         sigma_traces.append(trace["sigma_samples"])
         genetic_traces.append(trace["genetic_samples"])
         noise_traces.append(trace["noise_scale_samples"])
+        if trace["burn_in_pi_samples"] is not None:
+            burn_in_pi_traces.append(trace["burn_in_pi_samples"])
+            burn_in_genetic_traces.append(trace["burn_in_genetic_samples"])
         summaries.append(
             BivariateChainSummary(
                 seed=int(chain_seed),
@@ -158,7 +165,8 @@ def _basic_split_rhat(traces):
     return basic_split_rhat(traces)
 
 
-def _validated_chain_traces(result, m, retained, chain_index, seed):
+def _validated_chain_traces(result, m, retained, chain_index, seed,
+                            burn_in=None):
     """Validate one complete chain without silently discarding it."""
     label = f"chain {chain_index} (seed {seed})"
     arrays = {
@@ -204,6 +212,26 @@ def _validated_chain_traces(result, m, retained, chain_index, seed):
     )
     if not np.all(np.isfinite(scalars)):
         raise FloatingPointError(f"{label} returned a non-finite summary")
+    # Burn-in traces are present only when the shared options asked for them,
+    # so every chain carries them or none does; they feed no estimate.
+    for name, width in (("burn_in_pi_samples", 4),
+                        ("burn_in_genetic_samples", 3)):
+        value = getattr(result, name, None)
+        if value is None:
+            converted[name] = None
+            continue
+        array = np.asarray(value)
+        expected_shape = (int(burn_in), width) if burn_in is not None else None
+        if expected_shape is not None and array.shape != expected_shape:
+            raise RuntimeError(
+                f"{label} returned {name} with shape {array.shape}; "
+                f"expected {expected_shape}"
+            )
+        if not np.issubdtype(array.dtype, np.number) or not np.all(
+            np.isfinite(array)
+        ):
+            raise FloatingPointError(f"{label} returned non-finite {name}")
+        converted[name] = np.asarray(array, dtype=float)
     return converted
 
 
@@ -262,6 +290,7 @@ def ldpred3_auto_bivariate_chains(
     sigma_prior_scale=None,
     seed=0,
     chain_ncores=1,
+    progress=None,
     **bivariate_kwargs,
 ):
     """Run deterministic bivariate chains and pool every chain equally.
@@ -289,8 +318,23 @@ def ldpred3_auto_bivariate_chains(
     ncores > 1 because nested parallelism would oversubscribe the machine. Pick
     one axis. For n_chains >= the core count, chain_ncores is usually the better
     one, since it has no per-sweep synchronisation at all.
+
+    ``progress``, when given, is called after every completed sweep of any
+    chain with the pooled count: ``{"step": "fit", "done": sweeps completed
+    over all chains, "total": n_chains * (burn_in + num_iter), "unit":
+    "sweep", "phase": "burn-in" until the slowest chain has left burn-in
+    and "sampling" after, "chains": n_chains, "chains_done": finished
+    chains}``. With ``chain_ncores > 1`` the calls come from worker threads,
+    one at a time under a lock; an exception raised by the callback aborts
+    the fit. Reporting draws nothing and cannot change a chain.
+
+    ``trace_burn_in=True`` (a sampler option) keeps every chain's burn-in
+    mixture draws and raw genetic quadratics; the pooled posterior carries
+    them as ``burn_in_pi_samples`` and ``burn_in_genetic_samples`` in chain
+    order, each chain's ``burn_in`` rows together, for trace plots only.
     """
     warn_no_numba()
+    _progress.validate(progress)
     chain_ncores = _integer_at_least("chain_ncores", chain_ncores, 1)
     n_chains = _integer_at_least("n_chains", n_chains, 2)
     if n_chains > int(np.iinfo(np.uint32).max) + 1:
@@ -402,14 +446,44 @@ def ldpred3_auto_bivariate_chains(
     sigma_traces = []
     genetic_traces = []
     noise_traces = []
+    burn_in_pi_traces = []
+    burn_in_genetic_traces = []
     summaries = []
     divergence_diagnostics = []
 
+    sweeps_per_chain = options.burn_in + options.num_iter
+    if progress is not None:
+        # One slot per chain; the pooled event is emitted under a lock so a
+        # caller's callback is never entered from two threads at once.
+        completed = np.zeros(n_chains, dtype=np.int64)
+        report_lock = threading.Lock()
+
+        def _chain_progress(index):
+            def sink(event):
+                with report_lock:
+                    completed[index] = int(event.get("done", 0))
+                    _progress.report(
+                        progress, "fit", int(completed.sum()),
+                        n_chains * sweeps_per_chain, unit="sweep",
+                        phase=("burn-in" if int(completed.min()) < options.burn_in
+                               else "sampling"),
+                        chains=n_chains,
+                        chains_done=int(np.count_nonzero(
+                            completed >= sweeps_per_chain)))
+            return sink
+    else:
+        def _chain_progress(index):
+            return None
+
     def _run_one(index, chain_seed, p_start, pi_start):
         """Fit one chain from shared inputs and chain-local mutable buffers."""
+        # The callback is passed only when one was given, so the quiet call
+        # keeps the three-argument form test doubles of the chain fit expect.
+        sink = _chain_progress(index)
+        extra = {"progress": sink} if sink is not None else {}
         try:
             return _ldpred3_auto_bivariate_prepared(
-                prepared, options, chain_starts[index]
+                prepared, options, chain_starts[index], **extra
             )
         except FloatingPointError as error:
             # A diverged chain surfaces as FloatingPointError from the fit, and
@@ -476,7 +550,9 @@ def ldpred3_auto_bivariate_chains(
         _accumulate_chains(
             chain_args, chain_results, m, retained, beta1_sum, beta2_sum,
             pi_traces, sigma_traces, genetic_traces, noise_traces, summaries,
-            divergence_diagnostics)
+            divergence_diagnostics, burn_in=options.burn_in,
+            burn_in_pi_traces=burn_in_pi_traces,
+            burn_in_genetic_traces=burn_in_genetic_traces)
     finally:
         if pool is not None:
             pool.shutdown(wait=True)
@@ -534,6 +610,10 @@ def ldpred3_auto_bivariate_chains(
         stopped_early=False,
         divergence_diagnostics=_pool_divergence_diagnostics(
             divergence_diagnostics),
+        burn_in_pi_samples=(np.concatenate(burn_in_pi_traces)
+                            if burn_in_pi_traces else None),
+        burn_in_genetic_samples=(np.concatenate(burn_in_genetic_traces)
+                                 if burn_in_genetic_traces else None),
     )
 
     return MultiChainBivariateResult(

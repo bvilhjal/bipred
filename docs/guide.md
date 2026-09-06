@@ -273,62 +273,17 @@ calibration or can be ranked as closer from current evidence. They are not
 interchangeable, and bipred's committed factorial evidence was generated with
 the screen documented here.
 
-### What the factorial established
+### The committed factorial
 
-Three related trait pairs spanning the sign range — LDL × CAD (`rg` ≈ +0.27),
-height × LDL (≈ 0), and HDL × TG (`rg` ≈ −0.52 to −0.55 across the screened
-arms) — were each fitted under all eight
-combinations of stricter per-variant thresholds, long-range-LD exclusion, and
-the screen. Every pair contains at least one GLGC lipid file, so these 24 arms
-are repeated perturbations of three file combinations, not independent
-validation across 24 settings. The saved rows come from a clean 0.3.5 run in
-which every requested random partition completed. That makes them current for
-these files and this reference, not a general validation of the screen.
-Two decimals are the resolution these point values support: the companion
-LDL × CAD study records its screened estimate moving from 0.2856 to 0.2658 when
-0.3.6 reseeded the screen's random partitions, and HDL × TG under a
-`cross_corr` overlap correction gives −0.52 (see [`rg.md`](rg.md)).
-
-**Table 1. Divergence warnings across 24 current-screen arms.**
-
-| factor | off | on |
-|---|---:|---:|
-| strict per-variant thresholds | 6/12 | 6/12 |
-| long-range LD exclusion | 6/12 | 6/12 |
-| **LD-consistency screen** | **12/12 diverged** | **0/12 diverged** |
-
-In this run, the screen separated the warnings in these file/reference
-combinations. The other factors did not change the warning count, but they did
-change estimates; Table 1 cannot establish that they "do nothing." Among its
-screened fits,
-long-range exclusion moved `rg` by about 0.012 for height × LDL, 0.021–0.023
-for HDL × TG, and 0.0001–0.0067 for LDL × CAD. Use
-[`bipred.qc.in_long_range_ld`](../bipred/qc.py) as an estimator-specific
-sensitivity analysis. Exclusion may protect genome-wide moments, while retaining
-APOE may matter for prediction; the appropriate choice depends on the target.
-
-### Why diagnostics matter
-
-A diverged fit can still look plausible. On HDL × TG, all four screened
-estimates and only one of four unscreened estimates lay in a rough external
-range of −0.5 to −0.6 used by the historical study. That uncited context is not
-ground truth, and agreement with any external point or interval cannot by
-itself certify a fit.
-
-Nor is the failure uniform. On LDL × CAD divergence halved `rg`; on height ×
-LDL it shrank it toward zero; on HDL × TG it inflated it. And it can strike one
-trait while sparing the other in the same fit — height × LDL diverged at
-cancellation 150–212 on the LDL side while height remained in the rough
-external range 0.3–0.5, with `h2` 0.41 against rough context around 0.45.
-
-Within this study, warning status tracked the *summary-statistic file*: all
-three GLGC lipid files diverged in every pairing, while height and CAD did not.
-Three related pairs do not establish that pattern generally.
-
-Since 0.3.1 a fit that trips a divergence diagnostic raises a `RuntimeWarning`
-naming the check. Do not interpret `h2`, `rg`, or the overlap readouts until the
-data/LD mismatch has been investigated; passing the diagnostic is necessary
-evidence, not proof of correctness.
+The evidence behind the recommended procedure -- three lipid-related trait
+pairs fitted under all eight combinations of stricter thresholds,
+long-range-LD exclusion and the LD-consistency screen, and what divergence
+looked like in each -- is a record, not a procedure, and lives in
+[`qc_factorial.md`](qc_factorial.md). Its one operational lesson is repeated
+here: a fit that trips a divergence diagnostic raises a `RuntimeWarning`
+naming the check, and `h2`, `rg` and the overlap readouts of such a fit are
+not to be interpreted until the data/LD mismatch has been investigated.
+Passing the diagnostic is necessary evidence, not proof of correctness.
 
 ## Fit one chain
 
@@ -387,6 +342,27 @@ multi-chain driver also rejects `tol>0` and `rg_decorrelated=True`, both of whic
 require different trace contracts. The pooled posterior records
 `retained_iterations = n_chains * retained_per_chain` and
 `stopped_early=False`.
+
+The driver returns a `MultiChainBivariateResult`: `posterior` (the pooled
+`BivariateResult`), `basic_split_rhat`, `chain_summaries` (one
+`BivariateChainSummary` per chain with its `seed`, `p_init`, `pi_init`, and
+the chain's own `h2`, `rg`, `p`, `pi`, `sigma` and `noise_scale`),
+`chain_seeds`, `p_inits`, `pi_inits`, `sigma_prior_scale`, `n_chains` and
+`retained_per_chain`. The pooled `pi_samples`, `sigma_samples`,
+`genetic_samples` and `noise_scale_samples` stack the chains in order, so
+reshaping them to `(n_chains, retained_per_chain, k)` recovers each chain's
+retained trace.
+
+Two options serve callers that watch a fit. `progress=` receives one event
+per completed sweep of any chain with the pooled count over all chains
+(`done`, `total`, `phase`, `chains`, `chains_done`); with `chain_ncores>1`
+the calls arrive from worker threads one at a time under a lock. The sampler
+option `trace_burn_in=True` keeps every chain's burn-in mixture draws and
+raw genetic quadratics as `posterior.burn_in_pi_samples` and
+`posterior.burn_in_genetic_samples`, again stacked in chain order, so a trace
+plot can start at sweep one and show whether the start was forgotten. Neither
+option changes a result: reporting draws nothing, and burn-in states enter no
+estimate.
 
 The scalar diagnostic does not include predictive R2. Bipred currently retains
 same-sweep genetic quadratics but not the per-sweep effect vectors needed for
@@ -525,11 +501,11 @@ by multi-chain inference; use dispersed full-length chains for diagnostics.
 ## Progress reporting
 
 A genome-scale screen or fit runs for minutes to hours, and a caller driving
-one from a user interface needs to see it move. Three entry points therefore
+one from a user interface needs to see it move. Four entry points therefore
 accept an optional `progress` callable:
 `prepare_bivariate_sumstats`, `ld_consistency_screen` (and its `dentist`
-alias), and `ldpred3_auto_bivariate_blocks`. Each calls it with one event
-dict:
+alias), `ldpred3_auto_bivariate_blocks`, and `ldpred3_auto_bivariate_chains`.
+Each calls it with one event dict:
 
 ```python
 {"step": "LD consistency screen, trait 1", "done": 312, "total": 1704,
@@ -540,20 +516,26 @@ dict:
 finished, and `unit` says what those units are. For the coarse sequence of
 steps inside `prepare_bivariate_sumstats` (`unit="step"`), `done` is the
 number finished *before* the named one, so a reader sees what is running.
-The fit adds `phase`, either `"burn-in"` or `"sampling"`.
+The fit adds `phase`, either `"burn-in"` or `"sampling"`. The multi-chain
+driver reports the pooled count over all chains: `done` is the number of
+sweeps completed by any chain, `total` is `n_chains * (burn_in + num_iter)`,
+`phase` stays `"burn-in"` until the slowest chain has left burn-in, and
+`chains` / `chains_done` count the chains started and finished.
 
 Three properties are worth relying on.
 
 1. **It cannot change a result.** Reporting draws no random numbers and runs
    after each unit's updates; a fit with `progress` is bit-identical to one
    without, and so is a screen's mask. The tests assert this directly.
-2. **It is called from your thread.** Even when the screen settles blocks in
-   a pool, events are emitted as results are collected in the calling
-   thread, so a callback needs no locking.
+2. **It is never entered twice at once.** The screen emits events as results
+   are collected in the calling thread. The multi-chain driver with
+   `chain_ncores>1` emits them from worker threads, but one at a time under
+   a lock, so a callback still needs no locking of its own.
 3. **Its exceptions propagate.** Reporting that has silently stopped is
    worse than reporting that fails loudly, so a callback writing somewhere
    fallible should catch its own errors — a three-hour fit should not die of
-   a full disk in a status file.
+   a full disk in a status file. In the multi-chain driver the failure
+   surfaces as the chain's error, naming the chain and its seed.
 
 With `tol > 0` the fit may stop before `done` reaches `total`; the sweep it
 stops on is still reported.

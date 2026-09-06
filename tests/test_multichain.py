@@ -691,11 +691,112 @@ def test_basic_split_rhat_formula_and_degeneracy_metadata():
     assert not hasattr(diagnostic, "converged")
 
 
-def test_chains_reject_a_progress_callback():
-    """Chains run concurrently, so one callback could not say which chain it
-    spoke for; the option must be refused rather than silently forwarded."""
-    blocks, beta1, beta2 = _inputs()
-    with pytest.raises(TypeError, match="unexpected keyword argument"
-                                        " 'progress'"):
+def _toy_problem(seed=0, m=60, k=20, n=20_000):
+    """Small correlated blocks with a shared sparse architecture."""
+    rng = np.random.default_rng(seed)
+    blocks, bh1, bh2 = [], np.empty(m), np.empty(m)
+    for b in range(m // k):
+        G = rng.standard_normal((400, k))
+        G[:, 1:] += 0.5 * G[:, :-1]
+        R = np.corrcoef(G.T).astype(np.float32)
+        idx = np.arange(b * k, (b + 1) * k)
+        causal = rng.random(k) < 0.2
+        e1 = np.where(causal, rng.standard_normal(k) * 0.05, 0.0)
+        e2 = np.where(causal, 0.6 * e1 + 0.04 * rng.standard_normal(k), 0.0)
+        bh1[idx] = R @ e1 + rng.standard_normal(k) / np.sqrt(n)
+        bh2[idx] = R @ e2 + rng.standard_normal(k) / np.sqrt(n)
+        blocks.append((R, idx))
+    return blocks, bh1, bh2, float(n)
+
+
+def test_trace_burn_in_keeps_burn_in_states_without_changing_the_fit():
+    blocks, bh1, bh2, n = _toy_problem()
+    kw = dict(burn_in=7, num_iter=6, seed=11)
+    plain = ldpred3_auto_bivariate_blocks(blocks, bh1, bh2, n, n, **kw)
+    traced = ldpred3_auto_bivariate_blocks(
+        blocks, bh1, bh2, n, n, trace_burn_in=True, **kw)
+    assert plain.burn_in_pi_samples is None
+    assert plain.burn_in_genetic_samples is None
+    assert traced.burn_in_pi_samples.shape == (7, 4)
+    assert traced.burn_in_genetic_samples.shape == (7, 3)
+    assert np.all(np.isfinite(traced.burn_in_pi_samples))
+    assert np.all(np.isfinite(traced.burn_in_genetic_samples))
+    np.testing.assert_allclose(traced.burn_in_pi_samples.sum(axis=1), 1.0)
+    # Recording the burn-in states draws nothing: the fit is bit-identical.
+    for name in ("beta1_est", "beta2_est", "pi_samples", "genetic_samples",
+                 "sigma_samples"):
+        np.testing.assert_array_equal(getattr(traced, name),
+                                      getattr(plain, name))
+    assert traced.h2 == plain.h2 and traced.rg == plain.rg
+
+
+@pytest.mark.parametrize("chain_ncores", [1, 2])
+def test_chains_pool_burn_in_traces_in_chain_order(chain_ncores):
+    blocks, bh1, bh2, n = _toy_problem(seed=3)
+    kw = dict(n_chains=3, burn_in=6, num_iter=8, seed=5,
+              chain_ncores=chain_ncores)
+    plain = multichain.ldpred3_auto_bivariate_chains(
+        blocks, bh1, bh2, n, n, **kw)
+    traced = multichain.ldpred3_auto_bivariate_chains(
+        blocks, bh1, bh2, n, n, trace_burn_in=True, **kw)
+    assert plain.posterior.burn_in_pi_samples is None
+    assert traced.posterior.burn_in_pi_samples.shape == (18, 4)
+    assert traced.posterior.burn_in_genetic_samples.shape == (18, 3)
+    assert np.all(np.isfinite(traced.posterior.burn_in_genetic_samples))
+    np.testing.assert_array_equal(traced.posterior.pi_samples,
+                                  plain.posterior.pi_samples)
+    np.testing.assert_array_equal(traced.posterior.beta1_est,
+                                  plain.posterior.beta1_est)
+    # Chain order: chain c's burn-in block precedes its own retained draws in
+    # the sense that both stack per chain, so block c of the burn-in trace and
+    # block c of the retained trace describe the same chain.
+    serial = multichain.ldpred3_auto_bivariate_chains(
+        blocks, bh1, bh2, n, n, trace_burn_in=True,
+        **{**kw, "chain_ncores": 1})
+    np.testing.assert_array_equal(serial.posterior.burn_in_pi_samples,
+                                  traced.posterior.burn_in_pi_samples)
+
+
+@pytest.mark.parametrize("chain_ncores", [1, 2])
+def test_chain_progress_reports_pooled_sweeps(chain_ncores):
+    blocks, bh1, bh2, n = _toy_problem(seed=4)
+    events = []
+    result = multichain.ldpred3_auto_bivariate_chains(
+        blocks, bh1, bh2, n, n, n_chains=3, burn_in=4, num_iter=6, seed=8,
+        chain_ncores=chain_ncores, progress=events.append)
+    total = 3 * (4 + 6)
+    assert len(events) == total
+    done = [e["done"] for e in events]
+    assert done[0] == 1 and done[-1] == total
+    assert all(later >= earlier for earlier, later in zip(done, done[1:]))
+    assert {e["total"] for e in events} == {total}
+    assert {e["unit"] for e in events} == {"sweep"}
+    assert {e["step"] for e in events} == {"fit"}
+    assert {e["chains"] for e in events} == {3}
+    assert events[-1]["chains_done"] == 3
+    phases = [e["phase"] for e in events]
+    assert phases[0] == "burn-in" and phases[-1] == "sampling"
+    first_sampling = phases.index("sampling")
+    assert "burn-in" not in phases[first_sampling:]
+    # Reporting cannot change the chains.
+    quiet = multichain.ldpred3_auto_bivariate_chains(
+        blocks, bh1, bh2, n, n, n_chains=3, burn_in=4, num_iter=6, seed=8,
+        chain_ncores=chain_ncores)
+    np.testing.assert_array_equal(quiet.posterior.beta1_est,
+                                  result.posterior.beta1_est)
+
+
+def test_chains_reject_a_non_callable_progress_and_surface_callback_errors():
+    blocks, bh1, bh2, n = _toy_problem(seed=6)
+    with pytest.raises(TypeError, match="progress"):
         multichain.ldpred3_auto_bivariate_chains(
-            blocks, beta1, beta2, 1e4, 1e4, progress=print)
+            blocks, bh1, bh2, n, n, n_chains=2, burn_in=2, num_iter=4,
+            seed=1, progress=object())
+
+    def explode(event):
+        raise RuntimeError("stop the presses")
+
+    with pytest.raises(RuntimeError, match="stop the presses"):
+        multichain.ldpred3_auto_bivariate_chains(
+            blocks, bh1, bh2, n, n, n_chains=2, burn_in=2, num_iter=4,
+            seed=1, progress=explode)
