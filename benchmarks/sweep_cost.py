@@ -11,11 +11,14 @@ both are controlled here.
 
 *Numba's on-disk cache is keyed without the compilation flags.* The fused
 drivers are jitted twice from one Python function -- ``parallel=True`` and
-``nogil=True`` -- so the twins collide in the cache and whichever compiled
-first is served to both. A run that shares one cache across core counts
-therefore measures the first arm twice. Every cell here gets a private
-``NUMBA_CACHE_DIR`` in a subprocess (``--in-process`` opts out, for profiling a
-single cell).
+``nogil=True`` -- and used to collide in the cache, with whichever compiled
+first served to both. The parallel twin now compiles through ldpred3's
+``_jit_parallel``, which clones the function under a ``__par`` qualname and
+gives it its own cache entry, so a shared cache serves both twins correctly.
+Every cell here still gets a private ``NUMBA_CACHE_DIR`` in a subprocess
+(``--in-process`` opts out, for profiling a single cell): with the collision
+gone this is belt-and-braces isolation, so no cell's measurement depends on
+cache state left behind by another.
 
 *Compilation is not free at ``parallel=True``.* The first call to each cell is
 discarded before timing.
