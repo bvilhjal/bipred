@@ -51,5 +51,9 @@ benchmarks/_run_all.sh
 benchmarks/_*.csv
 benchmarks/_*.provenance.json
 
+# Benchmark run archives: local measured-evidence snapshots (very deep trees),
+# kept out of git so their presence does not trip the clean-tree preflight.
+benchmarks/results/
+
 # macOS Finder metadata
 .DS_Store

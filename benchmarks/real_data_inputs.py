@@ -20,9 +20,11 @@ REPO_ROOT = os.path.dirname(HERE)
 # The ldpred3 the benchmark artifacts were generated against. Moving this
 # pin re-bases the record: numbers may shift for ldpred3 reasons as well as
 # bipred ones, so regenerate every artifact in the same sweep rather than
-# splicing a new pin's rows into an old pin's table.
-LDPRED3_REV = "af5d92c7aab6a5b67d15c94ebe28b89e33f5d69d"
-LDPRED3_VERSION = "0.6.1"
+# splicing a new pin's rows into an old pin's table. The previous pin
+# (0.6.1 at af5d92c7) became unrunnable when bipred's floor moved to
+# ldpred3>=0.7.12.
+LDPRED3_REV = "dad2badc424ba7629c54e8ace0cf49dc6aac0a4a"
+LDPRED3_VERSION = "0.7.17"
 
 
 def load_manifest(path=MANIFEST):

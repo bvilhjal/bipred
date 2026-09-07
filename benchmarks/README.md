@@ -167,11 +167,15 @@ manually:
 
 **The artifact record is currently split across two ldpred3 versions.** The
 ten `run_all.sh` scripts were regenerated from clean revision `bf5236a`
-(bipred 0.3.10.dev0) against the current pin, ldpred3 0.6.1 at
+(bipred 0.3.10.dev0) against the pin then in force, ldpred3 0.6.1 at
 `af5d92c7aab6a5b67d15c94ebe28b89e33f5d69d`, with Python 3.14.6, NumPy 2.4.6 and
 Numba 0.66.0; `run_all.sh` selected msprime and all ten completed. `bivariate_demo`,
 `external_overlap` and `external_overlap_ldsc200k` were regenerated on the same
-stack. Three artifacts have **not** been, because they need real-data inputs
+stack. The pin has since moved to ldpred3 0.7.17 at
+`dad2badc424ba7629c54e8ace0cf49dc6aac0a4a` -- 0.6.1 predates bipred's
+`ldpred3>=0.7.12` floor and can no longer run the suite -- so the next full
+sweep re-bases the record onto it. Three artifacts have **not** been
+regenerated even to the 0.6.1 record, because they need real-data inputs
 that were unavailable:
 
 | Artifact | Stack it still carries |
