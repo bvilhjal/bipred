@@ -11,15 +11,17 @@ from __future__ import annotations
 import numpy as np
 
 from ._ldpred3_compat import (
-    HAVE_NUMBA,
     _get_thread_id,
     _jit,
     _jit_fastmath_nogil,
     _jit_nogil,
+    _jit_parallel,
     prange,
 )
 
 __all__ = [
+    "_bivar_block_reduce",
+    "_bivar_block_reduce_jit",
     "_bivar_const",
     "_bivar_dense_sweep_all",
     "_bivar_dense_sweep_all_jit",
@@ -33,36 +35,7 @@ __all__ = [
     "_bivar_one_sweep_lowrank_jit",
     "_dequantise_lr8_factor",
     "_dequantise_lr8_factor_jit",
-    "_jit_parallel_uncached",
 ]
-
-
-def _jit_parallel_uncached(func):
-    """``_jit_parallel`` without Numba's on-disk cache.
-
-    Each fused sweep driver below is jitted **twice** from one Python
-    function -- once ``parallel=True`` for ``ncores > 1`` and once ``nogil=True``
-    for the serial path. Numba keys its on-disk cache on (source file,
-    qualname, first line, signature) and *not* on the compilation flags, so the
-    two twins share a single cache entry and whichever compiled first is served
-    to both. The default cache lives in ``__pycache__`` beside this file and
-    persists, so one ``ncores=1`` run would otherwise disable block parallelism
-    for every later run on that checkout, permanently and silently.
-
-    Measured (m=20,000, k=500, 40 int8 blocks): ``ncores=4`` runs at 1.73
-    ms/sweep from a clean cache but 5.38 ms/sweep -- no better than the 5.49
-    serial baseline -- from a cache a prior serial run had touched. Opting the
-    parallel twins out of the cache restores 1.77 ms/sweep, bit-identically.
-
-    Only the parallel twins opt out. The serial path stays cached, so the
-    default single-core run is unaffected; ``ncores > 1`` pays one compilation
-    per process, against a fit that runs for minutes at genome scale.
-    """
-    if not HAVE_NUMBA:
-        return func
-    from numba import njit
-    # Matches ldpred3's _jit_parallel exactly but for ``cache``.
-    return njit(cache=False, parallel=True)(func)
 
 
 def _bivar_const(nn1, nn2, s1, s2, s12, cross_corr):
@@ -196,15 +169,24 @@ def _bivar_one_sweep(corr, bh1, bh2, n1, n2, curr1, curr2, rb1, rb2,
             last_n1 = n1[j]
             last_n2 = n2[j]
 
-        # log N(d; 0, E + Slab_state) for each of the 4 states (drop 2*pi const).
-        q0 = (E22 * d1 * d1 - 2.0 * E12 * d1 * d2 + E11 * d2 * d2) / det0
-        w0 = lpi00 - 0.5 * ldet0 - 0.5 * q0
-        q1 = (E22 * d1 * d1 - 2.0 * E12 * d1 * d2 + a11 * d2 * d2) / det1
-        w1 = lpi10 - 0.5 * ldet1 - 0.5 * q1
-        q2 = (a22 * d1 * d1 - 2.0 * E12 * d1 * d2 + E11 * d2 * d2) / det2
-        w2 = lpi01 - 0.5 * ldet2 - 0.5 * q2
-        q3 = (b22 * d1 * d1 - 2.0 * b12 * d1 * d2 + b11 * d2 * d2) / det3
-        w3 = lpi11 - 0.5 * ldet3 - 0.5 * q3
+        # posterior effect means under each non-null state.
+        m1_1 = (Ei11 * d1 + Ei12 * d2) / prec1    # state 1 (trait-1 only)
+        m2_2 = (Ei22 * d2 + Ei12 * d1) / prec2    # state 2 (trait-2 only)
+        g1 = Ei11 * d1 + Ei12 * d2                # state 3 (both)
+        g2 = Ei12 * d1 + Ei22 * d2
+        m1_3 = V11 * g1 + V12 * g2
+        m2_3 = V12 * g1 + V22 * g2
+
+        # State weights relative to the null state (Gaussian conditioning):
+        # log w_s = log pi_s - (ldet_s - ldet0)/2 + g' mu_s / 2, with
+        # g = E^-1 d and mu_s the state-s posterior mean computed above. The
+        # null state's -0.5 * (ldet0 + d' E^-1 d) is common to all four states
+        # and cancels in the wmax normalisation below. Algebraically equal to
+        # the four Mahalanobis quadratics, which remain the test oracle.
+        w0 = lpi00
+        w1 = lpi10 - 0.5 * (ldet1 - ldet0) + 0.5 * g1 * m1_1
+        w2 = lpi01 - 0.5 * (ldet2 - ldet0) + 0.5 * g2 * m2_2
+        w3 = lpi11 - 0.5 * (ldet3 - ldet0) + 0.5 * (g1 * m1_3 + g2 * m2_3)
 
         wmax = w0
         if w1 > wmax:
@@ -222,14 +204,6 @@ def _bivar_one_sweep(corr, bh1, bh2, n1, n2, curr1, curr2, rb1, rb2,
         p1 = e1 / tot
         p2 = e2 / tot
         p3 = e3 / tot
-
-        # posterior effect means under each non-null state.
-        m1_1 = (Ei11 * d1 + Ei12 * d2) / prec1    # state 1 (trait-1 only)
-        m2_2 = (Ei22 * d2 + Ei12 * d1) / prec2    # state 2 (trait-2 only)
-        g1 = Ei11 * d1 + Ei12 * d2                # state 3 (both)
-        g2 = Ei12 * d1 + Ei22 * d2
-        m1_3 = V11 * g1 + V12 * g2
-        m2_3 = V12 * g1 + V22 * g2
 
         # Rao-Blackwell estimate: E[beta_t] = sum_state P(state) E[beta_t|state].
         rbsum1[j] += p1 * m1_1 + p3 * m1_3
@@ -354,15 +328,24 @@ def _bivar_one_sweep_lowrank(
             last_n1 = n1[j]
             last_n2 = n2[j]
 
-        # log N(d; 0, E + Slab_state) for each of the 4 states (drop 2*pi const).
-        q0 = (E22 * d1 * d1 - 2.0 * E12 * d1 * d2 + E11 * d2 * d2) / det0
-        w0 = lpi00 - 0.5 * ldet0 - 0.5 * q0
-        q1 = (E22 * d1 * d1 - 2.0 * E12 * d1 * d2 + a11 * d2 * d2) / det1
-        w1 = lpi10 - 0.5 * ldet1 - 0.5 * q1
-        q2 = (a22 * d1 * d1 - 2.0 * E12 * d1 * d2 + E11 * d2 * d2) / det2
-        w2 = lpi01 - 0.5 * ldet2 - 0.5 * q2
-        q3 = (b22 * d1 * d1 - 2.0 * b12 * d1 * d2 + b11 * d2 * d2) / det3
-        w3 = lpi11 - 0.5 * ldet3 - 0.5 * q3
+        # posterior effect means under each non-null state.
+        m1_1 = (Ei11 * d1 + Ei12 * d2) / prec1
+        m2_2 = (Ei22 * d2 + Ei12 * d1) / prec2
+        g1 = Ei11 * d1 + Ei12 * d2
+        g2 = Ei12 * d1 + Ei22 * d2
+        m1_3 = V11 * g1 + V12 * g2
+        m2_3 = V12 * g1 + V22 * g2
+
+        # State weights relative to the null state (Gaussian conditioning):
+        # log w_s = log pi_s - (ldet_s - ldet0)/2 + g' mu_s / 2, with
+        # g = E^-1 d and mu_s the state-s posterior mean computed above. The
+        # null state's -0.5 * (ldet0 + d' E^-1 d) is common to all four states
+        # and cancels in the wmax normalisation below. Algebraically equal to
+        # the four Mahalanobis quadratics, which remain the test oracle.
+        w0 = lpi00
+        w1 = lpi10 - 0.5 * (ldet1 - ldet0) + 0.5 * g1 * m1_1
+        w2 = lpi01 - 0.5 * (ldet2 - ldet0) + 0.5 * g2 * m2_2
+        w3 = lpi11 - 0.5 * (ldet3 - ldet0) + 0.5 * (g1 * m1_3 + g2 * m2_3)
 
         wmax = w0
         if w1 > wmax:
@@ -380,14 +363,6 @@ def _bivar_one_sweep_lowrank(
         p1 = e1 / tot
         p2 = e2 / tot
         p3 = e3 / tot
-
-        # posterior effect means under each non-null state.
-        m1_1 = (Ei11 * d1 + Ei12 * d2) / prec1
-        m2_2 = (Ei22 * d2 + Ei12 * d1) / prec2
-        g1 = Ei11 * d1 + Ei12 * d2
-        g2 = Ei12 * d1 + Ei22 * d2
-        m1_3 = V11 * g1 + V12 * g2
-        m2_3 = V12 * g1 + V22 * g2
 
         rbsum1[j] += p1 * m1_1 + p3 * m1_3
         rbsum2[j] += p2 * m2_2 + p3 * m2_3
@@ -492,7 +467,15 @@ def _bivar_dense_sweep_all(
         stats[b, 5] = g22
 
 
-_bivar_dense_sweep_all_par_jit = _jit_parallel_uncached(_bivar_dense_sweep_all)
+# The serial and parallel twins of each fused driver must not share one Numba
+# cache identity: Numba keys its on-disk cache on (module, qualname, first
+# line) and ignores the compile flags, so two dispatchers over a single
+# function object collide and whichever compiles first is served to both
+# (measured: 5.38 vs 1.73 ms/sweep when a serial run had warmed the cache).
+# ldpred3's _jit_parallel compiles a clone under a "__par" qualname, giving the
+# parallel twin its own cache entry -- so a fresh ncores>1 process no longer
+# recompiles, without reintroducing the collision.
+_bivar_dense_sweep_all_par_jit = _jit_parallel(_bivar_dense_sweep_all)
 
 
 _bivar_dense_sweep_all_jit = _jit_nogil(_bivar_dense_sweep_all)
@@ -573,7 +556,34 @@ def _bivar_lowrank_sweep_all(
         stats[b, 5] = g22
 
 
-_bivar_lowrank_sweep_all_par_jit = _jit_parallel_uncached(_bivar_lowrank_sweep_all)
+_bivar_lowrank_sweep_all_par_jit = _jit_parallel(_bivar_lowrank_sweep_all)
 
 
 _bivar_lowrank_sweep_all_jit = _jit_nogil(_bivar_lowrank_sweep_all)
+
+
+def _bivar_block_reduce(counts, stats):
+    """Reduce per-block sweep statistics in genomic block order.
+
+    ``counts`` (nblocks, 3) int64 and ``stats`` (nblocks, 6) float64 arrive
+    already scattered back to genomic block order by the driver. Summation runs
+    left to right in that order -- exactly the serial driver's per-block loop --
+    so replacing the Python loop with this compiled one changes no result bits.
+    Strict math (no fastmath): the summation order is the contract.
+    """
+    c10 = c01 = c11 = 0
+    S1 = S2 = S12 = gv11 = gv12 = gv22 = 0.0
+    for b in range(len(counts)):
+        c10 += int(counts[b, 0])
+        c01 += int(counts[b, 1])
+        c11 += int(counts[b, 2])
+        S1 += float(stats[b, 0])
+        S2 += float(stats[b, 1])
+        S12 += float(stats[b, 2])
+        gv11 += float(stats[b, 3])
+        gv12 += float(stats[b, 4])
+        gv22 += float(stats[b, 5])
+    return c10, c01, c11, S1, S2, S12, gv11, gv12, gv22
+
+
+_bivar_block_reduce_jit = _jit_nogil(_bivar_block_reduce)

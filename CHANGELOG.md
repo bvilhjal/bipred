@@ -32,6 +32,23 @@ User-visible changes to **bipred** are recorded here. The project is currently
   cross-products, avoiding complete widened LD and genome-length products.
   This requires LDpred3 `>=0.7.12,<0.8`; CI pins the tested provider while
   deployment and historical benchmark pins remain independently frozen.
+- The chain workspace drops the two per-sweep Rao-Blackwell buffers: the sweep
+  kernels accumulate retained posterior-mean contributions directly into the
+  running sums, and the nine per-block statistics are reduced by a compiled
+  strict-order loop in genomic block order. This saves 16m bytes (15.3 MiB per
+  million variants) per active chain and is bit-identical.
+- The four state likelihoods are evaluated from the already-computed
+  conditional effect means (Gaussian conditioning relative to the null state)
+  instead of four Mahalanobis quadratics: the same state probabilities up to
+  roundoff (~1e-17), with no change to the RNG stream, the reduction order, or
+  the algorithm. The Mahalanobis form remains the numerical oracle in the
+  tests.
+- The parallel sweep twins now compile through LDpred3's `_jit_parallel`, which
+  gives the serial and parallel twins distinct on-disk cache identities, so a
+  fresh process with `ncores > 1` no longer recompiles them (~1 s per process
+  in the small startup probe). `_jit_parallel_uncached` is removed; the
+  compatibility seam's published `_jit_parallel` has carried the distinct-cache
+  fix since LDpred3 0.7.12, already the dependency floor.
 
 The project is now `0.3.15.dev1`. The earlier LDpred3 floor `0.7.6` moved single-trait
 preparation and the LD-consistency screen to the provider, and

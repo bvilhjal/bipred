@@ -75,6 +75,8 @@ from ._ldpred3_compat import (
 # ``bipred.bivariate`` (monkeypatching a fused-sweep twin here still reaches
 # the driver's call sites below).
 from ._bivar_kernels import (  # noqa: F401
+    _bivar_block_reduce,
+    _bivar_block_reduce_jit,
     _bivar_const,
     _bivar_dense_sweep_all,
     _bivar_dense_sweep_all_jit,
@@ -88,7 +90,6 @@ from ._bivar_kernels import (  # noqa: F401
     _bivar_one_sweep_lowrank_jit,
     _dequantise_lr8_factor,
     _dequantise_lr8_factor_jit,
-    _jit_parallel_uncached,
 )
 
 __all__ = ["BivariateResult", "ldpred3_auto_bivariate",
@@ -1751,10 +1752,15 @@ def _ldpred3_auto_bivariate_prepared_inner(prepared, options, start,
     # Per-sweep working buffers are allocated once and refilled in place. The
     # RNG is drawn with ``out=``, so the stream (count and order of draws) is
     # exactly what fresh ``rng.random(m)`` / ``rng.standard_normal(m)`` calls
-    # produced -- the results stay bit-identical, without churning five
+    # produced -- the results stay bit-identical, without churning three
     # length-m float64 arrays every sweep.
     unif = np.empty(m); z1 = np.empty(m); z2 = np.empty(m)
-    rbs1 = np.zeros(m); rbs2 = np.zeros(m)
+    # The Rao-Blackwell accumulators *are* the running posterior-mean sums: the
+    # kernels add each sweep's contribution straight into avg1/avg2, the
+    # discarded burn-in accumulation is cleared once at the burn-in boundary
+    # below, and no separate per-sweep vectors or add-into-sum pass remain
+    # (two genome-length float64 arrays, 16m bytes, fewer per chain).
+    rbs1 = avg1; rbs2 = avg2
     if noise_inflation:
         n1e = np.empty(m); n2e = np.empty(m)
     else:                                     # no deflation: read n1/n2 directly
@@ -1765,7 +1771,10 @@ def _ldpred3_auto_bivariate_prepared_inner(prepared, options, start,
         rng.random(out=unif)
         rng.standard_normal(out=z1)
         rng.standard_normal(out=z2)
-        rbs1.fill(0.0); rbs2.fill(0.0)
+        if it == burn_in:
+            # Drop the discarded burn-in accumulation once; retained sweeps
+            # accumulate into the running sums from here on.
+            rbs1.fill(0.0); rbs2.fill(0.0)
         lpi = np.log(np.maximum(pi, 1e-300))
         c10 = c01 = c11 = 0
         S1 = S2 = S12 = 0.0
@@ -1801,17 +1810,11 @@ def _ldpred3_auto_bivariate_prepared_inner(prepared, options, start,
             block_stats[group["index"]] = group["stats"]
 
         if sweep_groups:
-            # Match the serial driver's exact block and floating reduction order.
-            for b in range(len(fblocks)):
-                c10 += int(block_counts[b, 0])
-                c01 += int(block_counts[b, 1])
-                c11 += int(block_counts[b, 2])
-                S1 += float(block_stats[b, 0])
-                S2 += float(block_stats[b, 1])
-                S12 += float(block_stats[b, 2])
-                gv11 += float(block_stats[b, 3])
-                gv12 += float(block_stats[b, 4])
-                gv22 += float(block_stats[b, 5])
+            # Compiled reduction in the serial driver's exact block and
+            # floating-point summation order (_bivar_block_reduce keeps strict
+            # math for exactly this reason).
+            (c10, c01, c11, S1, S2, S12, gv11, gv12, gv22) = \
+                _bivar_block_reduce_jit(block_counts, block_stats)
         else:
             for kind, data, start, k, aux, residual, proj1, proj2 in fblocks:
                 sl = slice(start, start + k)
@@ -1884,7 +1887,6 @@ def _ldpred3_auto_bivariate_prepared_inner(prepared, options, start,
             burn_in_pi_samples[it] = pi
             burn_in_genetic_samples[it] = (gv11, gv12, gv22)
         if it >= burn_in:
-            avg1 += rbs1; avg2 += rbs2
             gv_acc += (gv11, gv12, gv22)
             pi_samples[count] = pi
             sig_samples[count] = (s1, s2, s12)
