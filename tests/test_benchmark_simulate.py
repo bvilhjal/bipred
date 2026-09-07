@@ -435,7 +435,7 @@ def test_runtime_ci_and_frozen_benchmark_use_explicit_distinct_sources():
     assert ci_revision in project_readme
     assert f'LDPRED3_FLOOR: "{floor}"' in ci
     assert LDPRED3_REV in benchmark_readme
-    assert LDPRED3_VERSION == "0.7.17"
+    assert LDPRED3_VERSION == "0.7.18"
 
     # CI installs a tested commit within a supported *range*, so it must not
     # assert equality between the installed version and the declared floor.

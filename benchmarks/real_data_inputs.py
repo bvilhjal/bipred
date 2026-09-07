@@ -23,8 +23,8 @@ REPO_ROOT = os.path.dirname(HERE)
 # splicing a new pin's rows into an old pin's table. The previous pin
 # (0.6.1 at af5d92c7) became unrunnable when bipred's floor moved to
 # ldpred3>=0.7.12.
-LDPRED3_REV = "4c6c3c00d071e141ae8b5785e716015df44b106e"
-LDPRED3_VERSION = "0.7.17"
+LDPRED3_REV = "3dd7bf6ade80033abacf10ed2668607221f4d5c6"
+LDPRED3_VERSION = "0.7.18"
 
 
 def load_manifest(path=MANIFEST):
