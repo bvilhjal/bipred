@@ -23,7 +23,7 @@ REPO_ROOT = os.path.dirname(HERE)
 # splicing a new pin's rows into an old pin's table. The previous pin
 # (0.6.1 at af5d92c7) became unrunnable when bipred's floor moved to
 # ldpred3>=0.7.12.
-LDPRED3_REV = "dad2badc424ba7629c54e8ace0cf49dc6aac0a4a"
+LDPRED3_REV = "4c6c3c00d071e141ae8b5785e716015df44b106e"
 LDPRED3_VERSION = "0.7.17"
 
 

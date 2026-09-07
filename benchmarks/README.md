@@ -172,7 +172,7 @@ ten `run_all.sh` scripts were regenerated from clean revision `bf5236a`
 Numba 0.66.0; `run_all.sh` selected msprime and all ten completed. `bivariate_demo`,
 `external_overlap` and `external_overlap_ldsc200k` were regenerated on the same
 stack. The pin has since moved to ldpred3 0.7.17 at
-`dad2badc424ba7629c54e8ace0cf49dc6aac0a4a` -- 0.6.1 predates bipred's
+`4c6c3c00d071e141ae8b5785e716015df44b106e` -- 0.6.1 predates bipred's
 `ldpred3>=0.7.12` floor and can no longer run the suite -- so the next full
 sweep re-bases the record onto it. Three artifacts have **not** been
 regenerated even to the 0.6.1 record, because they need real-data inputs
