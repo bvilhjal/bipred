@@ -19,7 +19,7 @@ proof that a retained variant is correct.
 | Estimator | Use | Main caveat |
 |---|---|---|
 | `res.rg` | default joint LD estimate | needs well-matched LD |
-| `rg_decorrelated=True` | **sensitivity diagnostic only** — the default estimator measured more accurate in both power regimes (0.0086 vs 0.0108, 0.0174 vs 0.0242); incompatible with multichain and adaptive stopping |
+| `rg_decorrelated=True` | sensitivity diagnostic only | less accurate than the default in both power regimes (see below); incompatible with multichain and adaptive stopping |
 | `bipred.ldsc_rg` | fast screen or independent check | unstable when marginal LDSC `h2` is near zero; one-step and unfiltered, so single large-effect loci carry full leverage |
 | two univariate LDpred fits | additional diagnostic | often attenuated under power asymmetry |
 
@@ -30,7 +30,7 @@ record compares these estimators against simulated truth and each other only
 
 Cross-trait LDSC fits the moment relation:
 
-**Equation 1. Cross-trait LD Score regression.**
+**Equation (1). Cross-trait LD Score regression.**
 
 ```text
 z_tj = sqrt(N_tj) beta_hat_tj / sqrt(1 - beta_hat_tj^2)
@@ -65,7 +65,7 @@ local LD dependence.
 Use the joint fit by default and inspect LDSC as a cheap sensitivity check. The
 committed benchmark record states its simulation assumptions, paired
 realized-truth errors, failures, and runtime provenance; see the
-[benchmark results](https://github.com/bvilhjal/bipred/blob/main/benchmarks/RESULTS.md).
+[benchmark results](../benchmarks/RESULTS.md).
 
 ## Asymmetric-power sensitivity
 
@@ -100,7 +100,7 @@ Shared GWAS samples can correlate the two traits' sampling errors. With scalar
 cohort sizes under a homogeneous standardized quantitative-trait sampling model,
 the usual mapping is:
 
-**Equation 2. Scalar-N overlap approximation.**
+**Equation (2). Scalar-N overlap approximation.**
 
 ```text
 cross_corr = N_shared rho_pheno / sqrt(N1 N2)
@@ -111,7 +111,7 @@ correlation among the shared analyzed individuals. With complete overlap and
 equal cohort sizes, `cross_corr = rho_pheno`.
 
 When the fitting inputs are effective sample sizes—for example, case-control
-GWAS, meta-analyses, or SNP-varying `N`—Equation 2 is an approximation, not a
+GWAS, meta-analyses, or SNP-varying `N`—Equation (2) is an approximation, not a
 literal shared-person identity. One scalar `cross_corr` then represents an
 assumed sampling-error correlation. Pass that value to the fit:
 
@@ -236,21 +236,15 @@ non-positive-definite; inspect the raw variances and use `clip=False` to expose
 out-of-range diagnostic values for the blocks passed to `regional_rg`. This does
 not diagnose a different representation used internally by the fit. The research
 evidence and its limitations are in the repository's
-[`RESULTS_REGIONAL.md`](https://github.com/bvilhjal/bipred/blob/main/research/cross_corr_estimation/RESULTS_REGIONAL.md).
+[`RESULTS_REGIONAL.md`](../research/cross_corr_estimation/RESULTS_REGIONAL.md).
 
 ## Polygenic overlap
 
-The four-state mixture gives:
-
-**Equation 3. Polygenic-overlap decomposition.**
-
-```text
-pi1             = pi10 + pi11
-pi2             = pi01 + pi11
-frac_shared     = pi11 / min(pi1, pi2)
-rho_beta        = s12 / sqrt(s1 s2)
-rg_from_overlap = rho_beta pi11 / sqrt(pi1 pi2)
-```
+The four-state mixture gives the MiXeR-style decomposition defined in
+[algorithm.md Equation (7)](algorithm.md#polygenic-overlap) — `pi1`, `pi2`,
+`frac_shared`, `rho_beta`, and `rg_from_overlap` from the mixture and slab
+covariance. That page is the definition site; this section covers
+interpretation and calibration.
 
 `.mixer["rho_beta"]` is the ratio of posterior-mean Sigma entries;
 `mixer_iterate_summary` reports the mean of the per-iterate ratios. They

@@ -5,6 +5,20 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 ## [Unreleased]
 
+- Documentation: new `docs/api.md` (public functions, full `BivariateResult`
+  field reference, CLI flag table with Python-only scope notes) and new
+  `docs/diagnostics.md` (implausible vs diverged warnings with ratios and
+  thresholds, multi-chain split-Rhat trace list, adaptive-stopping rule).
+  `docs/algorithm.md` now states the Gibbs sweep as equations plus
+  pseudocode (state log-weights, Rao-Blackwell accumulation, Dirichlet and
+  damped slab-covariance updates, noise-inflation update), the `p_init`
+  shorthand, the decorrelated-`rg` and `mixer_calibrated` formulas, and a
+  hardcoded-constants table; equations use the parenthesized
+  `Equation (N)` style. `docs/rg.md` keeps the estimator numbers in one
+  place (overlap definition single-sourced from `algorithm.md`), the guide
+  points at the new pages instead of repeating them, repository links are
+  relative, and `tests/test_docs.py` checks links, anchors, and
+  symbol-rather-than-line references.
 - `ldpred3_auto_bivariate_chains` accepts `progress=`: one event per
   completed sweep of any chain with the pooled count over all chains
   (`done`, `total`, `phase`, `chains`, `chains_done`), emitted under a lock

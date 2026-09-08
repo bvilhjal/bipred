@@ -107,7 +107,8 @@ keep = (ld_consistency_screen(blocks, beta1 / se1)
 
 Here `beta/se` is the original GWAS z-score, not the standardized `beta_hat`
 passed to the fit. The routine is DENTIST-inspired rather than an implementation
-of the full published DENTIST workflow. It exposed serious file/reference
+of the full published DENTIST workflow; the implementation lives in
+`ldpred3.qc` and `bipred.qc` re-exports it. It exposed serious file/reference
 inconsistencies in the committed real-data study; that evidence does not make it
 a universal substitute for study-specific QC. See *Quality control before
 fitting real data* in [`docs/guide.md`](docs/guide.md).
@@ -115,12 +116,15 @@ fitting real data* in [`docs/guide.md`](docs/guide.md).
 ## Documentation
 
 - [`docs/guide.md`](docs/guide.md): inputs, calls, options, outputs, and pitfalls.
+- [`docs/api.md`](docs/api.md): public functions, result fields, and the CLI flag reference.
 - [`docs/algorithm.md`](docs/algorithm.md): model and estimator theory.
 - [`docs/rg.md`](docs/rg.md): genome-wide and regional genetic correlation,
   sample overlap, and polygenic overlap.
-- [Benchmark guide](https://github.com/bvilhjal/bipred/blob/main/benchmarks/README.md):
+- [`docs/diagnostics.md`](docs/diagnostics.md): fit-validity warnings,
+  multi-chain diagnostics, and adaptive stopping.
+- [Benchmark guide](benchmarks/README.md):
   scripts and reproducibility.
-- [Benchmark results](https://github.com/bvilhjal/bipred/blob/main/benchmarks/RESULTS.md):
+- [Benchmark results](benchmarks/RESULTS.md):
   results, limitations, and per-section provenance.
 
 ## Citing and prior work
@@ -139,7 +143,7 @@ bipred has no paper of its own yet; cite the repository and the version you ran
 The estimators here are reimplementations, not wrappers. The repository's
 synthetic benchmarks characterize bipred's behavior; equivalence to the
 original cross-trait LDSC and MiXeR implementations has not been validated. See
-[benchmark results](https://github.com/bvilhjal/bipred/blob/main/benchmarks/RESULTS.md)
+[benchmark results](benchmarks/RESULTS.md)
 for what has and has not been tested.
 
 ## License

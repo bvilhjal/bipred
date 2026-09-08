@@ -427,7 +427,8 @@ def _bivar_one_sweep_lowrank(
 
 
 # fastmath here and NOT on the dense kernel, mirroring ldpred3's scoping
-# (_kernels.py:1277). The O(rank) projection dots are ~90% of a low-rank
+# (fastmath on the low-rank sweep only, in ldpred3's `_kernels` dense/low-rank
+# sweep pair). The O(rank) projection dots are ~90% of a low-rank
 # sweep and are add-latency-bound, so letting LLVM reassociate and vectorise
 # the reduction measured 1.76x end-to-end on an all-LR8 fit (1.26x/1.38x/
 # 1.99x at rank 32/64/170). The dense kernel measured only 1.12x -- its

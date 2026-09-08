@@ -7,7 +7,9 @@ posterior-mean effects for prediction, and polygenic-overlap summaries.
 For a self-contained first run, use
 [`examples/minimal.py`](../examples/minimal.py). Model definitions are in
 [`algorithm.md`](algorithm.md); estimator interpretation is in
-[`rg.md`](rg.md).
+[`rg.md`](rg.md); the public function and CLI surface is mapped in
+[`api.md`](api.md); fit-validity and convergence diagnostics are in
+[`diagnostics.md`](diagnostics.md).
 
 ## Inputs
 
@@ -120,7 +122,7 @@ are retained only for compatibility. D8 uses one quarter of D32's storage. Low-r
 useful when its rank is much smaller than block size; otherwise D8 is usually
 smaller. Treat representation timings as machine- and architecture-specific;
 the scripts and their limitations are in the
-[benchmark record](https://github.com/bvilhjal/bipred/blob/main/benchmarks/RESULTS.md).
+[benchmark record](../benchmarks/RESULTS.md).
 
 ## Quality control before fitting real data
 
@@ -192,14 +194,19 @@ CLI flags.
    [`bipred.qc.ld_consistency_screen`](../bipred/qc.py). This lightweight,
    block-based routine is inspired by the DENTIST statistic but does not
    implement the published DENTIST windowing and protected-removal procedure.
-   The default chi2 threshold is a *null* calibration of the split-half
-   statistic. Split-half flags are confirmed against the full-window
-   leave-one-out residual: LD-consistent large effects (APOE-scale |z| on
-   lipids) are kept, as are weak z-scores whose sign is sampling noise.
-   What is dropped is a residual that is itself genome-wide significant
-   given the neighbours. Blocks smaller than 50 live variants are not
-   evaluated and are kept. A high drop rate is a warning that the LD may
-   be thresholded or indefinite, not a quiet success.
+   The implementation lives in `ldpred3.qc`; `bipred.qc` re-exports it
+   unchanged (with `dentist` as a compatibility alias), so
+   `from bipred.qc import ld_consistency_screen` keeps working but the
+   provider owns the schedule. The default chi2 threshold (29.72) is a
+   *null* calibration of the split-half statistic — chi-square with one
+   degree of freedom at p = 5e-8. Split-half flags are confirmed against
+   the full-window leave-one-out residual: LD-consistent large effects
+   (APOE-scale |z| on lipids) are kept, as are weak z-scores whose sign is
+   sampling noise. What is dropped is a residual that is itself
+   genome-wide significant given the neighbours. Blocks smaller than 50
+   live variants are not evaluated and are kept. A high drop rate is a
+   warning that the LD may be thresholded or indefinite, not a quiet
+   success.
 
 ```python
 from ldpred3 import standardize_betas
@@ -241,7 +248,9 @@ mask. The reference exclusion is `chi2 > max(0.001 N, 80)`.
 `bipred.ldsc.ldsc_chi2_mask` returns that row filter. Subset the arguments to
 `ldsc_rg` and leave the joint fit its full variant set; keep `m_snps` at the
 full count. The same mask on `ldpred3_auto_bivariate_blocks` deletes the slab's
-large effects — that is the 0.3.7 failure mode.
+large effects — that is the 0.3.7 failure mode. The CLI's `--max-chisq` applies
+a chi-square deletion to the joint-fit panel itself: expert-only, normally left
+unset, since large signals belong in the prediction model.
 
 Likewise, fix one LD-score vector for the full reference, then pass
 `ell_full[prep.cache_indices]` and `m_snps=len(ell_full)`. QC, the
@@ -284,6 +293,8 @@ here: a fit that trips a divergence diagnostic raises a `RuntimeWarning`
 naming the check, and `h2`, `rg` and the overlap readouts of such a fit are
 not to be interpreted until the data/LD mismatch has been investigated.
 Passing the diagnostic is necessary evidence, not proof of correctness.
+The ratios, thresholds, and trace lists behind both warnings are defined in
+[`diagnostics.md`](diagnostics.md).
 
 ## Fit one chain
 
@@ -334,7 +345,9 @@ The default starts are dispersed over union-causal fractions. All finite,
 equal-length chains are pooled with equal weight; a failed or wrong-length chain
 aborts the fit. `fit.basic_split_rhat` is a classical scalar diagnostic with
 degeneracy flags. It neither filters chains nor certifies convergence, and it
-does not cover variant-level effects.
+does not cover variant-level effects. Which traces enter it, how per-chain
+divergence flags pool, and what the adaptive-stopping rule tests are defined in
+[`diagnostics.md`](diagnostics.md).
 
 `chain_ncores>1` runs independent chains concurrently. Do not combine it with
 `ncores>1`: nested threading is rejected because it oversubscribes cores. The
@@ -405,25 +418,43 @@ mx["rg_from_overlap"]
 mx["n_causal"], mx["n_shared"]
 ```
 
+Score an independent target cohort on the fitted weights (the deployable
+artifact; never `X @ beta_est` on raw dosages):
+
+```python
+res.write_weights(
+    "trait1.weights", trait=1, id=prep.id, chrom=prep.chrom, pos=prep.pos,
+    effect_allele=prep.effect_allele, other_allele=prep.other_allele)
+
+from ldpred3 import score_from_weights
+test_score = score_from_weights("trait1.weights", "test_cohort",
+                                scaling="target")
+```
+
+Weights written without observed fit-cohort AF/SD require
+`scaling="target"`; frozen-scale scoring needs saved scale metadata (see
+[Inputs](#inputs)). The full field and method reference is in
+[`api.md`](api.md).
+
 Ratios avoid the literal causal-count interpretation but still need calibration.
 LD can spread inclusion mass to correlated neighbours, while reference mismatch
-can add inflation. In the committed sweep, mean `frac_shared` bias was
-nonmonotonic: +0.05, +0.03, +0.09, and +0.23 at causal fractions 1%, 3%, 10%,
-and 30%. Very sparse traits are not exempt. Read the estimate beside fitted `p`
-rather than applying a fixed offset; see [`rg.md`](rg.md). For
-count-sensitive work, compare `noise_inflation=True` and
-`res.mixer_calibrated(infer1, infer2)` with the unadjusted result; neither is
-guaranteed to improve calibration at every power setting.
+can add inflation; the bias is power-dependent and nonmonotonic (see
+[`rg.md`](rg.md#polygenic-overlap) for the committed numbers — very sparse
+traits are not exempt). Read the estimate beside fitted `p` rather than
+applying a fixed offset. For count-sensitive work, compare
+`noise_inflation=True` and `res.mixer_calibrated(infer1, infer2)` with the
+unadjusted result; neither is guaranteed to improve calibration at every power
+setting.
 
 ## Genetic correlation
 
 Use `res.rg` by default. `rg_decorrelated=True` is a **sensitivity diagnostic
-only — do not use it for production estimates**: it had higher paired error
-than the default in both the symmetric and asymmetric synthetic sweeps (0.0086
-versus 0.0108, 0.0174 versus 0.0242), and it is incompatible with multichain
-pooling and adaptive stopping. `ldsc_rg` is a fast independent screen.
-Interpretation, sample overlap, and overlap-interval semantics are covered in
-[`rg.md`](rg.md).
+only — do not use it for production estimates**: it measured higher paired
+error than the default in both power regimes (numbers in
+[`rg.md`](rg.md#asymmetric-power-sensitivity)), and it is incompatible with
+multichain pooling and adaptive stopping. `ldsc_rg` is a fast independent
+screen. Interpretation, sample overlap, and overlap-interval semantics are
+covered in [`rg.md`](rg.md).
 
 For per-region exploratory estimates:
 
