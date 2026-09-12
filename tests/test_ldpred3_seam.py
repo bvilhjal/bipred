@@ -2,7 +2,7 @@
 
 bipred centralizes its underscore-prefixed ldpred3 imports in
 ``bipred._ldpred3_compat``. The dependency is bounded at
-``>=0.6.6,<0.7`` because that private surface is unversioned. Bipred's
+``>=0.7.12,<0.8`` because that private surface is unversioned. Bipred's
 public API and compatibility seam import lazily; these tests force the
 complete seam to resolve and guard its *behaviour*, so a dependency bump
 fails loudly instead of silently changing bivariate numerics or LDSC-rg

@@ -428,7 +428,9 @@ def test_runtime_ci_and_frozen_benchmark_use_explicit_distinct_sources():
     match = re.search(r'ldpred3>=([^,<"\s]+)', pyproject)
     assert match is not None
     floor = match.group(1)
-    ci_revision = re.search(r'LDPRED3_REV: "([0-9a-f]{40})"', ci)
+    # The CI pin is an explicit revision -- a release tag or a full commit
+    # SHA -- kept distinct from the frozen benchmark pin below.
+    ci_revision = re.search(r'LDPRED3_REV: "(v[0-9.]+|[0-9a-f]{40})"', ci)
     assert ci_revision is not None
     ci_revision = ci_revision.group(1)
     assert ci_revision != LDPRED3_REV

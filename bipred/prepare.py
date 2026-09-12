@@ -17,20 +17,22 @@ from typing import Optional
 import numpy as np
 
 from ldpred3.ld import subset_ld_blocks
-from ldpred3.prepare import (  # noqa: F401  -- re-exports, plus the helpers pairing shares
+from ldpred3.prepare import (  # noqa: F401  -- re-exports
     PreparedTrait,
-    _cache_variant_table,
-    _open_cache,
-    _prepare_trait,
-    _require_usable,
-    _resolve_n_eff,
-    _validated_trait,
     prepare_trait_sumstats,
     screen_prepared_trait,
 )
 from ldpred3.prepare import (  # noqa: F401
     DEFAULT_BUILD_MISMATCH_FRACTION, DEFAULT_REFERENCE_COVERAGE_WARN,
     SEVERE_REFERENCE_COVERAGE,
+)
+from ._ldpred3_compat import (
+    _cache_variant_table,
+    _open_cache,
+    _prepare_trait,
+    _require_usable,
+    _resolve_n_eff,
+    _validated_trait,
 )
 from . import _progress
 

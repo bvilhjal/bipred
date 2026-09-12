@@ -19,6 +19,15 @@ from __future__ import annotations
 import numpy as np
 
 from ._ldpred3_compat import _finite_control, _validate_boolean_controls
+# Private ``ldpred3.qc`` internals re-exported name-for-name, through the
+# package's one private seam.
+from ._ldpred3_compat import (                                            # noqa: F401
+    _confirmed_drops,
+    _dentist_statistic,
+    _ld_consistency_screen_selected,
+    _precision_loo,
+    _window_ld,
+)
 
 # The screen, re-exported from its new home. Kept as a name-for-name alias
 # rather than a wrapper so a caller cannot tell the difference, and so the
@@ -33,11 +42,6 @@ from ldpred3.qc import (                                            # noqa: F401
     DEFAULT_THRESHOLD,
     DEFAULT_WINDOW,
     MIN_WINDOW,
-    _confirmed_drops,
-    _dentist_statistic,
-    _ld_consistency_screen_selected,
-    _precision_loo,
-    _window_ld,
     dentist,
     dentist_statistic,
     ld_consistency_screen,

@@ -6,7 +6,8 @@ prediction, and a MiXeR-style polygenic-overlap summary.
 
 The package contains the bivariate methods split out of
 [ldpred3](https://github.com/bvilhjal/ldpred3) and still uses ldpred3 for shared
-LD representations and sampler utilities.
+LD representations and sampler utilities. bipred is part of the
+[LDpred3 package family](https://github.com/bvilhjal/ldpred3/blob/master/docs/family.md).
 
 ## Installation
 
@@ -17,7 +18,7 @@ tested provider revision below; publish that revision before installing this
 Bipred development line from Git. Sibling-checkout installs also work locally.
 
 ```bash
-python -m pip install "ldpred3[fast] @ git+https://github.com/bvilhjal/ldpred3.git@c1981e5365a8107435c28076549104f9969fdcb4"
+python -m pip install "ldpred3[fast] @ git+https://github.com/bvilhjal/ldpred3.git@v0.7.23"
 python -m pip install "bipred[fast] @ git+https://github.com/bvilhjal/bipred.git"
 ```
 

@@ -13,6 +13,11 @@ For a self-contained first run, use
 
 ## Inputs
 
+The family-wide LD conventions — cache layout, block representations and the
+provenance a reference should carry — live in LDpred3's
+[canonical LD-reference guide](https://github.com/bvilhjal/ldpred3/blob/master/docs/ld-references.md);
+this section is the bipred-specific summary.
+
 From an ldpred3 LD cache and two GWAS files:
 
 ```python

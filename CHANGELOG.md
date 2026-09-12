@@ -5,6 +5,8 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 ## [Unreleased]
 
+## [0.3.16.dev0] - 2026-09-08
+
 - Documentation: new `docs/api.md` (public functions, full `BivariateResult`
   field reference, CLI flag table with Python-only scope notes) and new
   `docs/diagnostics.md` (implausible vs diverged warnings with ratios and
@@ -19,44 +21,43 @@ User-visible changes to **bipred** are recorded here. The project is currently
   points at the new pages instead of repeating them, repository links are
   relative, and `tests/test_docs.py` checks links, anchors, and
   symbol-rather-than-line references.
+
 - `ldpred3_auto_bivariate_chains` accepts `progress=`: one event per
   completed sweep of any chain with the pooled count over all chains
   (`done`, `total`, `phase`, `chains`, `chains_done`), emitted under a lock
   when chains run in threads. Reporting cannot change a chain, and a callback
   that raises aborts the fit as that chain's error.
+
 - The sampler option `trace_burn_in=True` keeps the burn-in mixture draws and
   raw genetic quadratics as `BivariateResult.burn_in_pi_samples` and
   `burn_in_genetic_samples`; the pooled multi-chain posterior stacks them in
   chain order. They serve trace plots and enter no estimate; a fit with the
   option on is bit-identical to one without.
+
 - The compiled sweep kernels moved from `bipred/bivariate.py` into
   `bipred/_bivar_kernels.py`; `bipred.bivariate` re-exports every name, so
   call sites and tests are unchanged. The driver module shrinks from 2,521 to
   about 2,000 lines and now holds only validation, preparation, the chain
   loop and the result type.
+
 - The guide's quality-control chapter keeps the procedure and points to the
   new `docs/qc_factorial.md` for the record of the committed factorial; the
   multi-chain section documents `MultiChainBivariateResult` and
   `BivariateChainSummary`.
 
-- Close privately owned mapped LD subsets independently of borrowed parent
-  caches, including re-screening and exception paths. Closing a prepared pair
-  now detaches its block views without clearing a caller-owned collection.
-- Decorrelated covariance contracts blockwise through LDpred3's bounded
-  cross-products, avoiding complete widened LD and genome-length products.
-  This requires LDpred3 `>=0.7.12,<0.8`; CI pins the tested provider while
-  deployment and historical benchmark pins remain independently frozen.
 - The chain workspace drops the two per-sweep Rao-Blackwell buffers: the sweep
   kernels accumulate retained posterior-mean contributions directly into the
   running sums, and the nine per-block statistics are reduced by a compiled
   strict-order loop in genomic block order. This saves 16m bytes (15.3 MiB per
   million variants) per active chain and is bit-identical.
+
 - The four state likelihoods are evaluated from the already-computed
   conditional effect means (Gaussian conditioning relative to the null state)
   instead of four Mahalanobis quadratics: the same state probabilities up to
   roundoff (~1e-17), with no change to the RNG stream, the reduction order, or
   the algorithm. The Mahalanobis form remains the numerical oracle in the
   tests.
+
 - The parallel sweep twins now compile through LDpred3's `_jit_parallel`, which
   gives the serial and parallel twins distinct on-disk cache identities, so a
   fresh process with `ncores > 1` no longer recompiles them (~1 s per process
@@ -64,12 +65,25 @@ User-visible changes to **bipred** are recorded here. The project is currently
   compatibility seam's published `_jit_parallel` has carried the distinct-cache
   fix since LDpred3 0.7.12, already the dependency floor.
 
+## [0.3.15.dev1] - 2026-09-05
+
+- Close privately owned mapped LD subsets independently of borrowed parent
+  caches, including re-screening and exception paths. Closing a prepared pair
+  now detaches its block views without clearing a caller-owned collection.
+
+- Decorrelated covariance contracts blockwise through LDpred3's bounded
+  cross-products, avoiding complete widened LD and genome-length products.
+  This requires LDpred3 `>=0.7.12,<0.8`; CI pins the tested provider while
+  deployment and historical benchmark pins remain independently frozen.
+
 The project is now `0.3.15.dev1`. The earlier LDpred3 floor `0.7.6` moved single-trait
 preparation and the LD-consistency screen to the provider, and
 `bipred.prepare` / `bipred.qc` re-export them. (The floor had been `0.6.6`,
 the first build with `BUILD_MISMATCH_FRACTION` and the current DENTIST/D8
 semantics; `0.7.3` for the shared ill-posed-window repair; `0.7.4` for the
 screen; every later floor still guarantees those.)
+
+## [0.3.15.dev0] - 2026-09-04
 
 ### Removed
 
@@ -126,29 +140,23 @@ screen; every later floor still guarantees those.)
 
 - CI and installation guidance now pin the reviewed LDpred3 0.6.8 revision.
   (The floor has since moved to `>=0.7.3`; see the entry above.)
+
 - Direct bivariate fits remain at 200 burn-in and 200 retained sweeps by
   default. SMARTpred explicitly requests 300/100 as a web-service operating
   point; that setting does not replace bipred's sampling-oriented default
   without evidence that halving the retained iterates preserves its bivariate
   architecture summaries.
-- The dense-block structural check skips D8 (int8). Quantization is not
-  PSD-preserving, and `R + 0.05 I` rejected ordinary finite-reference D8
-  while 16 random probes on blocks larger than 1,024 missed an embedded
-  indefinite 3×3. Large float blocks now use a deterministic
-  smallest-eigenvalue probe. The LD-consistency screen already floors D8.
+
 - `ldpred3` dependency range is `>=0.7.3,<0.8`.
 
 ### Fixed
 
-- `allow_diverged="False"` is no longer treated as true. The argument must
-  be a boolean.
-- Identifier re-anchoring that drops every row no longer reports that QC
-  removed everything and the reference was never consulted.
 - `columns={"n_eff": True}` is rejected instead of being read as column
   index 1. A boolean is an int in Python, so `True` previously selected the
   chromosome column and silently set a per-variant `n_eff` of 1.0
   genome-wide — a two-orders-of-magnitude error in the standardized effects.
   Every other integer control already refuses booleans; this one now does too.
+
 - Rows whose identifier the LD reference does not hold but whose coordinate
   matches are now announced: they were aligned on position alone, so each was
   bound to whatever reference variant sits at that coordinate with a
@@ -156,11 +164,13 @@ screen; every later floor still guarantees those.)
   identifier. The count is recorded as `log["n_positional_only"]`. With
   `reanchor_on_identifier` such rows are dropped upstream, so the warning
   reads 0 there.
+
 - Identifier re-anchoring now warns when it *drops* rows even if it moves
   none. Previously the warning was gated on `n_moved`, so a file losing a
   large fraction to retired or missing identifiers was discarded with zero
   output on stderr. Coverage is also measured against the pre-reanchor row
   count, so `n_sumstats_offered` reports what the user actually offered.
+
 - The low-coverage warning attributes the loss to the validity mask or to QC
   when those dominate. Before, whenever every surviving row harmonized, the
   reason was forced to "sparse_sumstats" and the message blamed the
@@ -171,12 +181,33 @@ screen; every later floor still guarantees those.)
 
 - `bipred --version` prints the package version, so a run can record the
   exact version `README` asks users to cite.
+
 - Tests: the ldpred3 seam test now derives its pinned surface from the seam's
   own `__all__` (previously 5 of the 25 borrowed private names, including
   `_variant_indices`, were unpinned), pins the `_variant_indices` layout
   behaviourally, and an independent Gaussian-conditioning oracle checks the
   bivariate sweep's four-state likelihood, posterior means, and draws — the
   one check that does not reuse `_bivar_const`'s closed forms.
+
+## [0.3.14.dev0] - 2026-09-01
+
+### Changed
+
+- The dense-block structural check skips D8 (int8). Quantization is not
+  PSD-preserving, and `R + 0.05 I` rejected ordinary finite-reference D8
+  while 16 random probes on blocks larger than 1,024 missed an embedded
+  indefinite 3×3. Large float blocks now use a deterministic
+  smallest-eigenvalue probe. The LD-consistency screen already floors D8.
+
+### Fixed
+
+- `allow_diverged="False"` is no longer treated as true. The argument must
+  be a boolean.
+
+- Identifier re-anchoring that drops every row no longer reports that QC
+  removed everything and the reference was never consulted.
+
+## [0.3.13.dev0] - 2026-08-31
 
 ### Changed
 
@@ -191,6 +222,8 @@ screen; every later floor still guarantees those.)
   compute-bound, so the same real windows took 0.152 s against 0.153 s. What
   halves is the live window working set, 8 MiB to 4 MiB per 1,000-variant
   window per worker.
+
+## [0.3.12.dev0] - 2026-08-31
 
 ### Added
 
@@ -210,6 +243,7 @@ screen; every later floor still guarantees those.)
   reported as such instead of blaming the reference. Current `harmonize`
   rejects a unique identifier at the wrong locus, so a build mismatch left no
   trace beyond a collapsed `n_matched` and `n_locus_mismatch` stayed 0.
+
 - `reanchor_on_identifier=True` repairs that mismatch: each row's chromosome
   and position are taken from the reference entry carrying its identifier, so
   the pair is compared on the reference's build, and `harmonize` still checks
@@ -222,6 +256,16 @@ screen; every later floor still guarantees those.)
   reason under `log["reanchor"]`. On a real GRCh38 GWAS Catalog deposit
   against the GRCh37 HapMap3+ reference this took coverage from 0.9% to
   91.2% with no identifier dropped.
+
+- **Independent trait preparation and QC in the web runner.** The two traits
+  now proceed concurrently through QC, harmonization, a quick pre-DENTIST
+  univariate LD-score h²/intercept diagnostic, and their mandatory trait-local
+  screens; pairing waits for both completed artifacts. Both workers share one
+  immutable LD reference and one precomputed full-reference LD-score panel.
+  DENTIST eigensolvers overlap only when the loaded BLAS is known to be safe;
+  otherwise their calls serialize while the remaining trait work stays
+  concurrent. Live progress reports both traits, and gross QC/LDSC anomalies
+  are shown as explicit triage warnings rather than undocumented filters.
 
 ### Fixed
 
@@ -276,24 +320,42 @@ screen; every later floor still guarantees those.)
   private-effect baseline. The screen records `n_tested`, warns when a large
   fraction of variants was never evaluated or when the drop rate is high
   (thresholded/indefinite LD), and counts overlapping-window drops once.
+
 - `BivariateResult.write_weights` refuses a fit whose
   `divergence_diagnostics` are flagged unless `allow_diverged=True` (CLI:
   `--allow-diverged`). Length mismatches are reported first.
+
 - Dense LD blocks that remain indefinite after a 0.05 ridge
   (`R + 0.05 I` not PD) are rejected at prepare rather than returning a
   finite, clamped, wrong fit. D32 rounding noise is tolerated; LowRankLD
   is already constrained to a (near) PSD residual.
+
 - `prepare_trait_sumstats` logs rows dropped for non-finite/`se<=0`/`n_eff<=0`
   even when `qc=False`, drops unique-rsID matches whose chrom/pos disagree
   with the LD reference, and rejects `|beta_hat| >= 1` on a `PreparedTrait`.
   The sampler now raises on that scale error rather than warning.
+
 - `estimate_sample_overlap` rejects an `ldsc_rg` result whose intercept was
   constrained (which previously reported `n_shared=0`,
   `physically_consistent=True`).
+
 - Multi-chain pooling keeps per-chain `divergence_diagnostics` on the pooled
   posterior. Adaptive `tol` warns when `num_iter` is too small to stop early.
   Trace-drift flags a sign-crossing genetic-variance path. Harmonize docs no
   longer claim that all indels are dropped.
+
+- Web runner and supervisor housekeeping: `munge.json`/`result.json` are now
+  published by unique-temp rename so a killed runner can no longer leave a
+  truncated file that breaks the job page; the runner refuses to start when
+  the supervisor has already failed its job and no longer resets the
+  launch-claim `started` timestamp the watchdog's deadline is anchored to;
+  a fit quarantined by a critical warning is no longer recorded as a working
+  GWAS Catalog accession; concurrent Catalog metadata refreshes no longer
+  share one fixed `.part` temp path; `/jobs` now applies the same-origin
+  browser guard `/demo` already had; a failed demo staging copy releases the
+  reserved queue slot; and a `BIPRED_WEB_CACHES` entry whose file vanishes
+  after startup is skipped with a warning instead of failing the index page
+  and unrelated running jobs.
 
 ### Changed
 
@@ -311,17 +373,9 @@ screen; every later floor still guarantees those.)
   default data directory is `smartpred_data/`. The web-related Unreleased
   entries below describe work that continues there.
 
-### Added
+## [0.3.11.dev0] - 2026-08-26
 
-- **Independent trait preparation and QC in the web runner.** The two traits
-  now proceed concurrently through QC, harmonization, a quick pre-DENTIST
-  univariate LD-score h²/intercept diagnostic, and their mandatory trait-local
-  screens; pairing waits for both completed artifacts. Both workers share one
-  immutable LD reference and one precomputed full-reference LD-score panel.
-  DENTIST eigensolvers overlap only when the loaded BLAS is known to be safe;
-  otherwise their calls serialize while the remaining trait work stays
-  concurrent. Live progress reports both traits, and gross QC/LDSC anomalies
-  are shown as explicit triage warnings rather than undocumented filters.
+### Added
 
 - **One precomputed LD-score vector per web reference.** Pairing now preserves
   each retained row's full-cache index. The web runner gathers the fixed
@@ -366,6 +420,47 @@ screen; every later floor still guarantees those.)
   safely across jobs, including strict migration of compatible completed
   job-local files from deployments predating the shared store.
 
+- **Cache-aware analysis stages in the web service.** The job page separates
+  Catalog acquisition, input/reference reading, reusable complete per-trait
+  QC/LD-alignment/screen artifacts, and pair-specific joint-panel construction;
+  the mandatory screen appears immediately before combination and cannot be
+  disabled. Downloaded/reused outcomes remain after fast stages finish,
+  and each concurrent Catalog transfer keeps its own live percentage line.
+  Long
+  counters are throttled per trait/activity, while semantic transitions are
+  never hidden. A missing or corrupt precomputed LD-score artifact now fails
+  before fitting, because it would otherwise silently change the sampler's h²
+  initialization; a data-dependent regression failure is recorded and uses
+  the deterministic default start. Withheld weights remain visible rather
+  than appearing completed or pending. Historical jobs retain their legacy
+  stage labels and scientific descriptions.
+
+### Fixed
+
+- Concurrent Catalog progress and completion now serialize every `job.json`
+  mutation through one lock. The GET body must match the ETag and/or
+  Last-Modified generation checked at submission (with one clean retry), and
+  stale provisional `.build` files are purged and counted against the store
+  budget. One verified LD-generation hash now binds reference IDs, loaded
+  matrices, LD-score lookup, prepared-trait keys, and result provenance; a
+  reference replaced during a job is rejected rather than mixed across
+  generations. Interrupted uploads remove their private staging data
+  immediately, while stale staging directories are TTL-cleaned as a backstop.
+
+- Historical web jobs keep the stage names and LDSC description they actually
+  ran. Schema-1 results still say that scores and M came from the fitted panel;
+  schema 2 retains its optional pair-level screen instead of being relabelled
+  as the mandatory trait-local schema-3 workflow.
+
+- Quarantined fits containing non-finite joint, MiXeR-style, or divergence
+  diagnostics no longer crash the results route after a long fit. JSON `null`
+  values render as an em dash while the warning and downloadable `result.json`
+  remain available.
+
+## [0.3.10.dev0] - 2026-08-26
+
+### Added
+
 - **Optional progress reporting for the long-running steps.**
   `prepare_bivariate_sumstats`, `ld_consistency_screen` (with its `dentist`
   alias), and `ldpred3_auto_bivariate_blocks` take a `progress` callable,
@@ -382,24 +477,88 @@ screen; every later floor still guarantees those.)
   for. With `tol > 0` the fit may stop before `done` reaches `total`, and the
   sweep it stops on is still reported. See `docs/guide.md`, *Progress
   reporting*.
-- **Cache-aware analysis stages in the web service.** The job page separates
-  Catalog acquisition, input/reference reading, reusable complete per-trait
-  QC/LD-alignment/screen artifacts, and pair-specific joint-panel construction;
-  the mandatory screen appears immediately before combination and cannot be
-  disabled. Downloaded/reused outcomes remain after fast stages finish,
-  and each concurrent Catalog transfer keeps its own live percentage line.
-  Long
-  counters are throttled per trait/activity, while semantic transitions are
-  never hidden. A missing or corrupt precomputed LD-score artifact now fails
-  before fitting, because it would otherwise silently change the sampler's h²
-  initialization; a data-dependent regression failure is recorded and uses
-  the deterministic default start. Withheld weights remain visible rather
-  than appearing completed or pending. Historical jobs retain their legacy
-  stage labels and scientific descriptions.
 
 - Webapp auto-registers the UK Biobank European **HapMap3+** LD cache
   (`ukb-eur-hm3plus`, 1.44M variants) from the sibling ldpred3 work dir when
   present, and prefers it over HapMap3 as the form default.
+
+### Fixed
+
+- **The web service re-downloaded GWAS Catalog deposits it already had.**
+  The `download` stage filtered each harmonised file to the job's LD
+  reference *while* streaming it, so the file it left in the job directory
+  was usable only by jobs with that same reference — and nothing looked for
+  it anyway. Re-running an analysis re-fetched hundreds of megabytes from
+  EBI, and a re-run against a different reference could not have reused the
+  old file even in principle, since it no longer contained the variants the
+  new reference needs. The stage now keeps one normalised copy per accession
+  under `<data dir>/catalog/`, filtered to the union of the LD references
+  registered when it was built, and each job filters that copy locally into
+  its own job directory. Re-running with any covered reference does not
+  transfer the deposit body; the stored copy is about an order of magnitude
+  smaller than the raw deposit, so this costs far less disk than caching the
+  raw file would. Reuse is keyed on accession, harmonised-file URL, nonzero
+  remote size, available ETag/Last-Modified validators, and the *content* hash
+  of the LD cache. A changed validator catches an in-place same-size
+  re-deposit; when the server supplies neither validator, the compatibility
+  fallback is URL plus size and cannot distinguish that unusual case. A
+  registry name re-pointed at different bytes also rebuilds rather than
+  silently serving variants the copy never covered; two jobs racing on one
+  accession share a single fetch through a heartbeated lock; and copies are
+  evicted least-recently-used past `BIPRED_WEB_STORE_GB` (default 20), never
+  within an hour of use. The results page reports `(stored copy)` or
+  `(download)` per trait, and the job page distinguishes downloading,
+  filtering a stored copy, and waiting on another job's fetch. Download
+  provenance (`seen`, `sha256`, schema, effect route) continues to describe
+  the remote file, not the local copy. When both
+  traits are Catalog inputs their independent transfers/reuse checks now run
+  concurrently, with a hard limit of two workers.
+
+- The `/catalog` summary strip counted only the canonical LDpred3 evidence
+  while the tables below merged in this server's own attempts, so the headline
+  numbers disagreed with the lists they summarized whenever the server had
+  observed anything new. The strip now counts the merged tables, carries a
+  separate "observed by this server" figure, and says which figures describe
+  the canonical runs only.
+
+- The web service's GWAS Catalog track record now also learns from jobs that
+  fail *after* a successful download. `prepare_bivariate_sumstats` names the
+  trait whose variants were all removed by sumstats QC or reference
+  harmonization — the joint "fewer than two cache variants" error blamed
+  nobody — and the runner tags that per-trait failure with the catalog
+  accession, so the supervisor's registry sweep, and with it the `/catalog`
+  page, records the deposit as unusable instead of silently dropping the
+  outcome.
+
+- Web uploads remain in a non-runnable `staging` state until both files and
+  metadata are durable; an atomic `launching` claim prevents duplicate starts,
+  and startup recovery fails interrupted work instead of leaving it stuck.
+
+- A usable GWAS Catalog per-variant N column is preserved instead of being
+  silently overwritten by an advisory metadata scalar. Uploaded files may also
+  use a detected N column, and result provenance reports its basis and range.
+
+- Changing a GCST accession no longer leaves the prior accession's autofilled
+  label/N behind or permits a stale lookup response to win. Job polling retries
+  after transient HTTP/network failures instead of freezing.
+
+- Normal uploads cannot use the synthetic demo LD reference; sampler controls
+  reject non-finite and unbounded values. Web dependencies are installed in CI,
+  so the fast web units and full end-to-end jobs no longer skip silently.
+
+- An integer `columns1`/`columns2` `n_eff` entry is a zero-based column
+  index, not a constant sample size silently forced on every variant;
+  non-string non-integer values are rejected with a clear error. String
+  names and digit strings are unchanged.
+
+- `regional_rg` replays the fitter's dense float32 normalisation on non-int8,
+  non-float32 dense blocks (previously only low-rank float factors were
+  normalised), so a float64 block passed to both calls evaluates the same
+  values.
+
+## [0.3.9.dev0] - 2026-08-24
+
+### Added
 
 - **External-tool validation benchmarks.** `benchmarks/external_overlap.py`
   runs bipred, the original MiXeR (gsa-mixer v2.2.1, built from source under
@@ -416,6 +575,7 @@ screen; every later floor still guarantees those.)
   source build on macOS arm64, with hello-world validation). The LDSC 1000G EUR
   weights and `w_hm3.snplist` are pinned in `real_data_inputs.sha256` from a
   Zenodo mirror, because the Broad host became requester-pays.
+
 - **Web service (`webapp/`).** A FastAPI front end for two-trait estimates:
   upload two GWAS files (or press the synthetic-demo button), and a queued
   subprocess fit returns the joint genetic correlation, heritabilities,
@@ -465,100 +625,18 @@ screen; every later floor still guarantees those.)
   and never reinterpret those two masks as one joint pre-screen drop.
   See `webapp/README.md`.
   Installed via the new `web` optional extra.
+
 - Registered the workspace marker taxonomy (`slow` / `integration` /
   `external` / `numba`) in `pyproject.toml`, mirroring ldpred3/gwfm.
   `tests/test_webapp.py` carries the first `slow` tag: it runs real
   subprocess fits (~15 s on this host).
+
 - Plumbing tests for the external benchmarks
   (`tests/test_external_benchmark.py`): output parsers against committed
   fixtures, probe fail-closed behaviour, and truth-simulation invariants.
 
 ### Fixed
 
-- Web runner and supervisor housekeeping: `munge.json`/`result.json` are now
-  published by unique-temp rename so a killed runner can no longer leave a
-  truncated file that breaks the job page; the runner refuses to start when
-  the supervisor has already failed its job and no longer resets the
-  launch-claim `started` timestamp the watchdog's deadline is anchored to;
-  a fit quarantined by a critical warning is no longer recorded as a working
-  GWAS Catalog accession; concurrent Catalog metadata refreshes no longer
-  share one fixed `.part` temp path; `/jobs` now applies the same-origin
-  browser guard `/demo` already had; a failed demo staging copy releases the
-  reserved queue slot; and a `BIPRED_WEB_CACHES` entry whose file vanishes
-  after startup is skipped with a warning instead of failing the index page
-  and unrelated running jobs.
-- Concurrent Catalog progress and completion now serialize every `job.json`
-  mutation through one lock. The GET body must match the ETag and/or
-  Last-Modified generation checked at submission (with one clean retry), and
-  stale provisional `.build` files are purged and counted against the store
-  budget. One verified LD-generation hash now binds reference IDs, loaded
-  matrices, LD-score lookup, prepared-trait keys, and result provenance; a
-  reference replaced during a job is rejected rather than mixed across
-  generations. Interrupted uploads remove their private staging data
-  immediately, while stale staging directories are TTL-cleaned as a backstop.
-- Historical web jobs keep the stage names and LDSC description they actually
-  ran. Schema-1 results still say that scores and M came from the fitted panel;
-  schema 2 retains its optional pair-level screen instead of being relabelled
-  as the mandatory trait-local schema-3 workflow.
-- Quarantined fits containing non-finite joint, MiXeR-style, or divergence
-  diagnostics no longer crash the results route after a long fit. JSON `null`
-  values render as an em dash while the warning and downloadable `result.json`
-  remain available.
-- **The web service re-downloaded GWAS Catalog deposits it already had.**
-  The `download` stage filtered each harmonised file to the job's LD
-  reference *while* streaming it, so the file it left in the job directory
-  was usable only by jobs with that same reference — and nothing looked for
-  it anyway. Re-running an analysis re-fetched hundreds of megabytes from
-  EBI, and a re-run against a different reference could not have reused the
-  old file even in principle, since it no longer contained the variants the
-  new reference needs. The stage now keeps one normalised copy per accession
-  under `<data dir>/catalog/`, filtered to the union of the LD references
-  registered when it was built, and each job filters that copy locally into
-  its own job directory. Re-running with any covered reference does not
-  transfer the deposit body; the stored copy is about an order of magnitude
-  smaller than the raw deposit, so this costs far less disk than caching the
-  raw file would. Reuse is keyed on accession, harmonised-file URL, nonzero
-  remote size, available ETag/Last-Modified validators, and the *content* hash
-  of the LD cache. A changed validator catches an in-place same-size
-  re-deposit; when the server supplies neither validator, the compatibility
-  fallback is URL plus size and cannot distinguish that unusual case. A
-  registry name re-pointed at different bytes also rebuilds rather than
-  silently serving variants the copy never covered; two jobs racing on one
-  accession share a single fetch through a heartbeated lock; and copies are
-  evicted least-recently-used past `BIPRED_WEB_STORE_GB` (default 20), never
-  within an hour of use. The results page reports `(stored copy)` or
-  `(download)` per trait, and the job page distinguishes downloading,
-  filtering a stored copy, and waiting on another job's fetch. Download
-  provenance (`seen`, `sha256`, schema, effect route) continues to describe
-  the remote file, not the local copy. When both
-  traits are Catalog inputs their independent transfers/reuse checks now run
-  concurrently, with a hard limit of two workers.
-- The `/catalog` summary strip counted only the canonical LDpred3 evidence
-  while the tables below merged in this server's own attempts, so the headline
-  numbers disagreed with the lists they summarized whenever the server had
-  observed anything new. The strip now counts the merged tables, carries a
-  separate "observed by this server" figure, and says which figures describe
-  the canonical runs only.
-- The web service's GWAS Catalog track record now also learns from jobs that
-  fail *after* a successful download. `prepare_bivariate_sumstats` names the
-  trait whose variants were all removed by sumstats QC or reference
-  harmonization — the joint "fewer than two cache variants" error blamed
-  nobody — and the runner tags that per-trait failure with the catalog
-  accession, so the supervisor's registry sweep, and with it the `/catalog`
-  page, records the deposit as unusable instead of silently dropping the
-  outcome.
-- Web uploads remain in a non-runnable `staging` state until both files and
-  metadata are durable; an atomic `launching` claim prevents duplicate starts,
-  and startup recovery fails interrupted work instead of leaving it stuck.
-- A usable GWAS Catalog per-variant N column is preserved instead of being
-  silently overwritten by an advisory metadata scalar. Uploaded files may also
-  use a detected N column, and result provenance reports its basis and range.
-- Changing a GCST accession no longer leaves the prior accession's autofilled
-  label/N behind or permits a stale lookup response to win. Job polling retries
-  after transient HTTP/network failures instead of freezing.
-- Normal uploads cannot use the synthetic demo LD reference; sampler controls
-  reject non-finite and unbounded values. Web dependencies are installed in CI,
-  so the fast web units and full end-to-end jobs no longer skip silently.
 - CI no longer asserts an exact LDpred3 version. The workflow installed ldpred3
   from `master` and then asserted `__version__` equalled the declared *floor*,
   which held only while master sat on the floor: every `test` leg failed once
@@ -566,25 +644,40 @@ screen; every later floor still guarantees those.)
   now `LDPRED3_FLOOR`, and the gate checks the installed version against the
   range read back from bipred's own installed metadata. The archived real-data
   pin (0.4.5) is untouched.
+
 - `BivariateResult.write_weights` records `SD_SOURCE=hwe` when it fills
   `SD_REF` with the Hardy-Weinberg approximation `sqrt(2f(1-f))`. The
   `RuntimeWarning` it already raised reaches the caller who chose the
   approximation, but could not survive serialisation, so
   `score_from_weights(scaling="frozen")` consumed an approximated and an
   observed SD identically.
+
 - The LDpred3 floor advances `0.5.3.dev0` -> `0.5.5.dev0`, because
   `write_weights(sd_source=...)` above does not exist before it: the older floor
   would have installed cleanly and then raised `TypeError` on the first weight
   write. CI, README and `pyproject.toml` share the `>=0.5.5.dev0,<0.6` range
   (`ldpred3.shim`). The archived real-data pin stays at 0.4.5.
+
 - `prepare_bivariate_sumstats` (and the CLI) reject a trait given both a
   scalar `n_eff` and case/control counts, matching the scalar-vs-column rule.
+
 - Multi-chain fits call `warn_no_numba()` so the recommended path is not a
   silent pure-Python fallback.
+
 - LD-consistency screening slides the last window so remainder variants are
   tested instead of treated as consistent.
+
 - Post-burn-in divergence also warns when genetic variance collapses, not
   only when it rises.
+
+- Missing or QC-dropped variants are intersected before LD-consistency
+  screening and are never imputed as z=0 observations.
+
+- `implied_sample_size` no longer carries a dead all-true filter mask; the
+  reported-N shape checks and medians are unchanged.
+
+- `bipred --help` documents that `--screen-seed` defaults to `--seed`, so
+  changing the fit seed also changes the screen's random LD splits.
 
 ### Changed
 
@@ -601,6 +694,7 @@ screen; every later floor still guarantees those.)
   `_common`, shrinking the private borrowing list to what LDpred3 has not
   published. The LDpred3 floor advances to `>=0.5.3.dev0,<0.6` for
   `ldpred3.shim`.
+
 - **`--chi2-cap` now defaults to `regression` in `benchmarks/real_ldl_cad.py`
   and `benchmarks/qc_factorial.py`** (was `both`). The chi-square cap of 80 is
   a leverage filter for LD Score regression, whose weights come from the fitted
@@ -629,36 +723,23 @@ screen; every later floor still guarantees those.)
   condition failed (unpinned BLAS threads, missing `threadpoolctl`, or a
   non-reentrant BLAS) and how to enable the pool. The gate opening, and
   `ncores=1`, stay quiet.
+
 - `ldpred3_auto_bivariate_blocks` warns once per process when the pure-Python
   no-Numba fallback is active (`warn_no_numba`, re-exported through the
   `ldpred3._numba` seam) — the fallback is numerically identical but orders of
   magnitude slower, and was previously indistinguishable from the compiled
   path at runtime.
+
 - The development line now requires LDpred3 0.5 and delegates strict principal
   LD subsetting to its public interoperability API.
+
 - CI installs the current sibling through the declared resolver contract; the
   now-redundant second `ldpred3-head` suite has been removed.
+
 - The command line exposes column mappings, summary-statistic QC, allele-
   frequency concordance, LD-screen controls, sampling-error correlation and
   deterministic multi-chain inference. Target-scaled weight files are now the
   safe CLI default; HWE-derived frozen scaling requires an explicit flag.
-
-### Fixed
-
-- Missing or QC-dropped variants are intersected before LD-consistency
-  screening and are never imputed as z=0 observations.
-- `implied_sample_size` no longer carries a dead all-true filter mask; the
-  reported-N shape checks and medians are unchanged.
-- `bipred --help` documents that `--screen-seed` defaults to `--seed`, so
-  changing the fit seed also changes the screen's random LD splits.
-- An integer `columns1`/`columns2` `n_eff` entry is a zero-based column
-  index, not a constant sample size silently forced on every variant;
-  non-string non-integer values are rejected with a clear error. String
-  names and digit strings are unchanged.
-- `regional_rg` replays the fitter's dense float32 normalisation on non-int8,
-  non-float32 dense blocks (previously only low-rank float factors were
-  normalised), so a float64 block passed to both calls evaluates the same
-  values.
 
 ## [0.3.8] - 2026-08-13
 - Principal subsetting validates masks and indices, retains singleton blocks,

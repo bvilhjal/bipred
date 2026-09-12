@@ -1,0 +1,196 @@
+cff-version: 1.2.0
+message: "If you use bipred, please cite the software and the method(s) used. bipred has no paper of its own yet; the references below cover the implemented methods and their direct interpretation."
+title: "bipred: two-trait genetic correlation, heritability and polygenic-overlap inference from GWAS summary statistics"
+abstract: >-
+  A Python implementation of bivariate LDpred2-style inference: bipred jointly
+  fits two GWAS traits against one ancestry-matched LD reference and returns
+  SNP heritabilities, genetic correlation (r_g), posterior-mean effects for
+  prediction, and a MiXeR-style polygenic-overlap summary, alongside a
+  cross-trait LD Score regression moment estimator. Inference uses a blocked
+  Gaussian-mixture Gibbs sampler over dense or low-rank LD representations
+  provided by ldpred3.
+type: software
+authors:
+  - family-names: "Vilhjálmsson"
+    given-names: "Bjarni Jóhann"
+repository-code: "https://github.com/bvilhjal/bipred"
+license: MIT
+version: 0.3.16.dev0
+keywords:
+  - genetic correlation
+  - polygenic overlap
+  - SNP heritability
+  - LDpred
+  - LD Score regression
+  - MiXeR
+  - GWAS summary statistics
+references:
+  # Implemented methods and direct interpretation
+  - type: article
+    title: "Modeling Linkage Disequilibrium Increases Accuracy of Polygenic Risk Scores"
+    authors:
+      - family-names: "Vilhjálmsson"
+        given-names: "Bjarni J."
+      - family-names: Yang
+        given-names: Jian
+      - family-names: Finucane
+        given-names: "Hilary K."
+      - family-names: Gusev
+        given-names: Alexander
+      - family-names: "Lindström"
+        given-names: "Sara"
+      - family-names: Ripke
+        given-names: Stephan
+      - family-names: Genovese
+        given-names: Giulio
+      - family-names: Loh
+        given-names: Po-Ru
+      - family-names: Bhatia
+        given-names: Gaurav
+      - family-names: Do
+        given-names: Ron
+      - family-names: Hayeck
+        given-names: Tristan
+      - family-names: Won
+        given-names: Hong-Hee
+      - name: "Schizophrenia Working Group of the Psychiatric Genomics Consortium"
+      - name: "Discovery, Biology, and Risk of Inherited Variants in Breast Cancer (DRIVE) Study"
+      - family-names: Kathiresan
+        given-names: Sekar
+      - family-names: Pato
+        given-names: Michele
+      - family-names: Pato
+        given-names: Carlos
+      - family-names: Tamimi
+        given-names: Rulla
+      - family-names: Stahl
+        given-names: Eli
+      - family-names: Zaitlen
+        given-names: Noah
+      - family-names: Pasaniuc
+        given-names: Bogdan
+      - family-names: Belbin
+        given-names: Gillian
+      - family-names: Kenny
+        given-names: "Eimear E."
+      - family-names: Schierup
+        given-names: "Mikkel H."
+      - family-names: "De Jager"
+        given-names: Philip
+      - family-names: Patsopoulos
+        given-names: "Nikolaos A."
+      - family-names: McCarroll
+        given-names: Steve
+      - family-names: Daly
+        given-names: Mark
+      - family-names: Purcell
+        given-names: Shaun
+      - family-names: Chasman
+        given-names: Daniel
+      - family-names: Neale
+        given-names: Benjamin
+      - family-names: Goddard
+        given-names: Michael
+      - family-names: Visscher
+        given-names: "Peter M."
+      - family-names: Kraft
+        given-names: Peter
+      - family-names: Patterson
+        given-names: Nick
+      - family-names: Price
+        given-names: "Alkes L."
+    journal: "The American Journal of Human Genetics"
+    volume: 97
+    issue: 4
+    start: 576
+    end: 592
+    year: 2015
+    doi: 10.1016/j.ajhg.2015.09.001
+  - type: article
+    title: "LDpred2: better, faster, stronger"
+    authors:
+      - family-names: "Privé"
+        given-names: Florian
+      - family-names: Arbel
+        given-names: "Julyan"
+      - family-names: "Vilhjálmsson"
+        given-names: "Bjarni J."
+    journal: "Bioinformatics"
+    volume: 36
+    issue: 22-23
+    start: 5424
+    end: 5431
+    year: 2021
+    doi: 10.1093/bioinformatics/btaa1029
+  - type: article
+    title: "An atlas of genetic correlations across human diseases and traits"
+    authors:
+      - family-names: Bulik-Sullivan
+        given-names: Brendan
+      - family-names: Finucane
+        given-names: "Hilary K."
+      - family-names: Anttila
+        given-names: Verneri
+      - family-names: Gusev
+        given-names: Alexander
+      - family-names: Day
+        given-names: "Felix R."
+      - family-names: Loh
+        given-names: Po-Ru
+      - name: "ReproGen Consortium"
+      - name: "Psychiatric Genomics Consortium"
+      - name: "Genetic Consortium for Anorexia Nervosa of the Wellcome Trust Case Control Consortium 3"
+      - family-names: Duncan
+        given-names: Laramie
+      - family-names: Perry
+        given-names: "John R. B."
+      - family-names: Patterson
+        given-names: Nick
+      - family-names: Robinson
+        given-names: "Elise B."
+      - family-names: Daly
+        given-names: "Mark J."
+      - family-names: Price
+        given-names: "Alkes L."
+      - family-names: Neale
+        given-names: "Benjamin M."
+    journal: "Nature Genetics"
+    volume: 47
+    issue: 11
+    start: 1236
+    end: 1241
+    year: 2015
+    doi: 10.1038/ng.3406
+  - type: article
+    title: "Bivariate causal mixture model quantifies polygenic overlap between complex traits beyond genetic correlation"
+    authors:
+      - family-names: Frei
+        given-names: Oleksandr
+      - family-names: Holland
+        given-names: Dominic
+      - family-names: Smeland
+        given-names: "Olav B."
+      - family-names: Shadrin
+        given-names: "Alexey A."
+      - family-names: Fan
+        given-names: "Chun Chieh"
+      - family-names: Maeland
+        given-names: Steffen
+      - family-names: O'Connell
+        given-names: "Kevin S."
+      - family-names: Wang
+        given-names: Yunpeng
+      - family-names: "Djurovic"
+        given-names: Srdjan
+      - family-names: Thompson
+        given-names: "Wesley K."
+      - family-names: Andreassen
+        given-names: "Ole A."
+      - family-names: Dale
+        given-names: "Anders M."
+    journal: "Nature Communications"
+    volume: 10
+    issue: 1
+    start: 2417
+    year: 2019
+    doi: 10.1038/s41467-019-10310-0
