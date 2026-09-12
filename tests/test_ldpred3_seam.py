@@ -34,7 +34,7 @@ def test_variant_indices_layout_is_identifier_keyed():
     """``prepare.py`` reads ``_variant_indices(variants)[1]`` as the by-id map.
 
     A private slot re-order in ldpred3 lands inside bipred's declared
-    ``>=0.6.6,<0.7`` range and owes no deprecation, yet would turn every
+    ``>=0.7.12,<0.8`` range and owes no deprecation, yet would turn every
     identifier lookup into ``None`` (or a tuple-keyed position index), so a
     build mismatch is misdiagnosed and re-anchoring drops every row -- with no
     ``AttributeError``, so the import gate above stays green. Pin the layout
