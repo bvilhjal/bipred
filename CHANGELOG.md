@@ -5,6 +5,10 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 ## [Unreleased]
 
+### Fixed
+
+- Shipped documentation no longer links relatively into `benchmarks/`, which the sdist excludes; the links are absolute GitHub URLs, so the `wheel / sdist smoke` link check passes again.
+
 ## [0.3.16.dev0] - 2026-09-08
 
 - Documentation: new `docs/api.md` (public functions, full `BivariateResult`

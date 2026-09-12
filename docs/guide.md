@@ -127,7 +127,7 @@ are retained only for compatibility. D8 uses one quarter of D32's storage. Low-r
 useful when its rank is much smaller than block size; otherwise D8 is usually
 smaller. Treat representation timings as machine- and architecture-specific;
 the scripts and their limitations are in the
-[benchmark record](../benchmarks/RESULTS.md).
+[benchmark record](https://github.com/bvilhjal/bipred/blob/main/benchmarks/RESULTS.md).
 
 ## Quality control before fitting real data
 

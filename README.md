@@ -123,9 +123,9 @@ fitting real data* in [`docs/guide.md`](docs/guide.md).
   sample overlap, and polygenic overlap.
 - [`docs/diagnostics.md`](docs/diagnostics.md): fit-validity warnings,
   multi-chain diagnostics, and adaptive stopping.
-- [Benchmark guide](benchmarks/README.md):
+- [Benchmark guide](https://github.com/bvilhjal/bipred/blob/main/benchmarks/README.md):
   scripts and reproducibility.
-- [Benchmark results](benchmarks/RESULTS.md):
+- [Benchmark results](https://github.com/bvilhjal/bipred/blob/main/benchmarks/RESULTS.md):
   results, limitations, and per-section provenance.
 
 ## Citing and prior work
@@ -144,7 +144,7 @@ bipred has no paper of its own yet; cite the repository and the version you ran
 The estimators here are reimplementations, not wrappers. The repository's
 synthetic benchmarks characterize bipred's behavior; equivalence to the
 original cross-trait LDSC and MiXeR implementations has not been validated. See
-[benchmark results](benchmarks/RESULTS.md)
+[benchmark results](https://github.com/bvilhjal/bipred/blob/main/benchmarks/RESULTS.md)
 for what has and has not been tested.
 
 ## License

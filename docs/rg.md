@@ -65,7 +65,7 @@ local LD dependence.
 Use the joint fit by default and inspect LDSC as a cheap sensitivity check. The
 committed benchmark record states its simulation assumptions, paired
 realized-truth errors, failures, and runtime provenance; see the
-[benchmark results](../benchmarks/RESULTS.md).
+[benchmark results](https://github.com/bvilhjal/bipred/blob/main/benchmarks/RESULTS.md).
 
 ## Asymmetric-power sensitivity
 
@@ -236,7 +236,7 @@ non-positive-definite; inspect the raw variances and use `clip=False` to expose
 out-of-range diagnostic values for the blocks passed to `regional_rg`. This does
 not diagnose a different representation used internally by the fit. The research
 evidence and its limitations are in the repository's
-[`RESULTS_REGIONAL.md`](../research/cross_corr_estimation/RESULTS_REGIONAL.md).
+[`RESULTS_REGIONAL.md`](https://github.com/bvilhjal/bipred/blob/main/research/cross_corr_estimation/RESULTS_REGIONAL.md).
 
 ## Polygenic overlap
 
