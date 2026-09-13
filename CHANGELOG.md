@@ -17,6 +17,13 @@ User-visible changes to **bipred** are recorded here. The project is currently
   `columns['n_eff']` remains an error. The stale test asserting the old
   scalar-plus-column error is updated, and a test now pins the anchored
   rescale on the prepared trait.
+- The prepared traits' `qc` logs now also carry ldpred3's composed
+  `n_eff` report — the file's N column with its pre-transform usable/total
+  counts and median, the supplied scalar, the `n_eff_rescale` transform
+  record, and the harmonised panel's fitted N distribution. It is
+  inherited unchanged from `ldpred3.prepare` through `_prepare_trait`, so
+  `PreparedBivariate.log["trait1"/"trait2"]["qc"]["n_eff"]` reports the
+  whole sample-size story with no bipred code change.
 
 ### Fixed
 
