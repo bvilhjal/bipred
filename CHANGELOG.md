@@ -5,6 +5,19 @@ User-visible changes to **bipred** are recorded here. The project is currently
 
 ## [Unreleased]
 
+### Changed
+
+- `prepare_bivariate_sumstats`'s docstring now states the scalar-`n_eff`
+  semantics the shipped ldpred3 seam already implements: a scalar anchors
+  the file's per-variant N column (median rescaled downward-only onto the
+  scalar, transform recorded under the trait's `qc` log as
+  `n_eff_rescale`, upward rescale refused with a warning) rather than
+  flattening it, applies as a constant when no usable column exists, and
+  may be combined with `columns['n_eff']`; only a *string* `n_eff` plus
+  `columns['n_eff']` remains an error. The stale test asserting the old
+  scalar-plus-column error is updated, and a test now pins the anchored
+  rescale on the prepared trait.
+
 ### Fixed
 
 - Shipped documentation no longer links relatively into `benchmarks/`, which the sdist excludes; the links are absolute GitHub URLs, so the `wheel / sdist smoke` link check passes again.

@@ -475,7 +475,12 @@ def prepare_bivariate_sumstats(
     are the cache restricted to variants present in both files, re-tiled to
     ``0..m'-1``. Case/control counts become ``n_eff`` via
     :func:`ldpred3.n_eff_case_control`. A trait may take a scalar ``n_eff`` or
-    case/control counts, not both.
+    case/control counts, not both. A scalar anchors the file's per-variant N
+    column rather than replacing it: the column keeps its relative pattern
+    while its median is rescaled *downward only* onto the scalar (the
+    transform is recorded under the trait's ``qc`` log as
+    ``n_eff_rescale``, and an upward rescale is refused with a warning);
+    with no usable per-variant N the scalar applies as a constant.
 
     ``columns1`` / ``columns2`` map canonical LDpred3 fields to file columns.
     ``qc_params`` is passed to :func:`ldpred3.qc.qc_sumstats` for both traits.

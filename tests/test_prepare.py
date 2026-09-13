@@ -232,10 +232,40 @@ def test_prepare_accepts_distinct_column_mappings_without_mutating_them(tmp_path
         cache, path, p2, n_eff2=10_000, columns1=columns, qc=False)
     assert columns == {"n_eff": "SAMPLES"}
     assert np.all(prep.n_eff1 == 10_000)
-    with pytest.raises(ValueError, match="either a scalar n_eff or an n_eff column"):
+    # A scalar n_eff no longer conflicts with columns['n_eff']: the column
+    # supplies the per-variant pattern, the scalar anchors its median.
+    anchored = prepare_bivariate_sumstats(
+        cache, path, p2, n_eff1=10_000, n_eff2=10_000,
+        columns1=columns, qc=False)
+    np.testing.assert_array_equal(anchored.n_eff1, prep.n_eff1)
+    # Two *column* bindings still conflict: a string n_eff selects one
+    # column and columns['n_eff'] names another.
+    with pytest.raises(ValueError, match="names a column"):
         prepare_bivariate_sumstats(
-            cache, path, p2, n_eff1=10_000, n_eff2=10_000,
+            cache, path, p2, n_eff1="SAMPLES", n_eff2=10_000,
             columns1=columns, qc=False)
+
+
+def test_prepare_scalar_n_eff_anchors_a_per_variant_column(tmp_path):
+    """Scalar + N column: the median anchors at the scalar downward-only."""
+    cache, _, p2, *_ = _cache_and_sumstats(tmp_path)
+    m = 20
+    n_col = 5_000 + 500 * np.arange(m)          # distinct per variant
+    path = tmp_path / "t1-neff-anchor.tsv"
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("SNP\tCHR\tBP\tA1\tA2\tBETA\tSE\tSAMPLES\n")
+        for i in range(m):
+            fh.write(f"rs{i}\t1\t{i + 1}\tA\tG\t0.01\t0.001\t{n_col[i]}\n")
+    median = float(np.median(n_col))            # 9_750
+    with pytest.warns(UserWarning, match="rescaled by factor"):
+        prep = prepare_bivariate_sumstats(
+            cache, str(path), p2, n_eff1=5_000, n_eff2=10_000,
+            columns1={"n_eff": "SAMPLES"}, qc=False)
+    np.testing.assert_allclose(prep.n_eff1, n_col * (5_000 / median))
+    record = prep.log["trait1"]["qc"]["n_eff_rescale"]
+    assert record["applied"]
+    assert record["factor"] == pytest.approx(5_000 / median)
+    assert record["target_effective_n"] == 5_000
 
 
 def test_prepare_reads_an_n_eff_column_by_index_name_and_digit_string(tmp_path):
