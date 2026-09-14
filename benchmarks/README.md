@@ -127,10 +127,13 @@ Broad host is requester-pays since 2026); `w_hm3.snplist` ships inside the same
 tarball. Both files are pinned in
 [`real_data_inputs.sha256`](real_data_inputs.sha256).
 
-`rg_env_overlap.py` reuses the univariate `infer_vs_ldsc_sbayes.py` benchmark
-(which stays a univariate benchmark and imports only from `ldpred3`) for its
-real-genotype coalescent genome; a copy is included here so `rg_env_overlap.py`
-can `import infer_vs_ldsc_sbayes` at runtime.
+`rg_env_overlap.py` builds its real-genotype coalescent genome with
+`_block_genome.py`: `NB` independent msprime segments, each trimmed to
+`BLOCK_SIZE` common SNPs so the block-diagonal LD is exact, plus the
+standardized GWAS genotypes and the reference LD blocks and scores. The
+univariate `infer_vs_ldsc_sbayes.py` benchmark in the ldpred3 repository builds
+its genome the same way; only that construction is shared here, so the two
+repositories do not carry copies of one script that drift apart.
 
 ## Committed artifact contract
 
@@ -286,5 +289,5 @@ Both real-data CSVs were regenerated with the always-run partition screen.
 Their `divergence_warned` field counts only warnings whose text contains
 `diverged`. The factorial's saved `cross_corr` is the arm-specific free LDSC
 intercept; all saved values are inside `(-1, 1)`, and the script rejects rather
-than clips an invalid one. HAPNEST and standalone
-`infer_vs_ldsc_sbayes.py` require the external inputs named in `RESULTS.md`.
+than clips an invalid one. HAPNEST requires the external inputs named in
+`RESULTS.md`.

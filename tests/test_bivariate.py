@@ -912,12 +912,11 @@ def _assert_bivariate_result_array_equal(observed, expected):
     assert observed.noise_scale == expected.noise_scale
 
 
-@pytest.mark.skipif(not bivariate.HAVE_NUMBA, reason="Numba is required")
-def test_ncores_two_matches_one_for_readonly_variable_size_d8_blocks():
-    sizes = (7, 10, 6)
+def _readonly_d8_case():
+    """Variable-size int8 dense blocks, frozen read-only, scalar N."""
     blocks = []
     start = 0
-    for k, rho in zip(sizes, (0.25, 0.45, 0.6)):
+    for k, rho in zip((7, 10, 6), (0.25, 0.45, 0.6)):
         corr = rho ** np.abs(np.subtract.outer(np.arange(k), np.arange(k)))
         payload = np.rint(corr * 127.0).astype(np.int8)
         payload.setflags(write=False)
@@ -926,15 +925,74 @@ def test_ncores_two_matches_one_for_readonly_variable_size_d8_blocks():
     rng = np.random.default_rng(21)
     bh1 = rng.standard_normal(start) * 0.02
     bh2 = 0.4 * bh1 + rng.standard_normal(start) * 0.015
-    kwargs = dict(burn_in=5, num_iter=8, seed=22)
+    return (blocks, bh1, bh2, 20_000, 18_000,
+            dict(burn_in=5, num_iter=8, seed=22),
+            [block for block, _idx in blocks])
+
+
+def _float32_per_variant_n_case():
+    """float32 dense blocks under a per-variant N vector."""
+    blocks = []
+    start = 0
+    for k, rho in zip((8, 11), (0.2, 0.5)):
+        corr = rho ** np.abs(np.subtract.outer(np.arange(k), np.arange(k)))
+        blocks.append((corr.astype(np.float32), np.arange(start, start + k)))
+        start += k
+    rng = np.random.default_rng(211)
+    bh1 = rng.standard_normal(start) * 0.02
+    bh2 = 0.3 * bh1 + rng.standard_normal(start) * 0.016
+    n1 = np.linspace(12_000.0, 20_000.0, start)
+    n2 = np.linspace(10_000.0, 18_000.0, start)[::-1].copy()
+    return (blocks, bh1, bh2, n1, n2,
+            dict(burn_in=4, num_iter=7, seed=212, ld_int8=False), [])
+
+
+def _variable_rank_lowrank_case(quantize):
+    """Low-rank blocks of differing rank, factors frozen, noise inflation on."""
+    from ldpred3 import lowrank_ld
+
+    blocks = []
+    start = 0
+    for k, rho, rank in ((8, 0.35, 2), (11, 0.55, 4), (7, 0.25, 3)):
+        corr = rho ** np.abs(np.subtract.outer(np.arange(k), np.arange(k)))
+        compact = lowrank_ld(corr, variance=0.7, max_rank=rank,
+                             quantize=quantize)
+        compact.U.setflags(write=False)
+        blocks.append((compact, np.arange(start, start + k)))
+        start += k
+    rng = np.random.default_rng(23)
+    bh1 = rng.standard_normal(start) * 0.018
+    bh2 = 0.5 * bh1 + rng.standard_normal(start) * 0.012
+    return (blocks, bh1, bh2, 22_000, 17_000,
+            dict(burn_in=5, num_iter=8, seed=24, noise_inflation=True),
+            [block.U for block, _idx in blocks])
+
+
+@pytest.mark.skipif(not bivariate.HAVE_NUMBA, reason="Numba is required")
+@pytest.mark.parametrize("build", [
+    _readonly_d8_case,
+    _float32_per_variant_n_case,
+    lambda: _variable_rank_lowrank_case(False),
+    lambda: _variable_rank_lowrank_case(True),
+], ids=["d8", "float32-per-variant-n", "lr32", "lr8"])
+def test_ncores_two_matches_one(build):
+    """Block threading changes scheduling, never the chain.
+
+    One case per LD representation the parallel driver buckets separately, so
+    a representation that stopped being bit-reproducible under ``ncores=2``
+    fails on its own id. Each case also names the arrays the fit must not
+    write through: a kernel that quietly unfroze a caller's payload would
+    otherwise pass on equality alone.
+    """
+    blocks, bh1, bh2, n1, n2, kwargs, frozen = build()
 
     serial = ldpred3_auto_bivariate_blocks(
-        blocks, bh1, bh2, 20_000, 18_000, ncores=1, **kwargs)
+        blocks, bh1, bh2, n1, n2, ncores=1, **kwargs)
     parallel = ldpred3_auto_bivariate_blocks(
-        blocks, bh1, bh2, 20_000, 18_000, ncores=2, **kwargs)
+        blocks, bh1, bh2, n1, n2, ncores=2, **kwargs)
 
     _assert_bivariate_result_array_equal(parallel, serial)
-    assert all(not block.flags.writeable for block, _idx in blocks)
+    assert all(not array.flags.writeable for array in frozen)
 
 
 @pytest.mark.skipif(not bivariate.HAVE_NUMBA, reason="Numba is required")
@@ -1028,60 +1086,6 @@ def test_ncores_restores_numba_thread_mask_after_exception(monkeypatch):
         assert get_num_threads() == 1
     finally:
         set_num_threads(original)
-
-
-@pytest.mark.skipif(not bivariate.HAVE_NUMBA, reason="Numba is required")
-def test_ncores_two_matches_one_for_float32_blocks_with_per_variant_n():
-    sizes = (8, 11)
-    blocks = []
-    start = 0
-    for k, rho in zip(sizes, (0.2, 0.5)):
-        corr = rho ** np.abs(np.subtract.outer(np.arange(k), np.arange(k)))
-        blocks.append((corr.astype(np.float32), np.arange(start, start + k)))
-        start += k
-    rng = np.random.default_rng(211)
-    bh1 = rng.standard_normal(start) * 0.02
-    bh2 = 0.3 * bh1 + rng.standard_normal(start) * 0.016
-    n1 = np.linspace(12_000.0, 20_000.0, start)
-    n2 = np.linspace(10_000.0, 18_000.0, start)[::-1].copy()
-    kwargs = dict(burn_in=4, num_iter=7, seed=212, ld_int8=False)
-
-    serial = ldpred3_auto_bivariate_blocks(
-        blocks, bh1, bh2, n1, n2, ncores=1, **kwargs)
-    parallel = ldpred3_auto_bivariate_blocks(
-        blocks, bh1, bh2, n1, n2, ncores=2, **kwargs)
-
-    _assert_bivariate_result_array_equal(parallel, serial)
-
-
-@pytest.mark.skipif(not bivariate.HAVE_NUMBA, reason="Numba is required")
-@pytest.mark.parametrize("quantize", [False, True], ids=["lr32", "lr8"])
-def test_ncores_two_matches_one_for_variable_rank_lowrank_blocks(quantize):
-    from ldpred3 import lowrank_ld
-
-    blocks = []
-    start = 0
-    for k, rho, rank in ((8, 0.35, 2), (11, 0.55, 4), (7, 0.25, 3)):
-        corr = rho ** np.abs(np.subtract.outer(np.arange(k), np.arange(k)))
-        compact = lowrank_ld(corr, variance=0.7, max_rank=rank,
-                             quantize=quantize)
-        compact.U.setflags(write=False)
-        blocks.append((compact, np.arange(start, start + k)))
-        start += k
-    rng = np.random.default_rng(23)
-    bh1 = rng.standard_normal(start) * 0.018
-    bh2 = 0.5 * bh1 + rng.standard_normal(start) * 0.012
-    kwargs = dict(
-        burn_in=5, num_iter=8, seed=24, noise_inflation=True,
-    )
-
-    serial = ldpred3_auto_bivariate_blocks(
-        blocks, bh1, bh2, 22_000, 17_000, ncores=1, **kwargs)
-    parallel = ldpred3_auto_bivariate_blocks(
-        blocks, bh1, bh2, 22_000, 17_000, ncores=2, **kwargs)
-
-    _assert_bivariate_result_array_equal(parallel, serial)
-    assert all(not block.U.flags.writeable for block, _idx in blocks)
 
 
 def test_ncores_mixed_blocks_bucket_into_parallel_calls(monkeypatch):
@@ -1669,33 +1673,29 @@ def test_divergence_warning_catches_effects_beyond_the_fitted_slab():
         "max_effect_slab_sd"] is True
 
 
-def test_divergence_warning_catches_a_trace_that_never_settled():
-    """Post-burn-in drift: the real fit's gvar1 rose by a factor of 1.63."""
-    rising = np.column_stack([np.linspace(0.42, 0.82, 80),
-                              np.full(80, 0.01), np.full(80, 0.0706)])
-    with pytest.warns(RuntimeWarning, match="rose .* had not settled"):
+@pytest.mark.parametrize("start,end,direction,match", [
+    # The rising case is the real fit's failure: gvar1 rose by a factor of 1.63
+    # after burn-in. The falling case is the same check in the other direction.
+    (0.42, 0.82, "rising", "rose .* had not settled"),
+    (0.82, 0.42, "falling", "fell .* had not settled"),
+], ids=["rising", "falling"])
+def test_divergence_warning_catches_a_trace_that_never_settled(
+        start, end, direction, match):
+    """Post-burn-in drift in either direction, reported as a fold > 1."""
+    trace = np.column_stack([np.linspace(start, end, 80),
+                             np.full(80, 0.01), np.full(80, 0.0706)])
+    with pytest.warns(RuntimeWarning, match=match):
         diagnostic = bivariate._warn_if_fit_diverged(**_diverged_args(
-            genetic_samples=rising))
+            genetic_samples=trace))
     trait = diagnostic["traits"]["trait1"]
     assert trait["flags"]["trace_drift"] is True
-    assert trait["trace_direction"] == "rising"
+    assert trait["trace_direction"] == direction
+    first = trait["trace_first_quarter_mean"]
+    last = trait["trace_last_quarter_mean"]
+    # The fold is always reported as the larger over the smaller, so the ratio
+    # flips with the direction rather than dropping below 1.
     assert trait["trace_drift_fold"] == pytest.approx(
-        trait["trace_last_quarter_mean"]
-        / trait["trace_first_quarter_mean"])
-
-
-def test_divergence_warning_catches_a_collapsing_trace():
-    falling = np.column_stack([np.linspace(0.82, 0.42, 80),
-                               np.full(80, 0.01), np.full(80, 0.0706)])
-    with pytest.warns(RuntimeWarning, match="fell .* had not settled"):
-        diagnostic = bivariate._warn_if_fit_diverged(**_diverged_args(
-            genetic_samples=falling))
-    trait = diagnostic["traits"]["trait1"]
-    assert trait["flags"]["trace_drift"] is True
-    assert trait["trace_direction"] == "falling"
-    assert trait["trace_drift_fold"] == pytest.approx(
-        trait["trace_first_quarter_mean"]
-        / trait["trace_last_quarter_mean"])
+        last / first if direction == "rising" else first / last)
 
 
 def test_divergence_warning_is_silent_on_small_panels():

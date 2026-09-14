@@ -18,7 +18,10 @@ PACKAGE_DOCS = (
 REPOSITORY_DOCS = (
     ROOT / "benchmarks" / "README.md",
     ROOT / "benchmarks" / "RESULTS.md",
-    ROOT / "research" / "cross_corr_estimation" / "RESULTS_REGIONAL.md",
+    ROOT / "benchmarks" / "hapnest" / "README.md",
+    ROOT / "studies" / "README.md",
+    *sorted((ROOT / "studies").glob("*/README.md")),
+    *sorted((ROOT / "research").rglob("*.md")),
 )
 PRIMARY_DOCS = tuple(p for p in PACKAGE_DOCS + REPOSITORY_DOCS if p.exists())
 # Archived benchmark runs snapshot the tree as it was; they are records, not

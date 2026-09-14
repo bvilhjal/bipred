@@ -11,19 +11,27 @@ within-shared effect correlation ``rho_beta`` and the overlap decomposition of
 This benchmark stress-tests those readouts against known mixture parameters on
 realistic non-repeating coalescent LD (reusing ``rg_architectures``' cached
 segments and finite reference panels). Genetic-correlation estimates are scored
-against each replicate's realized population-LD correlation. Six sweeps use
+against each replicate's realized population-LD correlation. Eight sweeps use
 fresh-phenotype replicates on fixed genotypes:
 
   * ``overlap``  -- vary the shared-causal fraction 0..1 at fixed per-trait
     polygenicity; the headline MiXeR quantity. Checks frac_shared + rg tracking.
-  * ``rho``      -- vary the within-shared effect correlation; checks rho_beta
-    and that rg = rho_beta * overlap.
+  * ``rho``      -- vary the within-shared effect correlation over a *signed*
+    grid; checks rho_beta and that rg = rho_beta * overlap, and that a negative
+    correlation is returned negative rather than folded.
   * ``polygenicity`` -- vary the per-trait causal fraction with the overlap held
     fixed. Every other sweep here sits at p=0.10, so the ``overlap`` sweep's
     upward bias in ``frac_shared`` could belong to the estimator or to that one
     architecture. It is **not** a constant: the bias is a function of
     polygenicity, small where the causal set is sparse and large where it is
     dense, which is what decides whether a reported overlap can be read at all.
+  * ``asymmetry`` -- vary trait 2's causal fraction against a fixed trait 1, so
+    the traits are *unequally* polygenic. Every other sweep sets pi1 = pi2,
+    where ``frac_shared = pi11 / min(pi1, pi2)`` cannot be told apart from
+    ``pi11 / pi1`` or from the ``sqrt(pi1 pi2)`` denominator of
+    ``rg_from_overlap``. Includes the containment arm, where the sparse trait
+    lies wholly inside the dense one: a complete overlap that still implies
+    only ``rho_beta * sqrt(pi2 / pi1)`` of genetic correlation.
   * ``power``    -- vary N (hence N*h2/M) at fixed architecture; shows how much
     signal the overlap estimate needs to be meaningful.
   * ``ldmatch``  -- fit the same data on the finite reference panel vs the **exact
@@ -46,7 +54,8 @@ rather than assuming calibration or robustness from model structure alone.
 
     OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python benchmarks/mixer_overlap.py
 
-Env overrides: ``SWEEP`` (overlap,rho,polygenicity,power,ldmatch,calibration,unical
+Env overrides: ``SWEEP``
+(overlap,rho,polygenicity,asymmetry,power,ldmatch,calibration,unical
 or a subset), ``REPS``,
 ``OUT``, plus ``NB`` / ``K`` / ``MUT_RATE`` (via rg_architectures) to change ``m``.
 """
@@ -80,23 +89,33 @@ P_GRID = (0.01, 0.03, 0.10, 0.30)
 TRUE_BLOCKS = [(R.POP_R[b].astype(np.float32), R.IDX[b]) for b in range(R.NB)]
 
 
-def _sim_overlap(rng, n_causal, frac_shared, rho_beta):
-    """Two traits with exactly ``n_causal`` causal SNPs each, ``frac_shared`` of
-    them shared, shared effects correlated ``rho_beta``; each scaled to h2=H2.
+def _sim_mixture(rng, n1_causal, n2_causal, n_shared, rho_beta):
+    """Two traits with exactly ``n1_causal`` / ``n2_causal`` causal SNPs,
+    ``n_shared`` of them in common, shared effects correlated ``rho_beta``;
+    each trait scaled to h2=H2.
 
-    Returns the effects and their exact mixture truth plus the generating rg
-    target. The LD-weighted rg realized by finite effects is computed separately."""
-    n_shared = int(round(frac_shared * n_causal))
-    n_uniq = n_causal - n_shared
-    need = n_shared + 2 * n_uniq
+    The per-trait counts may differ. ``frac_shared`` in the returned truth
+    follows the estimator's convention, ``pi11 / min(pi1, pi2)`` -- the shared
+    fraction *of the less polygenic trait* -- so a sparse trait wholly inside a
+    dense one is 1.0 however much larger the dense trait is. The rg target uses
+    the other denominator, ``sqrt(pi1 pi2)``; the two coincide only when the
+    traits are equally polygenic.
+
+    Returns the effects and their exact mixture truth. The LD-weighted rg
+    realized by finite effects is computed separately."""
+    n_uniq1 = n1_causal - n_shared
+    n_uniq2 = n2_causal - n_shared
+    if min(n_uniq1, n_uniq2, n_shared) < 0:
+        raise ValueError("n_shared cannot exceed either per-trait causal count")
+    need = n_shared + n_uniq1 + n_uniq2
     picks = rng.choice(M, need, replace=False)
     shared = picks[:n_shared]
-    u1 = picks[n_shared:n_shared + n_uniq]
-    u2 = picks[n_shared + n_uniq:]
+    u1 = picks[n_shared:n_shared + n_uniq1]
+    u2 = picks[n_shared + n_uniq1:]
     b1 = np.zeros(M)
     b2 = np.zeros(M)
-    b1[u1] = rng.standard_normal(n_uniq)
-    b2[u2] = rng.standard_normal(n_uniq)
+    b1[u1] = rng.standard_normal(n_uniq1)
+    b2[u2] = rng.standard_normal(n_uniq2)
     if n_shared:
         L = np.linalg.cholesky([[1.0, rho_beta], [rho_beta, 1.0]])
         raw = L @ rng.standard_normal((2, n_shared))
@@ -104,15 +123,32 @@ def _sim_overlap(rng, n_causal, frac_shared, rho_beta):
         b2[shared] = raw[1]
     b1 *= np.sqrt(H2 / R.gv(b1, b1))
     b2 *= np.sqrt(H2 / R.gv(b2, b2))
-    pi1 = pi2 = n_causal / M
+    pi1 = n1_causal / M
+    pi2 = n2_causal / M
     pi11 = n_shared / M
+    # Both from the integer counts actually simulated, not from the requested
+    # fraction. ``n_shared`` is a rounded count, so on a sparse grid the two
+    # differ: 0.75 of 50 causal variants is 38 shared, a realized 0.76. The
+    # requested value was recorded as truth until 2026-09-14, which overstated
+    # the reported bias by up to 0.01 in exactly the sparse cells the
+    # polygenicity sweep's claim rests on.
+    frac_shared = n_shared / min(n1_causal, n2_causal)
     # Generating target under independent variants and equal h2. Finite effects
     # under LD generally realize a different genetic correlation.
-    rg_target = rho_beta * (n_shared / n_causal)
+    rg_target = rho_beta * n_shared / np.sqrt(n1_causal * n2_causal)
     truth = {"pi1": pi1, "pi2": pi2, "pi11": pi11,
-             "frac_shared": frac_shared, "rho_beta": rho_beta,
-             "rg_target": rg_target}
+             "frac_shared": frac_shared,
+             "rho_beta": rho_beta,
+             "rg_target": float(rg_target)}
     return b1, b2, truth
+
+
+def _sim_overlap(rng, n_causal, frac_shared, rho_beta):
+    """Equal-polygenicity case: both traits have ``n_causal`` causal SNPs and
+    ``frac_shared`` of them are shared. Draw order matches :func:`_sim_mixture`
+    exactly, so the symmetric sweeps are unaffected by the generalisation."""
+    n_shared = int(round(frac_shared * n_causal))
+    return _sim_mixture(rng, n_causal, n_causal, n_shared, rho_beta)
 
 
 def _fit(ref, b1, b2, n1, n2, rep):
@@ -121,14 +157,24 @@ def _fit(ref, b1, b2, n1, n2, rep):
                                          burn_in=BURN, num_iter=ITER, seed=rep)
 
 
-def _cell(n_causal, frac_shared, rho_beta, n1, n2, base_seed):
-    """Average the mixer readouts over REPS fresh phenotypes on fixed genotypes."""
+def _cell(n_causal, frac_shared, rho_beta, n1, n2, base_seed, n2_causal=None):
+    """Average the mixer readouts over REPS fresh phenotypes on fixed genotypes.
+
+    ``n2_causal`` makes the two traits unequally polygenic; ``frac_shared`` is
+    then the fraction of the *sparser* trait that is shared, matching the
+    estimator's ``pi11 / min(pi1, pi2)``. Left at ``None`` the cell is the
+    symmetric one and draws exactly as before."""
     fs, rb, rg, rgo, rel1, rel2, realized = [], [], [], [], [], [], []
     truth = None
     for rep in range(REPS):
         ref, _ = R.ref_panel(rep)
         rng = np.random.default_rng(base_seed + rep)
-        b1, b2, truth = _sim_overlap(rng, n_causal, frac_shared, rho_beta)
+        if n2_causal is None:
+            b1, b2, truth = _sim_overlap(rng, n_causal, frac_shared, rho_beta)
+        else:
+            n_shared = int(round(frac_shared * min(n_causal, n2_causal)))
+            b1, b2, truth = _sim_mixture(rng, n_causal, n2_causal, n_shared,
+                                         rho_beta)
         realized.append(R.realized_rg(b1, b2))
         res = _fit(ref, b1, b2, n1, n2, rep)
         mx = res.mixer
@@ -151,9 +197,14 @@ def _cell(n_causal, frac_shared, rho_beta, n1, n2, base_seed):
             "rg_overlap_mae_realized": m(np.abs(rgo - realized)),
             "rg_realized": m(realized), "rg_realized_sd": s(realized),
             "rel_poly": m(rel1 + rel2), "rel_poly_sd": s(rel1 + rel2),
-            "true_pi1": round(truth["pi1"], 3),
-            "true_pi2": round(truth["pi2"], 3),
-            "true_pi11": round(truth["pi11"], 3),
+            # Per-trait as well as pooled: under asymmetry the two traits are
+            # recovered differently and the pooled mean hides which one moved.
+            "rel_poly1": m(rel1), "rel_poly1_sd": s(rel1),
+            "rel_poly2": m(rel2), "rel_poly2_sd": s(rel2),
+            "true_pi1": round(truth["pi1"], 4),
+            "true_pi2": round(truth["pi2"], 4),
+            "true_pi11": round(truth["pi11"], 4),
+            "poly_ratio": round(truth["pi1"] / truth["pi2"], 3),
             "frac_shared_target": round(truth["frac_shared"], 3),
             "rho_beta_target": round(truth["rho_beta"], 3),
             "rg_target": round(truth["rg_target"], 3)}
@@ -176,11 +227,17 @@ def sweep_overlap(rows):
 
 
 def sweep_rho(rows):
+    """Within-shared effect correlation, including negative values.
+
+    The grid is signed because a sign error in the covariance readout would be
+    invisible on a non-negative grid, and real pairs are routinely negative
+    (HDL x TG sits near -0.5). ``rho_beta`` and ``rg`` should track the target
+    with the sign preserved and no asymmetry in magnitude."""
     print(f"\n== rho_beta sweep (p=0.10/trait, frac_shared=0.5, N={R.N1}/{R.N2}) ==",
           flush=True)
     print(f"{'rho_beta':>8} | {'rho_beta_hat':>13} | {'frac_shared':>13} | "
           f"{'rg target/real':>14} {'rg_hat':>13}", flush=True)
-    for i, rho in enumerate([0.0, 0.3, 0.6, 0.9]):
+    for i, rho in enumerate([-0.9, -0.6, -0.3, 0.0, 0.3, 0.6, 0.9]):
         r = _cell(NCAUSAL, 0.5, rho, R.N1, R.N2, base_seed=2000 + 20 * i)
         r["sweep"] = "rho"
         rows.append(r)
@@ -225,6 +282,43 @@ def sweep_polygenicity(rows):
                                    and row["true_pi1"] == round(n_causal / M, 3)]))
         print(f"{'':8} {'':7} {'mean':>7} | {'':13} {mean_bias:>+7.3f}",
               flush=True)
+
+
+def sweep_asymmetry(rows):
+    """Unequally polygenic traits -- the case the other sweeps cannot reach.
+
+    Every other sweep here sets pi1 = pi2, where the estimator's
+    ``frac_shared = pi11 / min(pi1, pi2)`` is indistinguishable from
+    ``pi11 / pi1`` or from the ``sqrt(pi1 pi2)`` denominator that
+    ``rg_from_overlap`` uses. Holding trait 1 at p=0.10 and thinning trait 2 to
+    a tenth of that separates them, and covers the configuration real pairs
+    actually take: a dense trait against a sparse one.
+
+    The ``frac_shared=1.0`` arm is containment -- every causal variant of the
+    sparse trait is also causal for the dense one. It is the case most often
+    misread: the overlap is complete by construction, yet the genetic
+    correlation it implies is only ``rho_beta * sqrt(pi2 / pi1)``, so at a
+    10x polygenicity ratio a *complete* overlap still means rg about 0.25.
+    Reported here side by side so the artifact shows both numbers at once."""
+    print("\n== asymmetry sweep (trait1 p=0.10, rho_beta=0.8, "
+          f"N={R.N1}/{R.N2}) ==", flush=True)
+    print(f"{'p2':>6} {'ratio':>6} {'shared':>7} | {'frac_shared t/est':>18} | "
+          f"{'rel poly 1 / 2':>15} | {'rg t/real/hat':>19}", flush=True)
+    n1_causal = NCAUSAL
+    for i, p2 in enumerate((0.10, 0.05, 0.02, 0.01)):
+        n2_causal = max(int(round(p2 * M)), 20)
+        for j, frac in enumerate((0.5, 1.0)):
+            r = _cell(n1_causal, frac, 0.8, R.N1, R.N2,
+                      base_seed=8000 + 200 * i + 20 * j, n2_causal=n2_causal)
+            r["sweep"] = "asymmetry"
+            rows.append(r)
+            print(f"{p2:>6.2f} {r['poly_ratio']:>6.1f} "
+                  f"{int(round(r['true_pi11'] * M)):>7} | "
+                  f"{r['frac_shared_target']:>8.2f}/"
+                  f"{r['frac_shared_hat']:<5.2f}±{r['frac_shared_sd']:<4} | "
+                  f"{r['rel_poly1']:>6.2f} /{r['rel_poly2']:>6.2f} | "
+                  f"{r['rg_target']:>5.2f}/{r['rg_realized']:>5.2f}/"
+                  f"{r['rg_hat']:<5.2f}±{r['rg_sd']:<4}", flush=True)
 
 
 def sweep_power(rows):
@@ -408,7 +502,8 @@ def sweep_unical(rows):
 
 
 SWEEPS = {"overlap": sweep_overlap, "rho": sweep_rho,
-          "polygenicity": sweep_polygenicity, "power": sweep_power,
+          "polygenicity": sweep_polygenicity, "asymmetry": sweep_asymmetry,
+          "power": sweep_power,
           "ldmatch": sweep_ldmatch, "calibration": sweep_calibration,
           "unical": sweep_unical}
 
@@ -431,10 +526,11 @@ def make_figure(rows):
     ov = [r for r in rows if r["sweep"] == "overlap"]
     rh = [r for r in rows if r["sweep"] == "rho"]
     pg = [r for r in rows if r["sweep"] == "polygenicity"]
+    asy = [r for r in rows if r["sweep"] == "asymmetry"]
     pw = [r for r in rows if r["sweep"] == "power"]
     lm = [r for r in rows if r["sweep"] == "ldmatch"]
     uc = [r for r in rows if r["sweep"] == "unical"]
-    npan = sum(bool(g) for g in (ov, rh, pg, pw, lm, uc))
+    npan = sum(bool(g) for g in (ov, rh, pg, asy, pw, lm, uc))
     if npan == 0:
         return
     fig, ax = plt.subplots(1, npan, figsize=(3.7 * npan, 3.6))
@@ -483,6 +579,26 @@ def make_figure(rows):
         a.set_ylabel("frac_shared: est − true")
         a.set_title("polygenicity sweep")
         a.legend(fontsize=8)
+    if asy:
+        a = next(panels)
+        a.axhline(1.0, ls=":", c="k", lw=1, alpha=.6)
+        for frac, colour, mark in ((0.5, "C0", "o"), (1.0, "C2", "s")):
+            cells = [r for r in asy if abs(r["frac_shared_target"] - frac) < 0.02]
+            if not cells:
+                continue
+            x = [r["poly_ratio"] for r in cells]
+            a.errorbar(x, [r["frac_shared_hat"] for r in cells],
+                       [r["frac_shared_sd"] for r in cells],
+                       fmt=mark + "-", ms=4, capsize=2, color=colour,
+                       label=f"frac_shared (true {frac:g})")
+            a.plot(x, [r["rg_hat"] for r in cells], mark + "--", ms=4,
+                   color=colour, alpha=.6, label=f"rg (true {frac:g} overlap)")
+            a.plot(x, [r["rg_realized"] for r in cells], "kx", ms=5, alpha=.5)
+        a.set_xscale("log")
+        a.set_xlabel("polygenicity ratio pi1 / pi2")
+        a.set_ylabel("estimate")
+        a.set_title("asymmetry sweep")
+        a.legend(fontsize=6)
     if pw:
         a = next(panels)
         x = [r["N"] * H2 / M for r in pw]
@@ -548,7 +664,8 @@ def _warmup():
 def main():
     which = os.environ.get(
         "SWEEP",
-        "overlap,rho,polygenicity,power,ldmatch,calibration,unical").split(",")
+        "overlap,rho,polygenicity,asymmetry,power,ldmatch,calibration,"
+        "unical").split(",")
     base = os.environ.get("OUT", "mixer_overlap")
     csv_path = os.path.join(HERE, base + ".csv")
     print(f"MiXeR-style overlap recovery — realistic LD (m={M}, {R.NB} blocks, "

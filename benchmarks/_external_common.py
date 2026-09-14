@@ -4,9 +4,9 @@ This module holds the pieces ``external_overlap.py`` and
 ``external_hdl_tg.py`` have in common, kept separate so the plumbing is unit
 testable without the external tools installed:
 
-* tool probes following the ``infer_vs_ldsc_sbayes.py`` pattern: an env var or
-  default path is checked, and when the tool is absent the arm writes NaN rows
-  with a ``backend``/``note`` trail instead of failing;
+* tool probes: an env var or default path is checked, and when the tool is
+  absent the arm writes NaN rows with a ``backend``/``note`` trail instead of
+  failing;
 * parsers for the original tools' outputs (MiXeR ``fit2`` JSON, LDSC ``.log``);
 * an honest provenance sidecar writer. ``real_data_inputs``'s writer hardcodes
   ``source_clean: True`` behind guards (clean-tree and the archived ldpred3

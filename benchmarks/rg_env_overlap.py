@@ -13,7 +13,7 @@ true **genetic** rg in every cell:
     intercept), compared with ``cross_corr=0``.
 
 Real individual-level genotypes/phenotypes (the independent-block coalescent genome
-of ``infer_vs_ldsc_sbayes``) are used so the confounding arises mechanistically:
+of ``_block_genome``) are used so the confounding arises mechanistically:
 both GWAS run on the *same* people, genetic effects have target correlation
 ``rg`` and the residual environments have correlation ``re``. The finite
 effects' realized genetic correlation is recorded separately. Needs ``msprime``.
@@ -28,7 +28,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from bipred import ldsc_rg, ldpred3_auto_bivariate_blocks                 # noqa: E402
-import infer_vs_ldsc_sbayes as G                                         # noqa: E402
+import _block_genome as G                                                # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 N = G.N_GWAS                          # both traits on the SAME N individuals (full overlap)

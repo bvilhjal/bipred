@@ -25,9 +25,60 @@ User-visible changes to **bipred** are recorded here. The project is currently
   `PreparedBivariate.log["trait1"/"trait2"]["qc"]["n_eff"]` reports the
   whole sample-size story with no bipred code change.
 
+### Removed
+
+- `report/bipred_speed_review_2026-09-07.md`. Nothing linked to it, and it had
+  rotted in every way a record can: nine absolute `/Users/...` paths (two of
+  them into a sibling checkout, three into the gitignored
+  `benchmarks/results/`), eight `\[...\]` LaTeX blocks GitHub does not render,
+  and five source citations by line number — all five now landing on unrelated
+  code, one of them on `_jit_parallel_uncached`, a symbol that no longer
+  exists. `tests/test_docs.py` forbids line-number citations in source for
+  exactly this reason but only scans `.py`, so the file was never checked.
+- `benchmarks/infer_vs_ldsc_sbayes.py`. It was a drifted fork of the ldpred3
+  benchmark of the same name — never run by `run_all.sh`, never the source of
+  a committed artifact here, and used only for the four names
+  `rg_env_overlap.py` imports from it. Those now come from the new
+  `benchmarks/_block_genome.py`, which holds the independent-block coalescent
+  genome and nothing else; `genome()` is AST-identical to the original and
+  verified bit-identical on all nine returned arrays under the msprime
+  backend, so `rg_env_overlap.csv` stands unchanged.
+- The `slow` / `integration` / `external` / `numba` marker taxonomy from
+  `pyproject.toml`. No test carried any of the four and no CI leg selected on
+  them, so `pytest -m slow` matched nothing while `-m "not slow"` ran
+  everything. The suite takes about 20 s; tests that need an absent capability
+  keep skipping themselves through `pytest.mark.skipif` on the real thing.
+
 ### Fixed
 
 - Shipped documentation no longer links relatively into `benchmarks/`, which the sdist excludes; the links are absolute GitHub URLs, so the `wheel / sdist smoke` link check passes again.
+- The sdist shipped `tests/test_external_benchmark.py` but not the
+  `benchmarks/` package it imports, so `pytest` on an unpacked sdist died at
+  collection with `ModuleNotFoundError: No module named '_external_common'`.
+  `MANIFEST.in` excluded only the other benchmark-dependent module; it now
+  excludes both, and the sdist suite runs clean.
+- `tests/test_docs.py` checked links in 11 documents; `studies/`,
+  `benchmarks/hapnest/` and three of the four `research/` documents were
+  exempt. It now covers 18.
+- The `0.3.8` changelog entry appeared twice under the same heading and date,
+  with different content each time. The two are merged; no content was
+  dropped.
+
+### Tests
+
+- The five RESULTS.md table-versus-CSV tests shared a half-ulp tolerance rule
+  copied six times over; it is now one documented `_close` helper with
+  `_assert_cells_match` beside it. Each test keeps its own columns, cell
+  splitting and derived-column recomputation. Mutation-tested: eleven
+  single-cell perturbations across four tables each fail exactly one test.
+- `test_benchmark_simulate.py`'s 37 function-local stdlib imports moved to
+  module level.
+- The three `ncores=2 matches ncores=1` tests became one
+  `test_ncores_two_matches_one` parametrized over the LD representations the
+  parallel driver buckets separately (`d8`, `float32-per-variant-n`, `lr32`,
+  `lr8`), and the rising/falling trace-drift pair became one parametrized
+  test. Same number of collected tests, and each case now fails under its own
+  id.
 
 ## [0.3.16.dev0] - 2026-09-08
 
@@ -766,20 +817,6 @@ screen; every later floor still guarantees those.)
   safe CLI default; HWE-derived frozen scaling requires an explicit flag.
 
 ## [0.3.8] - 2026-08-13
-- Principal subsetting validates masks and indices, retains singleton blocks,
-  supports set callers, reuses complete mmap blocks, and never expands a whole
-  low-rank parent merely to select a small principal submatrix.
-- Prepared mmap panels retain their cache owner until explicitly closed.
-  A caller-owned `ldpred3.interop.PreparedLDCache` can instead be shared across
-  sibling fits without rescanning the complete payload.
-- Threaded multi-chain fitting retains at most one completed genome-wide result
-  per worker, and single-chain finalization no longer normalizes posterior
-  vectors twice.
-- A cache without reference allele frequencies writes target-scaled weights
-  instead of failing after the fit. HWE-derived dosage SD is labeled as an
-  approximation rather than an observed fit-cohort scale.
-
-## [0.3.8] - 2026-08-13
 
 ### Added
 
@@ -805,6 +842,18 @@ screen; every later floor still guarantees those.)
 - The fit warns when `beta_hat` looks like a z-score (`|beta| >= 1`) or
   like unstandardized per-allele effects, instead of silently returning a
   plausible `h2`/`rg` on the wrong scale.
+- Principal subsetting validates masks and indices, retains singleton blocks,
+  supports set callers, reuses complete mmap blocks, and never expands a whole
+  low-rank parent merely to select a small principal submatrix.
+- Prepared mmap panels retain their cache owner until explicitly closed.
+  A caller-owned `ldpred3.interop.PreparedLDCache` can instead be shared across
+  sibling fits without rescanning the complete payload.
+- Threaded multi-chain fitting retains at most one completed genome-wide result
+  per worker, and single-chain finalization no longer normalizes posterior
+  vectors twice.
+- A cache without reference allele frequencies writes target-scaled weights
+  instead of failing after the fit. HWE-derived dosage SD is labeled as an
+  approximation rather than an observed fit-cohort scale.
 
 ## [0.3.7] - 2026-08-09
 

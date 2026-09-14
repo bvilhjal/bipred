@@ -1,13 +1,24 @@
 """The repository benchmark simulator: both backends, and cache separation."""
 
+import csv
+import hashlib
+import json
+import os
+import pathlib
+import re
+import shutil
 import subprocess
 import sys
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 import benchmarks.simulate as simulate
 from benchmarks.simulate import simulate_genotypes_by_mutation_rate
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+BENCHMARKS = ROOT / "benchmarks"
 
 
 def test_msprime_backend_returns_filtered_diploid_dosages(monkeypatch):
@@ -106,8 +117,6 @@ assert simulate.SIMULATOR_CACHE_TAG == simulate._BACKEND_TAGS[simulate._backend(
 
 
 def test_step_timings_persist_ordered_leaf_and_total_rows(tmp_path):
-    import csv
-
     from benchmarks._benchmark_utils import StepTimings, TIMING_FIELDS
 
     ticks = iter([0.0, 1.0, 3.5, 6.0])
@@ -131,7 +140,6 @@ def test_step_timings_persist_ordered_leaf_and_total_rows(tmp_path):
 
 def test_bivariate_demo_controls_are_literal_and_recorded(tmp_path):
     """No-shrinkage and disjoint mean those things, not rounded facsimiles."""
-    import csv
 
     from benchmarks import bivariate_demo as demo
 
@@ -171,11 +179,7 @@ def test_bivariate_demo_controls_are_literal_and_recorded(tmp_path):
 
 
 def test_bivariate_demo_artifact_is_per_replicate_and_full_precision():
-    import csv
-    import pathlib
-
-    path = (pathlib.Path(__file__).resolve().parent.parent
-            / "benchmarks" / "bivariate_demo.csv")
+    path = BENCHMARKS / "bivariate_demo.csv"
     rows = list(csv.DictReader(path.open()))
     assert len(rows) == 60
     assert {row["reference_shrinkage"] for row in rows} == {"0.0", "0.05"}
@@ -213,7 +217,6 @@ def test_bivariate_demo_artifact_is_per_replicate_and_full_precision():
 
 def test_bivariate_demo_records_clean_source_and_library_hash(tmp_path,
                                                                monkeypatch):
-    import json
     from types import SimpleNamespace
 
     from benchmarks import bivariate_demo as demo
@@ -265,12 +268,8 @@ def test_synthetic_ld_panels_have_distinct_payloads_and_honest_size():
 
 
 def test_representation_artifacts_record_distinct_storage_and_scaling():
-    import csv
-    import pathlib
-
-    root = pathlib.Path(__file__).resolve().parent.parent / "benchmarks"
-    sweep = list(csv.DictReader((root / "sweep_cost.csv").open()))
-    memory = list(csv.DictReader((root / "fit_memory.csv").open()))
+    sweep = list(csv.DictReader((BENCHMARKS / "sweep_cost.csv").open()))
+    memory = list(csv.DictReader((BENCHMARKS / "fit_memory.csv").open()))
     assert len(sweep) == 10 and len(memory) == 8
     assert {row["block_storage"] for row in sweep + memory} == {"distinct"}
     assert all(float(row["ms_per_sweep_median"]) > 0 for row in sweep)
@@ -298,8 +297,6 @@ def test_representation_artifacts_record_distinct_storage_and_scaling():
 
 
 def test_factorial_keeps_reported_n_when_quantitative_scale_is_unknown():
-    import pytest
-
     from benchmarks.qc_factorial import _cross_corr_from_ldsc, _sample_size_plan
 
     reported = np.array([80_000.0, 100_000.0])
@@ -335,11 +332,7 @@ def test_factorial_frac_shared_spread_uses_the_public_estimand():
 
 
 def test_factorial_artifact_uses_the_primary_screen_name():
-    import csv
-    import pathlib
-
-    path = (pathlib.Path(__file__).resolve().parent.parent
-            / "benchmarks" / "qc_factorial.csv")
+    path = BENCHMARKS / "qc_factorial.csv"
     with path.open() as handle:
         reader = csv.DictReader(handle)
         rows = list(reader)
@@ -354,11 +347,6 @@ def test_factorial_artifact_uses_the_primary_screen_name():
 
 
 def test_real_data_checksum_manifest_and_validator(tmp_path):
-    import hashlib
-    import pathlib
-
-    import pytest
-
     from benchmarks.real_data_inputs import (
         _source_tree_sha256, load_manifest, validate_inputs,
     )
@@ -377,9 +365,7 @@ def test_real_data_checksum_manifest_and_validator(tmp_path):
         "ldsc-weights/w_hm3.snplist",
     }
     assert all(len(digest) == 64 for digest in committed.values())
-    benchmark_readme = (pathlib.Path(__file__).resolve().parent.parent
-                        / "benchmarks" / "README.md").read_text(
-                            encoding="utf-8")
+    benchmark_readme = (BENCHMARKS / "README.md").read_text(encoding="utf-8")
     assert "**Table 4. Acquisition record" in benchmark_readme
     assert all(f"`{name}`" in benchmark_readme for name in committed)
     for source_id in (
@@ -413,12 +399,9 @@ def test_real_data_checksum_manifest_and_validator(tmp_path):
 
 
 def test_runtime_ci_and_frozen_benchmark_use_explicit_distinct_sources():
-    import pathlib
-    import re
-
     from benchmarks.real_data_inputs import LDPRED3_REV, LDPRED3_VERSION
 
-    root = pathlib.Path(__file__).resolve().parent.parent
+    root = ROOT
     ci = (root / ".github" / "workflows" / "ci.yml").read_text(
         encoding="utf-8")
     pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
@@ -452,11 +435,6 @@ def test_runtime_ci_and_frozen_benchmark_use_explicit_distinct_sources():
 
 
 def test_real_data_provenance_requires_clean_source_and_writes_sidecar(tmp_path):
-    import json
-    import pathlib
-
-    import pytest
-
     from benchmarks.real_data_inputs import (
         require_clean_source, write_provenance_sidecar,
     )
@@ -503,12 +481,8 @@ def test_real_data_provenance_requires_clean_source_and_writes_sidecar(tmp_path)
 
 def test_run_all_refuses_an_untracked_source_file(tmp_path):
     """HEAD provenance excludes untracked code, not only unstaged diffs."""
-    import os
-    import pathlib
-    import shutil
 
-    source = (pathlib.Path(__file__).resolve().parent.parent
-              / "benchmarks" / "run_all.sh")
+    source = BENCHMARKS / "run_all.sh"
     repo = tmp_path / "repo"
     scripts = repo / "benchmarks"
     scripts.mkdir(parents=True)
@@ -575,16 +549,45 @@ def _markdown_table_after(text, caption):
     return rows[1:]                                  # drop the header row
 
 
-def test_results_bivariate_table_matches_per_replicate_csv():
-    import csv
-    import pathlib
 
-    root = pathlib.Path(__file__).resolve().parent.parent / "benchmarks"
-    records = list(csv.DictReader((root / "bivariate_demo.csv").open()))
-    table = _markdown_table_after(
-        (root / "RESULTS.md").read_text(encoding="utf-8"),
-        "**Table 12. Trait-2 genetic R² under paired reference-LD regularisation.**",
-    )
+def _results_table(caption):
+    """Rows of the RESULTS.md table introduced by ``caption``."""
+    return _markdown_table_after(
+        (BENCHMARKS / "RESULTS.md").read_text(encoding="utf-8"), caption)
+
+
+def _close(cell, value):
+    """Is a printed table cell the CSV ``value`` at the precision it is shown to?
+
+    Each cell transcribes its CSV value at its own number of decimals, so the
+    tolerance is that column's own half-ulp -- not one fixed window, which
+    would be far too loose for a cell printed to fewer decimals. Exact halfway
+    values (0.5175 -> 0.517 or 0.518) are accepted either way; anything beyond
+    half an ulp is a real desync. The 1e-9 slack is floating point, not
+    looseness: an exact tie such as |0.518 - 0.5175| evaluates to
+    5.000000000000004e-4. Surrounding bold, thousands separators, a leading
+    ``+`` and trailing units are stripped before comparing.
+    """
+    text = cell.replace("**", "").replace(",", "").strip().split()[0].lstrip("+")
+    digits = len(text.partition(".")[2])
+    return abs(float(text) - float(value)) <= 0.5 * 10.0 ** -digits * (1.0 + 1e-9)
+
+
+def _assert_cells_match(table, rows, columns):
+    """Assert every printed cell transcribes its CSV column; ``None`` skips one."""
+    for printed, record in zip(table, rows):
+        assert len(printed) == len(columns)
+        for cell, column in zip(printed, columns):
+            if column is None:
+                continue
+            assert _close(cell, record[column]), (
+                f"{column}: table says {cell!r}, CSV says {record[column]!r}")
+
+
+def test_results_bivariate_table_matches_per_replicate_csv():
+    records = list(csv.DictReader((BENCHMARKS / "bivariate_demo.csv").open()))
+    table = _results_table(
+        "**Table 12. Trait-2 genetic R² under paired reference-LD regularisation.**")
     labels = {
         "shared, rg=0.0": "shared, target 0.0",
         "shared, rg=0.3": "shared, target 0.3",
@@ -605,20 +608,17 @@ def test_results_bivariate_table_matches_per_replicate_csv():
     def mean(group, column):
         return float(np.mean([float(row[column]) for row in group]))
 
-    def close(cell, value):
-        numeric = cell.lstrip("+")
-        digits = len(numeric.partition(".")[2])
-        return abs(float(numeric) - value) <= 0.5 * 10.0 ** -digits * (1 + 1e-9)
-
     for printed, (shrinkage, source_label, group) in zip(table, groups):
         shrink, architecture, realized, alone, joint, gain, estimate, warned = printed
         assert shrink == f"{shrinkage * 100:g}%"
         assert architecture == labels[source_label]
-        assert close(realized, mean(group, "realized_rg"))
-        assert close(alone, mean(group, "solo_r2"))
-        assert close(joint, mean(group, "joint_r2"))
-        assert close(gain, mean(group, "gain"))
-        assert close(estimate, mean(group, "rg_est"))
+        # Every cell is a mean over the replicate group, so compare against the
+        # recomputed mean rather than any single row.
+        assert _close(realized, mean(group, "realized_rg"))
+        assert _close(alone, mean(group, "solo_r2"))
+        assert _close(joint, mean(group, "joint_r2"))
+        assert _close(gain, mean(group, "gain"))
+        assert _close(estimate, mean(group, "rg_est"))
         warned_count = sum(int(int(row["joint_implausible_warnings"]) > 0)
                            for row in group)
         assert warned == f"{warned_count} / {len(group)}"
@@ -632,37 +632,12 @@ def test_results_scaling_table_matches_its_csv():
     reaches 2.559 GB at 80k variants, so the table must follow the artifact
     rather than any particular historical peak.
     """
-    import csv
-    import pathlib
-
-    root = pathlib.Path(__file__).resolve().parent.parent / "benchmarks"
-    rows = list(csv.DictReader((root / "rg_scaling.csv").open()))
-    table = _markdown_table_after(
-        (root / "RESULTS.md").read_text(encoding="utf-8"),
-        "**Table 6. Scaling with variant count.**",
-    )
+    rows = list(csv.DictReader((BENCHMARKS / "rg_scaling.csv").open()))
+    table = _results_table("**Table 6. Scaling with variant count.**")
     assert len(table) == len(rows)
-
-    def number(cell):
-        return float(cell.split()[0].replace(",", ""))
-
-    columns = ["m", "t_ldsc_s", "t_ldpred3_s", "peak_gb", "rg_realized",
-               "abs_error_ldsc_realized", "abs_error_ldpred3_realized"]
-    for printed, record in zip(table, rows):
-        assert len(printed) == len(columns)
-        for cell, column in zip(printed, columns):
-            # Each cell transcribes its CSV value at the precision it is
-            # printed to, so the tolerance is that column's own half-ulp --
-            # not one fixed window, which would be far too loose for a cell
-            # printed to fewer decimals. Exact halfway values (0.5175 -> 0.517
-            # or 0.518) are accepted either way; anything beyond half an ulp is
-            # a real desync.
-            digits = len(cell.split()[0].partition(".")[2])
-            # The 1e-9 slack is floating point, not looseness: an exact tie
-            # such as |0.518 - 0.5175| evaluates to 5.000000000000004e-4.
-            half_ulp = 0.5 * 10.0 ** -digits * (1.0 + 1e-9)
-            assert abs(number(cell) - float(record[column])) <= half_ulp, (
-                f"{column}: table says {cell!r}, CSV says {record[column]!r}")
+    _assert_cells_match(table, rows, [
+        "m", "t_ldsc_s", "t_ldpred3_s", "peak_gb", "rg_realized",
+        "abs_error_ldsc_realized", "abs_error_ldpred3_realized"])
 
 
 def test_results_environmental_overlap_table_matches_its_csv():
@@ -673,32 +648,23 @@ def test_results_environmental_overlap_table_matches_its_csv():
     r_g into the environmental-correlation column of both `rg_target=0.5` rows
     -- the two rows the claim rests on.
     """
-    import csv
-    import pathlib
-
-    root = pathlib.Path(__file__).resolve().parent.parent / "benchmarks"
-    rows = list(csv.DictReader((root / "rg_env_overlap.csv").open()))
-    table = _markdown_table_after(
-        (root / "RESULTS.md").read_text(encoding="utf-8"),
-        "**Table 11. Paired MAE against realized genetic correlation.**",
-    )
+    rows = list(csv.DictReader((BENCHMARKS / "rg_env_overlap.csv").open()))
+    table = _results_table(
+        "**Table 11. Paired MAE against realized genetic correlation.**")
     assert len(table) == len(rows)
 
+    # Two of the five printed columns pack a free/constrained (or unset/set)
+    # pair into one ``a / b`` cell, so split them back out before comparing.
     for printed, record in zip(table, rows):
         target, env, realized, ldsc, joint = printed
         ldsc_free, ldsc_con = (c.strip() for c in ldsc.split("/"))
         joint_unset, joint_set = (c.strip() for c in joint.split("/"))
-        for cell, column in (
-            (target, "rg_target"), (env, "re"), (realized, "rg_realized"),
-            (ldsc_free, "ldsc_free_mae_realized"),
-            (ldsc_con, "ldsc_con_mae_realized"),
-            (joint_unset, "biv_cc0_mae_realized"),
-            (joint_set, "biv_cc_mae_realized"),
-        ):
-            digits = len(cell.partition(".")[2])
-            half_ulp = 0.5 * 10.0 ** -digits * (1.0 + 1e-9)
-            assert abs(float(cell) - float(record[column])) <= half_ulp, (
-                f"{column}: table says {cell!r}, CSV says {record[column]!r}")
+        _assert_cells_match(
+            [(target, env, realized, ldsc_free, ldsc_con,
+              joint_unset, joint_set)], [record],
+            ["rg_target", "re", "rg_realized",
+             "ldsc_free_mae_realized", "ldsc_con_mae_realized",
+             "biv_cc0_mae_realized", "biv_cc_mae_realized"])
 
     # The claim itself: no cell may exceed the bound the prose states.
     worst = max(float(r["biv_cc0_mae_realized"]) for r in rows)
@@ -713,34 +679,25 @@ def test_results_polygenicity_table_matches_its_csv():
     invert the reading. The derived columns (bias, and the mean-bias sentence
     below the table) are recomputed here rather than trusted.
     """
-    import csv
-    import pathlib
-    import re
-
-    root = pathlib.Path(__file__).resolve().parent.parent / "benchmarks"
-    rows = [r for r in csv.DictReader((root / "mixer_overlap.csv").open())
+    rows = [r for r in csv.DictReader((BENCHMARKS / "mixer_overlap.csv").open())
             if r["sweep"] == "polygenicity"]
-    text = (root / "RESULTS.md").read_text(encoding="utf-8")
+    text = (BENCHMARKS / "RESULTS.md").read_text(encoding="utf-8")
     table = _markdown_table_after(
         text, "**Table 8. Shared-fraction bias against per-trait polygenicity.**")
     assert len(table) == len(rows) == 12
 
-    def close(cell, value):
-        digits = len(cell.partition(".")[2])
-        return abs(float(cell) - value) <= 0.5 * 10.0 ** -digits * (1.0 + 1e-9)
-
     for printed, record in zip(table, rows):
         fraction, target, estimate, bias, relative = printed
+        # The estimate column packs the point value and its replicate spread
+        # into one ``x ± s`` cell; the bias column is derived, not transcribed.
         shown, spread = (c.strip() for c in estimate.split("±"))
         hat = float(record["frac_shared_hat"])
         goal = float(record["frac_shared_target"])
-        assert close(fraction, float(record["true_pi1"])), printed
-        assert close(target, goal), printed
-        assert close(shown, hat), printed
-        assert close(spread, float(record["frac_shared_sd"])), printed
-        assert close(relative, float(record["rel_poly"])), printed
-        # The bias column is derived, so recompute it instead of transcribing.
-        assert close(bias, hat - goal), printed
+        _assert_cells_match(
+            [(fraction, target, shown, spread, relative)], [record],
+            ["true_pi1", "frac_shared_target", "frac_shared_hat",
+             "frac_shared_sd", "rel_poly"])
+        assert _close(bias, hat - goal), printed
 
     def biases(fraction):
         return [float(r["frac_shared_hat"]) - float(r["frac_shared_target"])
@@ -753,7 +710,7 @@ def test_results_polygenicity_table_matches_its_csv():
     assert len(found) == 4, printed_means
     for fraction, cell in found.items():
         mean = sum(biases(fraction)) / len(biases(fraction))
-        assert close(cell.lstrip("+"), mean), (fraction, cell, mean)
+        assert _close(cell, mean), (fraction, cell, mean)
 
     # The two claims the section is built on, asserted against the CSV.
     assert all(b < float(r["frac_shared_sd"])
@@ -782,34 +739,20 @@ assert benchmark._segment_cache_path(0).endswith(
 
 def test_results_real_data_table_matches_its_csv():
     """Table 13 exactly transcribes the clean current-screen artifact."""
-    import csv
-    import pathlib
 
-    root = pathlib.Path(__file__).resolve().parent.parent / "benchmarks"
-    csv_path = root / "real_ldl_cad.csv"
+    csv_path = BENCHMARKS / "real_ldl_cad.csv"
     if not csv_path.exists():             # inputs are ~9 GB and not committed
-        import pytest
         pytest.skip("real_ldl_cad.csv not generated on this host")
     rows = list(csv.DictReader(csv_path.open()))
-    table = _markdown_table_after(
-        (root / "RESULTS.md").read_text(encoding="utf-8"),
+    table = _results_table(
         "**Table 13. The same analysis at three levels of cleaning.**")
     assert len(table) == len(rows) == 3
-
-    def number(cell):
-        return float(cell.replace("**", "").replace(",", "").strip())
-
-    columns = [None, "m", "ldsc_rg", "rg", "h2_ldl", "h2_cad",
-               "cancellation_ldl", "max_abs_beta_ldl", "trace_drift_ldl", None]
+    # The first column is a stage label and the last is prose, so neither
+    # transcribes a numeric CSV column.
+    _assert_cells_match(table, rows, [
+        None, "m", "ldsc_rg", "rg", "h2_ldl", "h2_cad", "cancellation_ldl",
+        "max_abs_beta_ldl", "trace_drift_ldl", None])
     for printed, record in zip(table, rows):
-        assert len(printed) == len(columns)
-        for cell, column in zip(printed, columns):
-            if column is None:
-                continue
-            digits = len(cell.replace("**", "").partition(".")[2])
-            half_ulp = 0.5 * 10.0 ** -digits * (1.0 + 1e-9)
-            assert abs(number(cell) - float(record[column])) <= half_ulp, (
-                f"{column}: table {cell!r}, CSV {record[column]!r}")
         # The divergence-warning column is prose in the table and 0/1 in CSV.
         assert printed[-1].strip() == (
             "yes" if record["divergence_warned"] == "1" else "no")
@@ -823,15 +766,9 @@ def test_results_real_data_table_matches_its_csv():
 
 
 def test_real_data_timing_artifact_covers_each_leaf_step():
-    import csv
-    import pathlib
-
-    import pytest
-
     from benchmarks._benchmark_utils import TIMING_FIELDS
 
-    path = (pathlib.Path(__file__).resolve().parent.parent
-            / "benchmarks" / "real_ldl_cad_timing.csv")
+    path = BENCHMARKS / "real_ldl_cad_timing.csv"
     if not path.exists():
         pytest.skip("real LDL-CAD timing artifact not generated on this host")
     rows = list(csv.DictReader(path.open()))
@@ -880,15 +817,9 @@ def test_rg_scaling_refuses_to_publish_a_sweep_that_measured_nothing(
     It did once: run_all.sh reported rg_scaling "ok" over a CSV whose every
     row was FAIL, and the committed record was silently replaced.
     """
-    import pathlib as _pathlib
-    import shutil
-    import sys
-
-    import pytest
-
     from benchmarks import rg_scaling
 
-    committed = _pathlib.Path(rg_scaling.HERE) / "rg_scaling.csv"
+    committed = pathlib.Path(rg_scaling.HERE) / "rg_scaling.csv"
     before = committed.read_bytes()
     shutil.copy(committed, tmp_path / "backup.csv")
     monkeypatch.setattr(
@@ -908,14 +839,10 @@ def test_rg_scaling_refuses_to_publish_a_sweep_that_measured_nothing(
 def test_rg_scaling_still_records_a_size_that_ran_out_of_memory(
         monkeypatch, tmp_path):
     """A partial failure is evidence, not an abort: keep publishing it."""
-    import csv as _csv
-    import pathlib as _pathlib
-    import shutil
-    import sys
 
     from benchmarks import rg_scaling
 
-    committed = _pathlib.Path(rg_scaling.HERE) / "rg_scaling.csv"
+    committed = pathlib.Path(rg_scaling.HERE) / "rg_scaling.csv"
     shutil.copy(committed, tmp_path / "backup.csv")
     ok = {"ok": True, "t_ldsc": 0.1, "t_ldpred3": 0.2, "mem_gb": 0.3,
           "rg_ldsc": 0.5, "rg_ldpred3": 0.5, "rg_realized": 0.5,
@@ -928,7 +855,7 @@ def test_rg_scaling_still_records_a_size_that_ran_out_of_memory(
     monkeypatch.setattr(sys, "argv", ["rg_scaling.py", "5000", "10000"])
     try:
         rg_scaling.main()
-        rows = list(_csv.reader(open(committed)))[1:]
+        rows = list(csv.reader(open(committed)))[1:]
         assert [r[0] for r in rows] == ["5000", "10000"]
         assert rows[1][2] == "OOM"
     finally:

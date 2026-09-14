@@ -2,5 +2,8 @@ include CHANGELOG.md
 include LICENSE
 recursive-include docs *.md
 recursive-include examples *.py
+# The sdist ships tests but not benchmarks/, so the two test modules that
+# import from benchmarks/ cannot run from it and would fail at collection.
 exclude tests/test_benchmark_simulate.py
+exclude tests/test_external_benchmark.py
 global-exclude __pycache__ *.py[cod]

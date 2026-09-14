@@ -694,10 +694,7 @@ The original-MiXeR and original-LDSC benchmarks of Section 11 ran on this host
 (inputs unavailable on this host):
 
 - `hapnest/run_bivariate.py`, which needs a HAPNEST dataset (containerized
-  Julia tool plus a multi-GB reference download; no container runtime here); and
-- standalone `infer_vs_ldsc_sbayes.py`, which needs GCTB (Linux-only binary;
-  absent on macOS). Its SBayesS arm can now run on macOS through the R
-  SBayesRC package backend — see the script's backend resolver.
+  Julia tool plus a multi-GB reference download; no container runtime here).
 
 The CSV files are the authoritative numeric record. See [`README.md`](README.md)
 for commands and artifact names.

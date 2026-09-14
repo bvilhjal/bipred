@@ -164,7 +164,7 @@ jobs:
       - name: Smoke-test repository benchmark imports
         env:
           NB: "0"
-        run: python -c "import benchmarks.infer_vs_ldsc_sbayes, benchmarks.rg_architectures"
+        run: python -c "import benchmarks._block_genome, benchmarks.rg_architectures"
 
       - name: Run tests
         run: pytest -q
