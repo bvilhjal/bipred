@@ -1,9 +1,9 @@
 representation,m,k,blocks,block_storage,ld_int8,payload_mb,fit_peak_mb,fit_peak_bytes_per_variant
-dense_f32,50000,500,100,distinct,default,100.0,5.661911,113.23822
-dense_f32,50000,500,100,distinct,True,100.0,30.666854,613.33708
-dense_f32,100000,500,200,distinct,default,200.0,11.294917,112.94917
-dense_f32,100000,500,200,distinct,True,200.0,61.321715,613.21715
-dense_i8,50000,500,100,distinct,default,25.0,5.655099,113.10198
-dense_i8,100000,500,200,distinct,default,50.0,11.295662,112.95662
-lr8_0.99 (rank 481),50000,500,100,distinct,default,24.25,6.641386,132.82772
-lr8_0.99 (rank 481),100000,500,200,distinct,default,48.5,12.298096,122.98096
+dense_f32,50000,500,100,distinct,default,100.0,4.854658,97.09316
+dense_f32,50000,500,100,distinct,True,100.0,29.868873,597.37746
+dense_f32,100000,500,200,distinct,default,200.0,9.695364,96.95364
+dense_f32,100000,500,200,distinct,True,200.0,59.722872,597.22872
+dense_i8,50000,500,100,distinct,default,25.0,4.850796,97.01592
+dense_i8,100000,500,200,distinct,default,50.0,9.699531,96.99531
+lr8_0.99 (rank 481),50000,500,100,distinct,default,24.25,5.833457,116.66914
+lr8_0.99 (rank 481),100000,500,200,distinct,default,48.5,10.693263,106.93263

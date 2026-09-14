@@ -587,7 +587,7 @@ def _assert_cells_match(table, rows, columns):
 def test_results_bivariate_table_matches_per_replicate_csv():
     records = list(csv.DictReader((BENCHMARKS / "bivariate_demo.csv").open()))
     table = _results_table(
-        "**Table 12. Trait-2 genetic R² under paired reference-LD regularisation.**")
+        "**Table 14. Trait-2 genetic R² under paired reference-LD regularisation.**")
     labels = {
         "shared, rg=0.0": "shared, target 0.0",
         "shared, rg=0.3": "shared, target 0.3",
@@ -641,7 +641,7 @@ def test_results_scaling_table_matches_its_csv():
 
 
 def test_results_environmental_overlap_table_matches_its_csv():
-    """Table 10 carries this release's central claim, so transcribe it exactly.
+    """Table 13 carries this release's central claim, so transcribe it exactly.
 
     It asserts that the environmental-overlap failure mode was an artifact of
     in-fit LD quantization, and a hand-edit had silently duplicated the realized
@@ -650,7 +650,7 @@ def test_results_environmental_overlap_table_matches_its_csv():
     """
     rows = list(csv.DictReader((BENCHMARKS / "rg_env_overlap.csv").open()))
     table = _results_table(
-        "**Table 11. Paired MAE against realized genetic correlation.**")
+        "**Table 13. Paired MAE against realized genetic correlation.**")
     assert len(table) == len(rows)
 
     # Two of the five printed columns pack a free/constrained (or unset/set)
@@ -738,14 +738,14 @@ assert benchmark._segment_cache_path(0).endswith(
 
 
 def test_results_real_data_table_matches_its_csv():
-    """Table 13 exactly transcribes the clean current-screen artifact."""
+    """Table 15 exactly transcribes the clean current-screen artifact."""
 
     csv_path = BENCHMARKS / "real_ldl_cad.csv"
     if not csv_path.exists():             # inputs are ~9 GB and not committed
         pytest.skip("real_ldl_cad.csv not generated on this host")
     rows = list(csv.DictReader(csv_path.open()))
     table = _results_table(
-        "**Table 13. The same analysis at three levels of cleaning.**")
+        "**Table 15. The same analysis at three levels of cleaning.**")
     assert len(table) == len(rows) == 3
     # The first column is a stage label and the last is prose, so neither
     # transcribes a numeric CSV column.

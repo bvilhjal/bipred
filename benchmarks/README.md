@@ -91,7 +91,7 @@ alibi.
 | `rg_polygenicity.py` | Realized-truth recovery as the causal fraction falls from 0.1 to 1e-4; expected and observed causal counts (→ `rg_polygenicity.{csv,png}`) | opt |
 | `rg_methods.py` | LDSC, `uni_gv`, `uni_r2`, the default joint fit, and `rg_decorrelated=True` under symmetric and asymmetric power, plus timing versus m (→ `rg_methods.{csv,png}`, `rg_methods_timing.csv`) | opt |
 | `rg_scaling.py` | Per-fit time, peak RSS, and single-draw recovery versus m, one subprocess per size (→ `rg_scaling.{csv,png}`) | opt |
-| `mixer_overlap.py` | MiXeR-style overlap, effect correlation, shared-fraction bias versus per-trait polygenicity, LD matching, noise inflation, and univariate count anchoring (→ `mixer_overlap.{csv,png}`) | opt |
+| `mixer_overlap.py` | MiXeR-style overlap, signed effect correlation, shared-fraction bias versus per-trait polygenicity, **unequal per-trait polygenicity** (the `asymmetry` sweep, including containment), LD matching, noise inflation, and univariate count anchoring (→ `mixer_overlap.{csv,png}`) | opt |
 | `overlap_estimation.py` | Paired effect of known sample-overlap `cross_corr`; it does not validate LDSC-intercept inversion (→ `overlap_estimation.csv`) | opt |
 | `sample_overlap.py` | Lower-power comparison of free/constrained LDSC and unset/set bivariate overlap corrections (→ `sample_overlap.csv`) | opt |
 | `sweep_cost.py` | Per-sweep median ± MAD by LD representation and core count, with one distinct payload per synthetic block (→ `sweep_cost.csv`) | — |
@@ -146,7 +146,7 @@ repositories do not carry copies of one script that drift apart.
 | `rg_methods` | 10 | ✓ |
 | `rg_methods_timing` | 3 | — |
 | `rg_scaling` | 5 | ✓ |
-| `mixer_overlap` | 41 | ✓ |
+| `mixer_overlap` | 52 | ✓ |
 | `overlap_estimation` | 6 | — |
 | `sample_overlap` | 3 | — |
 | `rg_env_overlap` | 5 | — |
@@ -168,35 +168,44 @@ manually:
 | `external_overlap_ldsc200k` | 24 (2 cells x 3 reps x 4 methods) | `external_overlap_ldsc200k.provenance.json` | same; the LDSC-scale panel (m = 200k) variant of the above |
 | `external_hdl_tg` | 5 | `external_hdl_tg.provenance.json` | GLGC HDL/TG inputs + LDSC weights from Table 4 |
 
-**The artifact record is currently split across two ldpred3 versions.** The
-ten `run_all.sh` scripts were regenerated from clean revision `bf5236a`
-(bipred 0.3.10.dev0) against the pin then in force, ldpred3 0.6.1 at
-`af5d92c7aab6a5b67d15c94ebe28b89e33f5d69d`, with Python 3.14.6, NumPy 2.4.6 and
-Numba 0.66.0; `run_all.sh` selected msprime and all ten completed. `bivariate_demo`,
-`external_overlap` and `external_overlap_ldsc200k` were regenerated on the same
-stack. The pin has since moved to ldpred3 0.7.18 at
-`3dd7bf6ade80033abacf10ed2668607221f4d5c6` -- 0.6.1 predates bipred's
-`ldpred3>=0.7.12` floor and can no longer run the suite -- so the next full
-sweep re-bases the record onto it. Three artifacts have **not** been
-regenerated even to the 0.6.1 record, because they need real-data inputs
-that were unavailable:
+**The artifact record is split across ldpred3 versions.** The ten
+`run_all.sh` scripts were regenerated from clean revision `1833c22`
+(bipred 0.3.16.dev0) against ldpred3 0.7.23 at
+`ca6e065382e575fdee19a7bd3aecddb0d2074089`, with Python 3.14.6, NumPy 2.4.6 and
+Numba 0.66.0; `run_all.sh` selected msprime and all ten completed. Six
+artifacts have **not** been regenerated onto that stack, because they need
+inputs this host does not have:
 
 | Artifact | Stack it still carries |
 |---|---|
+| `bivariate_demo` | bipred 0.3.10.dev0, ldpred3 0.6.1 |
+| `external_overlap` | bipred 0.3.10.dev0, ldpred3 0.6.1 |
+| `external_overlap_ldsc200k` | bipred 0.3.10.dev0, ldpred3 0.6.1 |
 | `qc_factorial` | bipred 0.3.7, ldpred3 0.4.5 |
 | `real_ldl_cad` | bipred 0.3.5, ldpred3 0.4.5 |
 | `external_hdl_tg` | bipred 0.3.9.dev0, ldpred3 0.5.5.dev0, NumPy 1.26.4, Python 3.10 |
 
-Regenerate those three against the current pin before calling this a
+Regenerate those six against the current pin before calling this a
 release-quality record; until then, do not read one of them and a regenerated
 artifact as one sweep.
 
-For the record: moving the pin left every bipred-owned estimate unchanged.
-What moved was ldpred3's univariate inference -- the `calib_*` columns of
-`mixer_overlap`, which are the only ones fed by `ldpred3_auto_infer`, the
-`uni_gv`/`uni_r2` rows of `rg_methods`, and `bivariate_demo`'s `solo_r2` --
+For the record: this pin move, like 0.4.5-to-0.6.1 before it, left every
+bipred-owned estimate unchanged. What moved was ldpred3's univariate inference
+-- the `calib_*` columns of `mixer_overlap`, the only ones fed by
+`ldpred3_auto_infer`, and the `uni_gv`/`uni_r2` rows of `rg_methods` --
 alongside timing and peak RSS throughout. The joint-fit columns beside them
-are identical.
+are bit-identical, and `rg_env_overlap.csv` and `overlap_estimation.csv` did
+not change at all.
+
+The frozen benchmark pin in `real_data_inputs.py` -- ldpred3 0.7.18 at
+`3dd7bf6ade80033abacf10ed2668607221f4d5c6` -- is unchanged and still enforced
+by the three scripts that hold real-GWAS evidence (`real_ldl_cad`,
+`qc_factorial`, `bivariate_demo`), because moving it re-bases archived
+numerical evidence. `run_all.sh` records its provider through
+`describe_ldpred3_source()` instead: the synthetic sweeps measure the current
+estimator, so their log names whatever clean ldpred3 they ran against rather
+than refusing every version but the archived one. Those two pins are
+deliberately independent, and so is the CI revision in `.github/workflows`.
 
 The two `external_overlap` artifacts moved for a separate and larger reason:
 their previous rows were simulated with the **bundled Numba coalescent**

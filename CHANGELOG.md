@@ -64,6 +64,49 @@ User-visible changes to **bipred** are recorded here. The project is currently
   with different content each time. The two are merged; no content was
   dropped.
 
+### Benchmarks
+
+- The ten `run_all.sh` artifacts are regenerated against ldpred3 0.7.23 from
+  clean revision `1833c22` (bipred 0.3.16.dev0); all ten completed on msprime,
+  single-core. **The pin move changed no bipred-owned estimate.** Every bipred
+  accuracy column is bit-identical to the 0.6.1 record —
+  `rg_env_overlap.csv` and `overlap_estimation.csv` did not change at all, nor
+  did the `overlap`, `power`, `ldmatch` or `calibration` sweeps of
+  `mixer_overlap`. What moved is wall time, peak RSS, and exactly the surface
+  fed by ldpred3's *univariate* `ldpred3_auto_infer`: the `uni_gv` / `uni_r2`
+  arms of `rg_methods` and the `calib_*` columns of the univariate-anchored
+  calibration sweep. That repeats what the 0.4.5-to-0.6.1 move showed.
+- `mixer_overlap.py` gains an `asymmetry` sweep: trait 1 held at `p = 0.10`
+  while trait 2 is thinned to a tenth of it, at shared fractions 0.5 and 1.0.
+  Every other sweep sets `pi1 = pi2`, which is the one configuration where the
+  estimator's `frac_shared = pi11 / min(pi1, pi2)` cannot be distinguished from
+  `pi11 / pi1` or from the `sqrt(pi1 pi2)` denominator `rg_from_overlap` uses.
+  The containment arm records what the symmetric sweeps cannot show: a
+  correctly recovered *complete* overlap (0.980 down to 0.919 as the ratio
+  grows) alongside the genetic correlation it actually implies, which falls
+  from 0.793 to 0.263. It also separates count inflation by trait — the dense
+  trait's relative polygenicity is flat at 1.22–1.34 while the sparse trait's
+  climbs from 1.13 to 1.42 — which the pooled `rel_poly` column averaged away.
+  New `rel_poly1` / `rel_poly2` / `poly_ratio` columns carry that.
+- The `rho` sweep runs a signed grid (−0.9 to 0.9) rather than a non-negative
+  one, so a folded sign cannot pass. The sign is carried through and the
+  magnitude is symmetric (−0.611 against 0.603 at the extremes), with `rg`
+  tracking realized truth to an MAE of 0.006–0.014 across the grid. The grid
+  gained cells, and seeds are positional, so those rows are fresh draws rather
+  than a re-run of the old four.
+- `mixer_overlap` shared-fraction truth now comes from the integer counts
+  simulated rather than the requested fraction. `n_shared` is rounded, so on a
+  sparse grid the two differ — 0.75 of 50 causal variants is 38 shared, a
+  realized 0.76 — and recording the request overstated the reported bias by up
+  to 0.01 in four of the twelve polygenicity cells, all in the sparse rows the
+  section's "small where sparse" reading rests on. The estimates are unchanged;
+  only the target and the bias derived from it move.
+- `RESULTS.md` tables are now rendered from their CSVs rather than transcribed,
+  so a cell can no longer drift from the artifact by hand. Two new tables (9
+  and 10) carry the asymmetry and signed-`rho` sweeps; the tables after them
+  are renumbered, and the references in `docs/rg.md` and the artifact tests
+  follow.
+
 ### Tests
 
 - The five RESULTS.md table-versus-CSV tests shared a half-ulp tolerance rule

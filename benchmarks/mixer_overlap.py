@@ -554,7 +554,11 @@ def make_figure(rows):
     if rh:
         a = next(panels)
         x = [r["rho_beta_target"] for r in rh]
-        a.plot([0, 1], [0, 1], "k--", lw=1, alpha=.5)
+        # The grid is signed, so the identity line has to span it; a 0..1 line
+        # left the negative half of the panel without a reference.
+        lo = min([*x, *(r["rg_realized"] for r in rh)])
+        hi = max([*x, *(r["rg_realized"] for r in rh)])
+        a.plot([lo, hi], [lo, hi], "k--", lw=1, alpha=.5)
         a.errorbar(x, [r["rho_beta_hat"] for r in rh],
                    [r["rho_beta_sd"] for r in rh], fmt="o-", ms=4, capsize=2,
                    color="C0", label="rho_beta")

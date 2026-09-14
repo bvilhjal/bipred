@@ -1,12 +1,14 @@
 # Benchmark record
 
-All artifacts in this record were regenerated with bipred 0.3.5 from clean revision
-`5c06ec7`. Tables 2--11 and the `sweep_cost.csv` and `fit_memory.csv` artifacts
-come from the single-core `run_all.log`; all ten scripts completed. Table 12
-comes from the separate archive run, Tables 13--14 from LDL-CAD, and Tables
-15--17 from the QC factorial. Their provenance sidecars pin the same clean
-bipred revision, package environment, and input hashes. CSVs are the
-authoritative numeric record; tables below are rounded summaries.
+Tables 2--13 and the `sweep_cost.csv` and `fit_memory.csv` artifacts were
+regenerated with bipred 0.3.16.dev0 from clean revision `1833c22` against
+ldpred3 0.7.23; all ten `run_all.sh` scripts completed single-core. Table 14
+comes from the separate archive run, Tables 15--16 from LDL-CAD, and Tables
+17--19 from the QC factorial; those carry the older stacks named under Table 1,
+because they need real-data inputs this host does not have. Their provenance
+sidecars pin the clean bipred revision, package environment, and input hashes
+they were produced under. CSVs are the authoritative numeric record; the tables
+below are rendered from them rather than transcribed by hand.
 
 **Screen-dependent rows do not reproduce exactly on 0.3.6 or later.** Every
 figure here that depends on `ld_consistency_screen` — the retained counts and
@@ -26,7 +28,7 @@ universal QC validation.
 
 Two findings are easy to misread:
 
-- **Table 11 no longer reproduces the old aggregate failure.** Joint-fit MAE
+- **Table 13 no longer reproduces the old aggregate failure.** Joint-fit MAE
   is at most 0.0246 after removing fit-time LD quantisation, but three
   individual fits still raise divergence warnings. Low mean error is not a
   clean bill of numerical health.
@@ -46,25 +48,38 @@ segments are tagged per backend and never mix.
 | Component | Value |
 |---|---|
 | Python | 3.14.6 |
-| bipred | 0.3.10.dev0 (`bf5236a`, clean) |
-| ldpred3 | 0.6.1 (`af5d92c`, clean git checkout) |
+| bipred | 0.3.16.dev0 (`1833c22`, clean) |
+| ldpred3 | 0.7.23 (`ca6e065`, clean git checkout) |
 | NumPy / Numba | 2.4.6 / 0.66.0 |
 | Simulator | msprime (`msprime-v1`) |
-| Platform | Apple M2 Pro (10 cores), macOS 26.5.2, arm64 |
+| Platform | Apple M2 Pro (10 cores), macOS 26.6.2, arm64 |
 | Numerical threads | 1 |
 
 All timing runs used one OpenBLAS, OMP, MKL, Numba, and NumExpr thread. Times
 are machine-specific. Peak RSS includes simulation, LD construction, reference
 panels, and JIT state present in each process.
 
-Table 1 describes the thirteen artifacts regenerated on the current pin: the
-ten from `run_all.sh` plus `bivariate_demo`, `external_overlap` and
-`external_overlap_ldsc200k`. Three still carry older stacks, because they need
-real-data inputs that were unavailable -- `qc_factorial` (bipred 0.3.7,
-ldpred3 0.4.5), `real_ldl_cad` (0.3.5, 0.4.5) and `external_hdl_tg`
-(0.3.9.dev0, 0.5.5.dev0, NumPy 1.26.4). Read no table here as combining the
-two groups: a timing from one of those three and a timing from a regenerated
-artifact were not measured against the same ldpred3.
+Table 1 describes the ten `run_all.sh` artifacts. Six others carry older
+stacks because they need inputs this host does not have: `bivariate_demo`,
+`external_overlap` and `external_overlap_ldsc200k` (bipred 0.3.10.dev0,
+ldpred3 0.6.1), `qc_factorial` (0.3.7, 0.4.5), `real_ldl_cad` (0.3.5, 0.4.5)
+and `external_hdl_tg` (0.3.9.dev0, 0.5.5.dev0, NumPy 1.26.4). Read no table
+here as combining the two groups: a timing from one of those six and a timing
+from a regenerated artifact were not measured against the same ldpred3.
+
+**The 0.6.1 to 0.7.23 move changed no bipred-owned estimate in this record**,
+repeating what the 0.4.5-to-0.6.1 move showed. Every bipred accuracy column of
+every `run_all.sh` artifact is bit-identical across the two pins --
+`rg_env_overlap.csv` and `overlap_estimation.csv` are unchanged in full, as are
+the `overlap`, `power`, `ldmatch` and `calibration` sweeps of `mixer_overlap`
+-- and what moved otherwise is wall-clock time and peak RSS, which are machine
+state rather than estimator behaviour. What did move is exactly the surface fed
+by ldpred3's *univariate* `ldpred3_auto_infer`: the `uni_gv` / `uni_r2` arms of
+Table 4, and the `calib_*` columns of the univariate-anchored calibration
+sweep. The joint arms beside them are identical. Two further changes are
+benchmark-side, not library-side: the shared-fraction targets of Table 8 (noted
+there) and the `rho` sweep of Table 10, whose grid gained negative values, so
+its rows are fresh draws rather than a re-run of the old cells.
 
 ## Reading the results
 
@@ -105,7 +120,7 @@ correlation, then averaged over the six targets.
 |---|---:|---:|---:|---:|---:|
 | infinitesimal | 0.0289 | 0.0218 | 0.0448 | 0.0239 | 0 / 0 |
 | sparse | 0.0914 | 0.0075 | 0.1434 | 0.0990 | 0 / 0 |
-| moderate | 0.0583 | 0.0108 | 0.0800 | 0.0459 | 0 / 0 |
+| moderate | 0.0584 | 0.0108 | 0.0800 | 0.0459 | 0 / 0 |
 | polygenic | 0.0484 | 0.0135 | 0.0802 | 0.0324 | 0 / 0 |
 | major locus | 0.0989 | 0.0081 | 0.1748 | 0.1152 | 4 / 0 |
 | **All cells** | **0.0652** | **0.0123** | **0.1047** | **0.0633** | **4 / 0** |
@@ -155,11 +170,11 @@ The comparison uses five target points and six replicates at symmetric
 
 | Estimator | Symmetric MAE | Asymmetric MAE | Mean 5k fit time, symmetric |
 |---|---:|---:|---:|
-| LDSC | 0.0542 | 0.0608 | 0.023 s |
-| two univariate fits, `uni_gv` | 0.0190 | 0.0424 | 0.873 s |
-| two univariate fits, `uni_r2` | 0.0186 | 0.0420 | 0.873 s |
-| joint default | **0.0086** | **0.0174** | 0.134 s |
-| joint cross-sweep sensitivity | 0.0108 | 0.0242 | 0.128 s |
+| LDSC | 0.0542 | 0.0608 | 0.022 s |
+| two univariate fits, `uni_gv` | 0.0188 | 0.0418 | 1.288 s |
+| two univariate fits, `uni_r2` | 0.0184 | 0.0416 | 1.288 s |
+| joint default | **0.0086** | **0.0174** | 0.136 s |
+| joint cross-sweep sensitivity | 0.0108 | 0.0242 | 0.139 s |
 
 No estimator failed in these cells. The cross-sweep
 `rg_decorrelated=True` estimator did not improve on the default, including in
@@ -170,9 +185,9 @@ replacement.
 
 | Variants | Blocks | LDSC | Two univariate fits | Joint default | Joint cross-sweep |
 |---:|---:|---:|---:|---:|---:|
-| 5,000 | 25 | 0.024 s | 0.887 s | 0.132 s | 0.130 s |
-| 20,000 | 100 | 0.329 s | 3.341 s | 0.507 s | 0.511 s |
-| 50,000 | 250 | 2.033 s | 9.177 s | 1.386 s | 1.444 s |
+| 5,000 | 25 | 0.027 s | 1.241 s | 0.146 s | 0.135 s |
+| 20,000 | 100 | 0.235 s | 4.804 s | 0.566 s | 0.590 s |
+| 50,000 | 250 | 1.465 s | 13.774 s | 1.505 s | 1.496 s |
 
 `uni_gv` and `uni_r2` reuse the same two univariate fits, so their recorded cost
 is identical.
@@ -189,20 +204,23 @@ Each size runs in a fresh subprocess and reports one realized draw.
 
 | Variants | LDSC time | LDpred3 time | Peak RSS | Realized r_g | LDSC absolute error | LDpred3 absolute error |
 |---:|---:|---:|---:|---:|---:|---:|
-| 5,000 | 0.015 s | 0.114 s | 0.219 GB | 0.511 | 0.0399 | 0.0172 |
-| 10,000 | 0.067 s | 0.227 s | 0.251 GB | 0.519 | 0.0590 | 0.0024 |
-| 20,000 | 0.251 s | 0.456 s | 0.298 GB | 0.513 | 0.0332 | 0.0005 |
-| 40,000 | 0.669 s | 0.917 s | 0.367 GB | 0.518 | 0.0138 | 0.0016 |
-| 80,000 | 3.108 s | 1.947 s | 0.621 GB | 0.519 | 0.0632 | 0.0322 |
+| 5,000 | 0.026 s | 0.120 s | 0.325 GB | 0.511 | 0.0399 | 0.0172 |
+| 10,000 | 0.086 s | 0.238 s | 0.369 GB | 0.519 | 0.0590 | 0.0024 |
+| 20,000 | 0.263 s | 0.492 s | 0.329 GB | 0.513 | 0.0332 | 0.0005 |
+| 40,000 | 0.899 s | 1.065 s | 0.410 GB | 0.517 | 0.0138 | 0.0016 |
+| 80,000 | 3.347 s | 2.161 s | 0.576 GB | 0.519 | 0.0632 | 0.0322 |
 
 LDSC time overtakes the joint fit between 40k and 80k variants. Every accuracy
-column here is unchanged from the ldpred3 0.4.5 record to the digit; only the
-time and memory columns moved, and the 0.4.5 sweep's non-smooth peak RSS --
-0.421 GB at 40k jumping to 2.559 GB at 80k -- did not reappear, rising instead
-to 0.621 GB. Treat a process-wide peak as machine- and allocator-dependent, not
-as a fixed per-variant memory law: one draw showing the jump and the next not
-is the same warning either way. This sweep measures the default dense D32 path,
-not million-variant LR8 production behavior.
+column here is bit-identical to the ldpred3 0.6.1 record in the CSV -- the
+realized `r_g` at 40k prints 0.517 rather than 0.518 only because the table is
+now rendered from the artifact rather than transcribed, and 0.5175 is an exact
+halfway value. Only the time and memory columns moved. Peak RSS is not
+monotone in `m` here either (0.329 GB at 20k against 0.369 GB at 10k), and the
+0.4.5 sweep's 2.559 GB spike at 80k has not reappeared in the two sweeps since,
+reaching 0.576 GB. Treat a process-wide peak as machine- and
+allocator-dependent, not as a fixed per-variant memory law: one draw showing
+the jump and the next not is the same warning either way. This sweep measures
+the default dense D32 path, not million-variant LR8 production behavior.
 
 **Figure 4. Running time, memory, and single-draw recovery.**
 
@@ -237,22 +255,28 @@ one architecture. Varying the causal fraction with the overlap target held fixed
 answers it: the bias is a function of polygenicity.
 
 **Table 8. Shared-fraction bias against per-trait polygenicity.** `rho_beta`
-target 0.8, `N=50k/20k`, eight replicates per cell.
+target 0.8, `N=50k/20k`, eight replicates per cell. The target column is the
+shared fraction the integer causal counts actually realize, which is not always
+the one requested: 0.75 of 50 causal variants is 38 shared, a realized 0.76.
+Until 2026-09-14 the requested value was recorded instead, overstating the bias
+by up to 0.01 in four of these twelve cells -- all of them in the two sparse
+rows the "small where sparse" reading rests on. The estimates themselves are
+unchanged; only the target and the bias derived from it moved.
 
 | Causal fraction | Shared-fraction target | Estimated ± SD | Bias | Relative polygenicity |
 |---:|---:|---:|---:|---:|
-| 0.01 | 0.25 | 0.283 ± 0.036 | +0.033 | 1.50 |
+| 0.01 | 0.24 | 0.283 ± 0.036 | +0.043 | 1.50 |
 | 0.01 | 0.50 | 0.571 ± 0.032 | +0.071 | 1.57 |
-| 0.01 | 0.75 | 0.799 ± 0.062 | +0.049 | 1.64 |
-| 0.03 | 0.25 | 0.272 ± 0.042 | +0.022 | 1.34 |
+| 0.01 | 0.76 | 0.799 ± 0.062 | +0.039 | 1.64 |
+| 0.03 | 0.25 | 0.272 ± 0.042 | +0.019 | 1.34 |
 | 0.03 | 0.50 | 0.535 ± 0.049 | +0.035 | 1.30 |
-| 0.03 | 0.75 | 0.769 ± 0.077 | +0.019 | 1.36 |
-| 0.10 | 0.25 | 0.305 ± 0.046 | +0.055 | 1.25 |
-| 0.10 | 0.50 | 0.617 ± 0.065 | +0.117 | 1.27 |
-| 0.10 | 0.75 | 0.843 ± 0.041 | +0.093 | 1.24 |
-| 0.30 | 0.25 | 0.430 ± 0.062 | +0.180 | 0.98 |
-| 0.30 | 0.50 | 0.780 ± 0.034 | +0.280 | 1.04 |
-| 0.30 | 0.75 | 0.964 ± 0.017 | +0.214 | 1.03 |
+| 0.03 | 0.75 | 0.769 ± 0.077 | +0.022 | 1.36 |
+| 0.1 | 0.25 | 0.305 ± 0.046 | +0.055 | 1.25 |
+| 0.1 | 0.50 | 0.617 ± 0.065 | +0.117 | 1.27 |
+| 0.1 | 0.75 | 0.843 ± 0.041 | +0.093 | 1.24 |
+| 0.3 | 0.25 | 0.430 ± 0.062 | +0.180 | 0.98 |
+| 0.3 | 0.50 | 0.780 ± 0.034 | +0.280 | 1.04 |
+| 0.3 | 0.75 | 0.964 ± 0.017 | +0.214 | 1.03 |
 
 Mean bias by causal fraction: **+0.051** at 0.01, **+0.025** at 0.03,
 **+0.088** at 0.10, **+0.225** at 0.30. The SD column is the spread of a single
@@ -266,6 +290,80 @@ causal, and both the bias and the count inflation (relative polygenicity 1.50 to
 1.64, the worst in the table) grow again. Read a reported `frac_shared` with the
 fitted polygenicity beside it.
 
+Both sweeps so far give the two traits the *same* causal fraction. That is the
+one configuration in which `frac_shared` cannot be told apart from its
+alternatives: the estimator reports `pi11 / min(pi1, pi2)`, and when
+`pi1 = pi2` that is also `pi11 / pi1` and also the `sqrt(pi1 pi2)` denominator
+that `rg_from_overlap` uses. Holding trait 1 at `p = 0.10` and thinning trait 2
+to a tenth of it separates them, and is the configuration real pairs take.
+
+**Table 9. Unequally polygenic traits.** Trait 1 at `p = 0.10`, `rho_beta`
+target 0.8, `N=50k/20k`, eight replicates per cell. The shared fraction is of
+the *sparser* trait, so the 1.00 rows are containment: every causal variant of
+trait 2 is also causal for trait 1.
+
+| Polygenicity ratio | Shared-fraction target | Estimated ± SD | Rel. polygenicity, dense / sparse | r_g target | Realized r_g | Estimated r_g ± SD |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1.0 | 0.50 | 0.606 ± 0.049 | 1.34 / 1.13 | 0.400 | 0.409 | 0.408 ± 0.022 |
+| 1.0 | 1.00 | 0.980 ± 0.005 | 1.22 / 1.20 | 0.800 | 0.803 | 0.793 ± 0.018 |
+| 2.0 | 0.50 | 0.545 ± 0.056 | 1.31 / 1.21 | 0.283 | 0.253 | 0.246 ± 0.048 |
+| 2.0 | 1.00 | 0.956 ± 0.032 | 1.29 / 1.19 | 0.566 | 0.556 | 0.551 ± 0.033 |
+| 5.0 | 0.50 | 0.616 ± 0.060 | 1.32 / 1.25 | 0.179 | 0.158 | 0.157 ± 0.047 |
+| 5.0 | 1.00 | 0.917 ± 0.042 | 1.29 / 1.28 | 0.358 | 0.359 | 0.359 ± 0.066 |
+| 10.0 | 0.50 | 0.525 ± 0.094 | 1.28 / 1.36 | 0.126 | 0.122 | 0.118 ± 0.044 |
+| 10.0 | 1.00 | 0.919 ± 0.019 | 1.28 / 1.42 | 0.253 | 0.268 | 0.263 ± 0.041 |
+
+Three things in this table, none of them visible in a symmetric sweep.
+
+**A complete overlap is not a high genetic correlation.** Every 1.00 row is
+containment by construction, and the estimator recovers it (0.980 down to
+0.919 as the ratio grows). The genetic correlation of those same fits falls
+from 0.793 to 0.263, because containment fixes `pi11 = pi2` while `r_g` is
+divided by `sqrt(pi1 pi2)`, leaving `rho_beta * sqrt(pi2 / pi1)`. A reported
+overlap near 1 alongside an `r_g` near 0.25 is the expected reading of a sparse
+trait inside a dense one, not a contradiction and not a fit to distrust. This
+is the single most common misreading of a MiXeR-style overlap.
+
+**Count inflation is not shared equally.** The dense trait's relative
+polygenicity is flat across the whole table (1.22 to 1.34), while the sparse
+trait's climbs with the ratio, from 1.13 at parity to 1.42 at tenfold. The
+pooled `rel_poly` column the other sweeps report would have averaged these into
+a single number and hidden it. Where the two traits differ in polygenicity,
+read the per-trait counts, not their mean.
+
+**The estimate is still biased upward at intermediate overlap**, as in Table 8,
+and the bias does not shrink with asymmetry: the 0.50 rows run 0.525 to 0.616
+against a 0.50 target, with a replicate spread (0.049 to 0.094) that grows with
+the ratio. Eight replicates per cell is thin; treat the direction as the
+finding and the magnitude as indicative.
+
+The within-shared effect correlation is swept over a signed grid, because a
+sign fault in the covariance readout would be invisible on a non-negative one
+and real pairs are routinely negative.
+
+**Table 10. Signed within-shared effect correlation.** `p = 0.10` per trait,
+shared fraction 0.5, `N=50k/20k`, eight replicates per cell.
+
+| `rho_beta` target | Estimated ± SD | Shared fraction ± SD | Realized r_g | Estimated r_g / MAE |
+|---:|---:|---:|---:|---:|
+| -0.90 | -0.611 ± 0.070 | 0.636 ± 0.045 | -0.422 | -0.408 / 0.014 |
+| -0.60 | -0.504 ± 0.060 | 0.542 ± 0.027 | -0.294 | -0.299 / 0.010 |
+| -0.30 | -0.287 ± 0.087 | 0.521 ± 0.037 | -0.174 | -0.177 / 0.008 |
+| 0.00 | 0.043 ± 0.046 | 0.498 ± 0.061 | 0.038 | 0.036 / 0.010 |
+| 0.30 | 0.279 ± 0.073 | 0.485 ± 0.059 | 0.149 | 0.151 / 0.007 |
+| 0.60 | 0.562 ± 0.157 | 0.544 ± 0.092 | 0.324 | 0.327 / 0.006 |
+| 0.90 | 0.603 ± 0.042 | 0.659 ± 0.057 | 0.453 | 0.446 / 0.012 |
+
+The sign is carried through, and the magnitude is symmetric about zero:
+`rho_beta` at the two extreme targets reads -0.611 and 0.603, and `r_g`
+tracks the realized value to a MAE between 0.006 and 0.014 across the whole
+signed grid. `rho_beta` itself is attenuated at the extremes -- about two
+thirds of a ±0.9 target -- while `r_g` is not, which is the same
+point-estimate-versus-ratio distinction the `mixer` docstring makes. The
+shared-fraction column is flat near its 0.5 target in the middle of the grid
+and rises at both extremes, so the upward bias of Table 8 is strongest where
+the shared effects are most strongly correlated in either direction.
+
 **Figure 5. MiXeR-style overlap and count diagnostics.**
 
 ![MiXeR-style overlap](mixer_overlap.png)
@@ -275,7 +373,7 @@ fitted polygenicity beside it.
 In the higher-power idealized run, known `cross_corr` nearly removes the paired
 shift introduced by correlated sampling noise.
 
-**Table 9. Paired overlap shift relative to the no-overlap cell.**
+**Table 11. Paired overlap shift relative to the no-overlap cell.**
 
 | Target | Noise correlation | Shift with `cross_corr=0` | Shift with known `cross_corr` | MAE, unset / set |
 |---:|---:|---:|---:|---:|
@@ -287,7 +385,7 @@ shift introduced by correlated sampling noise.
 At lower power (`N=15k/15k`, eight replicates), Monte Carlo variation dominates
 the expected shift and setting the correction is not uniformly closer.
 
-**Table 10. Lower-power sample-overlap MAE.**
+**Table 12. Lower-power sample-overlap MAE.**
 
 | Target | Realized r_g, mean ± SD | LDSC constrained / free | Joint unset / set |
 |---:|---:|---:|---:|
@@ -303,7 +401,7 @@ mapping remains assumption-dependent; see [`docs/rg.md`](../docs/rg.md).
 The individual-genotype stress test uses the same 20,000 people for both traits
 and correlates their residual environments.
 
-**Table 11. Paired MAE against realized genetic correlation.**
+**Table 13. Paired MAE against realized genetic correlation.**
 
 | Target | Environmental correlation | Realized r_g | LDSC free / constrained | Joint unset / set |
 |---:|---:|---:|---:|---:|
@@ -343,7 +441,7 @@ GWAS noise and finite reference-panel draw are fitted twice: as the raw sample
 correlation matrix and after 5% shrinkage toward the identity. The CSV records
 every replicate at full precision.
 
-**Table 12. Trait-2 genetic R² under paired reference-LD regularisation.**
+**Table 14. Trait-2 genetic R² under paired reference-LD regularisation.**
 
 | Reference shrinkage | Architecture | Realized r_g | Alone | Joint | Gain | Estimated r_g | Joint fits with implausibility warning |
 |---:|---|---:|---:|---:|---:|---:|---:|
@@ -404,7 +502,7 @@ LDSC on the identical data, and a rough external LDL-CAD interval of 0.2 to 0.4.
 They differ in model, samples, phenotype definition and QC, so neither is a
 pass/fail oracle for this fit.
 
-**Table 13. The same analysis at three levels of cleaning.**
+**Table 15. The same analysis at three levels of cleaning.**
 
 | Stage | Variants | LDSC r_g | Joint r_g | h2 LDL | h2 CAD | sum(b^2)/h2 LDL | max abs b LDL | Trace drift | Divergence warning |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|:---:|
@@ -450,12 +548,12 @@ also not a reconciliation between the two estimators: LDSC rescales with `n_eff`
 exactly as bipred does, so correcting it moved LDSC's CAD `h2` from 0.0687 to
 0.1205 at the same time, and bipred's 0.0706 stays at 0.59 of it.
 
-The timed run used four screening rounds and one numerical thread. Table 14
+The timed run used four screening rounds and one numerical thread. Table 16
 partitions its leaf timings into non-overlapping steps; the 0.129 s remainder is
 driver overhead. The three stage fits took 281.707 s (harmonised), 271.404 s
 (per-variant QC), and 262.562 s (screened).
 
-**Table 14. Wall time of the real LDL-CAD benchmark.**
+**Table 16. Wall time of the real LDL-CAD benchmark.**
 
 | Step | Seconds | Share of total |
 |---|---:|---:|
@@ -498,7 +596,7 @@ correlated sampling noise, although confounding can also contribute. Thus the
 correction varies with the variant set rather than being a fixed factorial
 input. All saved values were already inside `(-1, 1)`.
 
-**Table 15. Divergence-warning count by factor, 24 arms.**
+**Table 17. Divergence-warning count by factor, 24 arms.**
 
 | Factor | off | on |
 |---|---:|---:|
@@ -514,7 +612,7 @@ long-range-LD exclusion shifts `rg` by 0.0001--0.0067 for LDL x CAD, about
 0.012 for height x LDL, and 0.021--0.023 for HDL x TG. Treat exclusion as an
 estimator-specific sensitivity, especially where a major locus could dominate.
 
-**Table 16. No-divergence-warning arm means with the screen.**
+**Table 18. No-divergence-warning arm means with the screen.**
 
 | Pair | LDSC r_g | Joint r_g | LDSC h2 (1, 2) | Joint h2 (1, 2) |
 |---|---:|---:|---:|---:|
@@ -540,7 +638,7 @@ pair has a different variant intersection, filtered set and arm-specific
 `cross_corr`. This is sensitivity to the combined pair design and estimator,
 not evidence that partner conditioning alone changed heritability.
 
-**Table 17. HDL x TG diagnostics by screening choice.**
+**Table 19. HDL x TG diagnostics by screening choice.**
 
 | Arm | Variants | Joint r_g | Cancellation | Divergence warning |
 |---|---:|---:|---:|:---:|
@@ -603,7 +701,7 @@ and marginal statistics from the exact shared model at N = 100,000. Every tool
 sees LD from the same panel that generated the statistics, so this is an
 in-sample-LD comparison of estimators, not a reference-mismatch study.
 
-**Table 18. Simulated 40k-SNP panel: per-method estimates vs truth (5 reps).**
+**Table 20. Simulated 40k-SNP panel: per-method estimates vs truth (5 reps).**
 MiXeR ran under Rosetta 2 emulation; times are per replicate and not portable.
 
 | Quantity (truth) | bipred joint | bipred `ldsc_rg` | MiXeR (original) | LDSC (original) |
@@ -627,7 +725,7 @@ the genetic-correlation ratio jackknife aborts (`sqrt` of a negative) in all 10
 reps; LDSC itself warns that fewer than 200k SNPs is "almost always bad".
 bipred's one-step `ldsc_rg` has no iterated-weight step and completes all reps.
 
-**Table 19. LDSC-scale 200k-SNP panel: rg estimates vs realized truth
+**Table 21. LDSC-scale 200k-SNP panel: rg estimates vs realized truth
 (3 reps per cell; MiXeR not run at this scale).**
 
 | Cell | Realized rg | bipred joint | bipred `ldsc_rg` | LDSC (original) |
@@ -648,7 +746,7 @@ implementations, as they should (shared_pos / sparse_neg: bipred
 +0.10 ± 0.12 / +0.06 ± 0.07, original −0.24 ± 0.16 / +0.21 ± 0.14; the 40k
 panel's larger scatter is the same small-m noise, not a systematic offset).
 
-**Table 20. Real GLGC 2013 HDL x TG: original LDSC vs bipred (current code).**
+**Table 22. Real GLGC 2013 HDL x TG: original LDSC vs bipred (current code).**
 The original LDSC runs its canonical pipeline (own munging, HapMap3 allele
 merge, 1000G EUR `eur_w_ld_chr` scores); bipred's arms use the screened HM3
 reference panel (m = 836,832), so variant sets and LD references differ by
@@ -666,7 +764,7 @@ range (−0.5 to −0.6), and both LDSC implementations report a strongly negati
 intercept from the same-individuals overlap. The joint fit's overlap-corrected
 rg (−0.483) sits 0.04 above the recorded 0.3.5-era value (−0.52): the screen's
 variant masks, the reference bytes, and the sampler have all changed since that
-pin (see the note at the top of this record), and Table 20 is the current-code
+pin (see the note at the top of this record), and Table 22 is the current-code
 measurement. On the joint fit, `frac_shared` is 0.975 and `rho_beta` −0.539,
 consistent with the recorded 0.94–0.95 range. A MiXeR run on this pair needs
 the GB-scale 1000G.EUR.QC bundle and is stubbed behind `MIXER_REF`

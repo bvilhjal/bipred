@@ -174,7 +174,7 @@ not precise overlap detectors. Through 0.2.1 this regime looked far worse than
 it is — the stress test measured joint-fit MAE up to 0.86 — but that was an
 artifact of the fit quantizing its LD internally, and with the current
 `ld_int8=False` default the same cells land between 0.0072 and 0.0242
-(`benchmarks/RESULTS.md`, Table 11). Setting `cross_corr` from external evidence
+(`benchmarks/RESULTS.md`, Table 13). Setting `cross_corr` from external evidence
 still helps; it is no longer compensating for a defect.
 
 With `noise_inflation=True`, bipred replaces each `N_t` by `N_t / lambda_t` in
