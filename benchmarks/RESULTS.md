@@ -10,6 +10,11 @@ sidecars pin the clean bipred revision, package environment, and input hashes
 they were produced under. CSVs are the authoritative numeric record; the tables
 below are rendered from them rather than transcribed by hand.
 
+`mixer_overlap.png` alone was redrawn one commit later, after the signed
+`rho_beta` grid was given an identity line spanning it. That change is inside
+`make_figure` and touches no estimate: re-running the script on the later
+source reproduced `mixer_overlap.csv` byte for byte.
+
 **Screen-dependent rows do not reproduce exactly on 0.3.6 or later.** Every
 figure here that depends on `ld_consistency_screen` — the retained counts and
 `rg` of Sections 9 and 10, and Tables 13--17 — was produced under 0.3.5's
