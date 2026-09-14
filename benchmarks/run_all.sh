@@ -28,7 +28,7 @@ if [ -n "$SOURCE_STATUS" ]; then
   exit 2
 fi
 SOURCE_REVISION="$(git rev-parse HEAD)"
-LDPRED3_SOURCE="$("$PY" -c 'import json; from benchmarks.real_data_inputs import require_ldpred3_source; print(json.dumps(require_ldpred3_source(), sort_keys=True))')"
+LDPRED3_SOURCE="$("$PY" -c 'import json; from benchmarks.real_data_inputs import describe_ldpred3_source; print(json.dumps(describe_ldpred3_source(), sort_keys=True))')"
 
 export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
 export NUMBA_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1

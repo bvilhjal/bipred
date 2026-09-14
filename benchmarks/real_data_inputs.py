@@ -83,6 +83,21 @@ def _source_tree_sha256(root):
     return digest.hexdigest()
 
 
+def describe_ldpred3_source():
+    """Record the ldpred3 actually imported, whatever version it is.
+
+    Same identity record and same dirty-tree refusal as
+    :func:`require_ldpred3_source`, without demanding a particular version or
+    revision. This is what a benchmark whose artifact is *not* frozen evidence
+    needs: the synthetic sweeps in ``run_all.sh`` measure the current
+    estimator, so their log should name the provider they ran against rather
+    than refuse to run against anything but the archived real-data pin. A
+    dirty provider tree is still refused -- an artifact cannot identify its
+    source if the source has uncommitted edits.
+    """
+    return require_ldpred3_source(expected_revision=None, expected_version=None)
+
+
 def require_ldpred3_source(*, expected_revision=LDPRED3_REV,
                             expected_version=LDPRED3_VERSION):
     """Return exact ldpred3 source identity; reject a dirty or wrong Git pin.
@@ -90,12 +105,15 @@ def require_ldpred3_source(*, expected_revision=LDPRED3_REV,
     A VCS checkout must be clean under the imported package directory and at
     the benchmark pin. A non-VCS installation is identified by a hash of its
     complete package tree; a PEP 610 commit is checked when available.
+
+    Passing ``None`` for either expectation records that field without
+    enforcing it; :func:`describe_ldpred3_source` is that mode by name.
     """
     module = importlib.import_module("ldpred3")
     package_root = os.path.realpath(os.path.dirname(module.__file__))
     version = getattr(module, "__version__", None)
     version = str(version if version is not None else _module_version("ldpred3"))
-    if version != expected_version:
+    if expected_version is not None and version != expected_version:
         raise RuntimeError(
             f"benchmarks require ldpred3 {expected_version} at "
             f"{expected_revision}; imported version {version} from "
@@ -128,7 +146,7 @@ def require_ldpred3_source(*, expected_revision=LDPRED3_REV,
             revision = subprocess.run(
                 ["git", "-C", git_root, "rev-parse", "HEAD"], check=True,
                 capture_output=True, text=True).stdout.strip()
-            if revision != expected_revision:
+            if expected_revision is not None and revision != expected_revision:
                 raise RuntimeError(
                     f"benchmarks require ldpred3 revision {expected_revision}; "
                     f"imported {revision} from {package_root}")
@@ -146,7 +164,8 @@ def require_ldpred3_source(*, expected_revision=LDPRED3_REV,
             revision = json.loads(direct_url).get("vcs_info", {}).get("commit_id")
         except (TypeError, ValueError):
             revision = None
-    if revision is not None and revision != expected_revision:
+    if (expected_revision is not None and revision is not None
+            and revision != expected_revision):
         raise RuntimeError(
             f"benchmarks require ldpred3 revision {expected_revision}; "
             f"installed package records {revision}")
